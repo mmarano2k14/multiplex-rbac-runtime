@@ -1,0 +1,6 @@
+@multiplexed_rbac_dotnet_HostAddress = http://localhost:5265
+
+GET {{multiplexed_rbac_dotnet_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

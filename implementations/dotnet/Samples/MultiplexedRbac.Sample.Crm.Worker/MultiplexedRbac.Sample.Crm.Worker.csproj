@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-MultiplexedRbac.Sample.Crm.Worker-e191e452-8bc8-4fa8-bcf3-64018494f6fe</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.4" />
+    <PackageReference Include="NServiceBus" Version="9.2.9" />
+    <PackageReference Include="NServiceBus.Extensions.Hosting" Version="3.0.1" />
+    <PackageReference Include="NServiceBus.RabbitMQ" Version="9.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
+    <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Contracts\MultiplexedRbac.Sample.Crm.Contracts.csproj" />
+    <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Services\MultiplexedRbac.Sample.Crm.Services.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Jobs\" />
+  </ItemGroup>
+</Project>

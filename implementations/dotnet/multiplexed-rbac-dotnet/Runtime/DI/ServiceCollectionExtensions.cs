@@ -1,0 +1,167 @@
+﻿// ============================================================================
+// MultiplexedRbac.Runtime - DI Extensions
+// Goal: avoid copy/paste in each microservice.
+//
+// Usage:
+//
+// builder.Services
+//   .AddMultiplexedRbacRuntime(builder.Configuration)
+//   .AddMultiplexedRbacHttp();              // API only
+//
+// builder.Services
+//   .AddMultiplexedRbacRuntime(builder.Configuration)
+//   .AddMultiplexedRbacNServiceBus();       // Worker (and API for outgoing behavior)
+//
+// Then in API pipeline:
+// app.UseAuthentication();
+// app.UseMiddleware<ExecutionContextMiddleware>();
+// app.UseMiddleware<NamespaceGuardMiddleware>();
+// ============================================================================
+
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
+using StackExchange.Redis;
+
+using MultiplexedRbac.Core.ExecutionContext;
+using MultiplexedRbac.Runtime;
+using MultiplexedRbac.Core.Authorization.Engine;
+using MultiplexedRbac.Core.Authorization.Registration;
+using MultiplexedRbac.Core.Authorization.Scope;
+using MultiplexedRbac.Stores.Cache;
+using MultiplexedRbac.Stores.Memory;
+using MultiplexedRbac.Stores;
+using MultiplexedRbac.Core.Authorization.Trn;
+
+// NOTE: adjust namespaces/types below to match your real locations:
+// - AuthorizationScope
+// - IAuthorizationEngine / TrnAuthorizationEngine
+// - ExecutionContextAccessor : IExecutionContextAccessor
+// - RedisContextStore, MemoryContextStore, CompositeContextStore
+// - ExecutionContextMiddleware, NamespaceGuardMiddleware
+//
+// NServiceBus behaviors live in MultiplexedRbac.Runtime.NServiceBus
+//   OutgoingExecutionContextHeaderBehavior
+//   IncomingExecutionContextRehydrateBehavior
+
+namespace MultiplexedRbac.Runtime.DI
+{
+    public static class ServiceCollectionExtensions
+    {
+        /// <summary>
+        /// Registers the shared Multiplexed RBAC runtime used by BOTH HTTP APIs and message endpoints:
+        /// - Auth runtime (AuthorizationScope, Engine, Accessor)
+        /// - Redis + Memory fallback stores
+        /// - CompositeContextStore as IContextStore
+        /// - ContextRuntimeOptions
+        /// </summary>
+        public static IServiceCollection AddMultiplexedRbacRuntime(
+            this IServiceCollection services,
+            IConfiguration configuration,
+            Action<ContextRuntimeOptions>? configureRuntimeOptions = null)
+        {
+            // ------------------------------------------------------------
+            // 1) Authorization runtime (scoped boundary)
+            // ------------------------------------------------------------
+            services.AddScoped<AuthorizationScope>();
+            services.AddScoped<IAuthorizationEngine, TrnAuthorizationEngine>();
+
+            // Keep scoped if your accessor is implemented with scoped storage.
+            // (If it is AsyncLocal-based, Singleton is fine too - but don't change it here.)
+            //services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();
+            services.AddSingleton<IExecutionContextAccessor, ExecutionContextAccessor>();
+
+            // Proxy + dynamic registration (Part 4)
+            // By default: scan calling assembly? No. We keep this explicit per host:
+            // hosts can call AddAuthorizedServices(typeof(Program).Assembly) themselves if they want
+            // OR you can provide an overload below.
+            // services.AddAuthorizedServices(...);
+
+            // ------------------------------------------------------------
+            // 2) Runtime options (Part 3)
+            // ------------------------------------------------------------
+            services.Configure<ContextRuntimeOptions>(opt =>
+            {
+                // defaults
+                opt.SessionIdleTimeout = TimeSpan.FromMinutes(20);
+                opt.AccessContextHeader = "X-Access-Context";
+
+                // host override
+                configureRuntimeOptions?.Invoke(opt);
+            });
+
+            // ------------------------------------------------------------
+            // 3) Redis infrastructure
+            // ------------------------------------------------------------
+            services.AddMemoryCache();
+
+            services.AddSingleton<IConnectionMultiplexer>(_ =>
+            {
+                var cs = configuration.GetConnectionString("Redis")
+                         ?? throw new InvalidOperationException("Missing Redis connection string.");
+                return ConnectionMultiplexer.Connect(cs);
+            });
+
+            // ------------------------------------------------------------
+            // 4) Stores
+            // ------------------------------------------------------------
+            services.AddSingleton<RedisContextStore>();
+
+            services.AddSingleton(sp =>
+            {
+                var mem = sp.GetRequiredService<IMemoryCache>();
+                return new MemoryContextStore(mem, ttl: TimeSpan.FromSeconds(20));
+            });
+
+            services.AddSingleton<IContextStore>(sp =>
+            {
+                var primary = sp.GetRequiredService<RedisContextStore>();
+                var fallback = sp.GetRequiredService<MemoryContextStore>();
+                return new CompositeContextStore(primary, fallback);
+            });
+
+
+            services.Configure<TrnBuilderOptions>(opt =>
+            {
+                // Option 1: from config
+                opt.Project = configuration["MultiplexedRbac:Project"] ?? "rbac-demo";
+
+                // Option 2: hardcode for sample
+                // opt.Project = "rbac-demo";
+            });
+
+
+            services.AddSingleton<TrnBuilder>();
+
+            return services;
+        }
+
+        /// <summary>
+        /// Optional helper to keep dynamic proxy registration consistent per host.
+        /// Host must pass its assembly (usually typeof(Program).Assembly).
+        /// </summary>
+        public static IServiceCollection AddMultiplexedRbacAuthorizedServices(
+            this IServiceCollection services,
+            params System.Reflection.Assembly[] assemblies)
+        {
+            foreach (var a in assemblies)
+                services.AddAuthorizedServices(a);
+
+            return services;
+        }
+
+        /// <summary>
+        /// Registers HTTP-only runtime components (middlewares).
+        /// NOTE: Pipeline ordering is done in app.Use..., not here.
+        /// </summary>
+        public static IServiceCollection AddMultiplexedRbacHttp(this IServiceCollection services)
+        {
+            // Middlewares
+            //services.AddTransient<ExecutionContextMiddleware>();
+            //services.AddTransient<NamespaceGuardMiddleware>();
+
+            return services;
+        }
+    }
+}
