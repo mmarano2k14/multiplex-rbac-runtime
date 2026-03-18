@@ -33,6 +33,7 @@ using MultiplexedRbac.Stores.Cache;
 using MultiplexedRbac.Stores.Memory;
 using MultiplexedRbac.Stores;
 using MultiplexedRbac.Core.Authorization.Trn;
+using MultiplexedRbac.Runtime.Realtime.DI;
 
 // NOTE: adjust namespaces/types below to match your real locations:
 // - AuthorizationScope
@@ -133,6 +134,12 @@ namespace MultiplexedRbac.Runtime.DI
 
 
             services.AddSingleton<TrnBuilder>();
+
+            // ------------------------------------------------------------
+            // 5) realtime (registration required for NullRealtimeProvider)
+            // ------------------------------------------------------------
+
+            services.AddMultiplexRealtime();
 
             return services;
         }

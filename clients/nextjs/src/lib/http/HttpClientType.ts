@@ -27,6 +27,15 @@ export type ProxyError = {
   details?: string;
 };
 
+export type HeaderKeyRotation = {
+  from: string; 
+  to: string 
+};
+
+export type HeaderOverride = {
+  contextKeyOverride? : string;
+};
+
 export type CallResult =
-  | { kind: "ok"; response: ProxyResponse; rotation?: { from: string; to: string } }
+  | { kind: "ok"; response: ProxyResponse; rotation?: HeaderKeyRotation }
   | { kind: "error"; error: ProxyError; response?: ProxyResponse };

@@ -1,21 +1,34 @@
-// lib/burst/BurstController.ts
-
+import { ConsoleContextAccessor } from "../ConsoleType";
 import type { BurstConfig, BurstEvent, BurstModel } from "./BurstMachineType";
 import { BurstPlans } from "./BurstPlans";
-import type { RequestSpec } from "@/lib/http/HttpClientType";
+import type { HeaderKeyRotation, HeaderOverride, RequestSpec } from "@/lib/http/HttpClientType";
+import type { IBurstDispatchMode } from "./modes/BurstDispatchModeType";
+import { SingleBurstDispatchMode } from "./modes/SingleBurstDispatchMode";
+import { MaintainedConcurrencyDispatchMode } from "./modes/MaintainedConcurrencyDispatchMode";
+import { WaveBatchesDispatchMode } from "./modes/WaveBatchesDispatchMode";
+import { WaveBatchesStaggeredDispatchMode } from "./modes/WaveBatchesStaggeredDispatchMode";
 
 export type ApiCallResult =
-  | { kind: "ok"; status: number; durationMs: number }
+  | { kind: "ok"; status: number; durationMs: number; rotation?: HeaderKeyRotation }
   | { kind: "error"; status?: number; durationMs: number; message: string };
 
 export interface IBurstApi {
-  call(spec: RequestSpec): Promise<ApiCallResult>;
+  call(
+    spec: RequestSpec,
+    options?: HeaderOverride
+  ): Promise<ApiCallResult>;
 }
 
 export class BurstController {
   private _stopRequested = false;
+  private _consoleContextAccessor: ConsoleContextAccessor;
 
-  constructor(private readonly dispatch: (ev: BurstEvent) => void) {}
+  constructor(
+    private readonly dispatch: (ev: BurstEvent) => void,
+    consoleContextAccessor: ConsoleContextAccessor
+  ) {
+    this._consoleContextAccessor = consoleContextAccessor;
+  }
 
   public configure(cfg: BurstConfig): void {
     this.dispatch({ type: "Configure", config: cfg });
@@ -31,24 +44,43 @@ export class BurstController {
     this.dispatch({ type: "Stop" });
   }
 
-  public async start(api: IBurstApi, model: BurstModel): Promise<void> {
+  public async start(
+    api: IBurstApi,
+    model: BurstModel,
+    configOverride?: BurstConfig
+  ): Promise<void> {
     const st = model.state;
     if (st === "Running" || st === "Stopping") return;
 
-    this._stopRequested = false;
-    this.dispatch({ type: "Start" });
+    /**
+     * Prefer an explicit config override when provided.
+     * This avoids race conditions when configure() has been dispatched
+     * but React has not rerendered the model yet.
+     */
+    const cfg = configOverride ?? model.report?.config;
 
-    const report = model.report;
-    if (!report) {
-      this.dispatch({ type: "Fail", message: "Burst report missing" });
+    if (!cfg) {
+      this.dispatch({ type: "Fail", message: "Burst config missing" });
       return;
     }
 
-    const cfg = report.config;
+    this._stopRequested = false;
+    // ✅ snapshot explicite
+    this.dispatch({ type: "Start", config: cfg });
+
     const plan = BurstPlans.byKey(cfg.planKey);
+    const mode = this.createDispatchMode(cfg);
 
     try {
-      await this.runBurst(api, cfg, plan.makeRequest.bind(plan));
+      await mode.execute({
+        api,
+        config: cfg,
+        stopRequested: () => this._stopRequested,
+        dispatch: this.dispatch,
+        makeRequest: plan.makeRequest.bind(plan),
+        getCurrentContextKey: () => this._consoleContextAccessor.api.contextKey,
+      });
+
       this.dispatch({ type: "Finish" });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -56,69 +88,22 @@ export class BurstController {
     }
   }
 
-  private async runBurst(
-    api: IBurstApi,
-    cfg: BurstConfig,
-    make: (i: number) => RequestSpec
-  ): Promise<void> {
-    const total = Math.max(1, Math.floor(cfg.total));
-    const concurrency = Math.max(1, Math.floor(cfg.concurrency));
-    const delayMs = Math.max(0, Math.floor(cfg.delayMs));
+  /**
+   * Factory selecting the execution strategy from the explicit dispatch mode.
+   */
+  private createDispatchMode(cfg: BurstConfig): IBurstDispatchMode {
+    switch (cfg.dispatchMode) {
+      case "single-burst":
+        return new SingleBurstDispatchMode();
 
-    let nextIndex = 0;
+      case "maintained-concurrency":
+        return new MaintainedConcurrencyDispatchMode();
 
-    const workers: Promise<void>[] = [];
-    for (let w = 0; w < concurrency; w++) {
-      workers.push(this.workerLoop(api, total, delayMs, () => nextIndex++, make));
-    }
+      case "wave-batches":
+        return new WaveBatchesDispatchMode();
 
-    await Promise.all(workers);
-  }
-
-  private async workerLoop(
-    api: IBurstApi,
-    total: number,
-    delayMs: number,
-    next: () => number,
-    make: (i: number) => RequestSpec
-  ): Promise<void> {
-    while (true) {
-      if (this._stopRequested) return;
-
-      const i = next();
-      if (i >= total) return;
-
-      this.dispatch({ type: "TickStart", count: 1 });
-
-      try {
-        if (delayMs > 0) await sleep(delayMs);
-
-        const spec = make(i);
-        const r = await api.call(spec);
-
-        if (r.kind === "ok") {
-          if (r.status >= 200 && r.status < 300) {
-            this.dispatch({ type: "ResultOk", durationMs: r.durationMs });
-          } else {
-            this.dispatch({ type: "ResultHttp", status: r.status, durationMs: r.durationMs });
-          }
-        } else {
-          if (typeof r.status === "number") {
-            this.dispatch({ type: "ResultHttp", status: r.status, durationMs: r.durationMs });
-          } else {
-            this.dispatch({ type: "ResultError", message: r.message });
-          }
-        }
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        this.dispatch({ type: "ResultError", message: msg });
-      } finally {
-        this.dispatch({ type: "TickComplete", count: 1 });
-      }
+      case "wave-batches-staggered":
+        return new WaveBatchesStaggeredDispatchMode();
     }
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

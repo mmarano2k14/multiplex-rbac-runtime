@@ -1,106 +1,304 @@
-import { LogEntry } from "@/lib/logs/contracts";
-import React, { JSX } from "react";
+"use client";
 
+import React, {
+  JSX,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+import { ConsoleLogEntry } from "@/lib/logs/inMemoryLogType";
+import { HttpLogCard } from "./components/HttpLogCard";
+import { RealtimeLogCard } from "./components/RealtimeLogCard";
+import { LogFilterKind } from "./LogsPanelType";
+import { LogUiHelper } from "./helpers/LogUiHelper";
+import { ContextRotationLogCard } from "./components/ContextRotationLogCard";
 
 export type LogsPanelProps = {
-  logs: LogEntry[];
+  logs: ConsoleLogEntry[];
+  onClearClick: () => void;
 };
 
-export function LogsPanel(props: LogsPanelProps) : JSX.Element {
+export function LogsPanel(props: LogsPanelProps): JSX.Element {
+  const { logs, onClearClick } = props;
 
-    const {
-        logs,
-    } = props
+  /**
+   * Selected filter used to show:
+   * - all logs
+   * - only HTTP logs
+   * - only realtime logs
+   * - only context rotation logs
+   * - only HTTP errors
+   */
+  const [filter, setFilter] = useState<LogFilterKind>("all");
 
-    return (
-        <div style={{ marginTop: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Live log</div>
+  /**
+   * Controls whether the panel should keep following the live head.
+   *
+   * Since the newest logs are rendered at the top,
+   * "stick to top" means:
+   * - if the user stays near the top, auto-scroll to top on new logs
+   * - if the user scrolls down, preserve scroll position
+   */
+  const [stickToTop, setStickToTop] = useState(true);
 
-        <div style={{ display: "grid", gap: 10 }}>
-          {logs.length === 0 && (
-            <div style={{ fontSize: 13, opacity: 0.7 }}>
-              No requests yet. Click <b>Get ContextKey</b>, then READ/REFUND.
-            </div>
-          )}
+  /**
+   * Scroll container reference used both by:
+   * - manual scroll handling
+   * - the virtualizer
+   */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-          {logs.map((l) => (
-            <div key={l.id} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                <div style={{ fontWeight: 700 }}>
-                  {l.name} — <code>{l.method}</code> <code>{l.path}</code>
-                </div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>{l.t}</div>
-              </div>
+  /**
+   * Apply the active filter while preserving the original source order.
+   *
+   * Important:
+   * We do not sort here because the source already provides
+   * the correct order (newest first).
+   */
+  const filteredLogs = useMemo(() => {
+    if (filter === "all") {
+      return logs;
+    }
 
-              <div style={{ marginTop: 8, fontSize: 13 }}>
-                <div>
-                  <b>Target:</b> <code>{l.baseUrl}</code>
-                </div>
+    if (filter === "rotation") {
+      return logs.filter((log) => LogUiHelper.isContextRotationLog(log));
+    }
 
-                {l.url && (
-                  <div>
-                    <b>Resolved URL:</b> <code>{l.url}</code>
-                  </div>
-                )}
+    if (filter === "http-error") {
+      return logs.filter(
+        (log) =>
+          LogUiHelper.isHttpLogEntry(log) &&
+          ((typeof log.status === "number" && log.status >= 400) || !!log.error)
+      );
+    }
 
-                <div style={{ marginTop: 6 }}>
-                  <b>Request headers:</b>{" "}
-                  <code>
-                    {Object.entries(l.requestHeaders)
-                      .map(([k, v]) => `${k}=${v}`)
-                      .join(" | ") || "(none)"}
-                  </code>
-                </div>
+    if (filter === "http") {
+      return logs.filter((log) => LogUiHelper.isHttpLogEntry(log));
+    }
 
-                {typeof l.requestBody !== "undefined" && (
-                  <div style={{ marginTop: 6 }}>
-                    <b>Request body:</b> <code>{JSON.stringify(l.requestBody)}</code>
-                  </div>
-                )}
+    return logs.filter((log) => log.kind === filter);
+  }, [logs, filter]);
 
-                {l.error && (
-                  <div style={{ marginTop: 8 }}>
-                    <b style={{ color: "crimson" }}>Error:</b> <code>{l.error}</code>
-                  </div>
-                )}
+  /**
+   * Counts displayed in filter buttons.
+   */
+  const httpCount = logs.filter((x) => LogUiHelper.isHttpLogEntry(x)).length;
 
-                {typeof l.status !== "undefined" && (
-                  <div style={{ marginTop: 8 }}>
-                    <b>Response:</b>{" "}
-                    <code>
-                      {l.status} {l.statusText ?? ""}
-                    </code>{" "}
-                    <span style={{ marginLeft: 8 }}>{l.ok ? "✅ ok" : "❌ not ok"}</span>
-                  </div>
-                )}
+  const httpErrorCount = logs.filter(
+    (x) =>
+      LogUiHelper.isHttpLogEntry(x) &&
+      ((typeof x.status === "number" && x.status >= 400) || !!x.error)
+  ).length;
 
-                {l.rotation && (
-                  <div style={{ marginTop: 6 }}>
-                    <b>Rotation:</b> <code>{l.rotation.from}</code> → <code>{l.rotation.to}</code>
-                  </div>
-                )}
+  const realtimeCount = logs.filter((x) => x.kind === "realtime").length;
 
-                {l.responseHeaders && Object.keys(l.responseHeaders).length > 0 && (
-                  <div style={{ marginTop: 6 }}>
-                    <b>Response headers:</b>{" "}
-                    <code>
-                      {Object.entries(l.responseHeaders)
-                        .map(([k, v]) => `${k}=${v}`)
-                        .join(" | ")}
-                    </code>
-                  </div>
-                )}
+  const contextRotationCount = logs.filter((x) =>
+    LogUiHelper.isContextRotationLog(x)
+  ).length;
 
-                {typeof l.responseBody === "string" && l.responseBody.length > 0 && (
-                  <details style={{ marginTop: 8 }}>
-                    <summary style={{ cursor: "pointer" }}>Response body</summary>
-                    <pre style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>{l.responseBody}</pre>
-                  </details>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+  /**
+   * ------------------------------------------------------------
+   * VIRTUALIZER
+   * ------------------------------------------------------------
+   */
+  const rowVirtualizer = useVirtualizer({
+    count: filteredLogs.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 56,
+    overscan: 6,
+    getItemKey: (index) => filteredLogs[index]?.id ?? index,
+  });
+
+  /**
+   * Auto-follow the live head when the user is still near the top.
+   *
+   * Because newest logs are inserted at the top,
+   * the live position is scrollTop = 0.
+   */
+  useEffect(() => {
+    const container = scrollRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    if (!stickToTop) {
+      return;
+    }
+
+    container.scrollTop = 0;
+  }, [filteredLogs, stickToTop]);
+
+  /**
+   * Re-measure virtual rows whenever the filtered source changes.
+   */
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [filter, filteredLogs, rowVirtualizer]);
+
+  /**
+   * On filter switch, jump to the top and re-enable live follow mode.
+   */
+  useEffect(() => {
+    const container = scrollRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = 0;
+    setStickToTop(true);
+    rowVirtualizer.measure();
+  }, [filter, rowVirtualizer]);
+
+  /**
+   * Updates follow mode depending on the user's current scroll position.
+   */
+  const handleScroll = (): void => {
+    const container = scrollRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    setStickToTop(LogUiHelper.isNearTop(container));
+  };
+
+  /**
+   * Manually jump back to the newest logs and re-enable live follow mode.
+   */
+  const jumpToLatest = (): void => {
+    const container = scrollRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = 0;
+    setStickToTop(true);
+  };
+
+  return (
+    <section className="panel">
+
+      <div className="tab-header">
+        <button
+          className={filter === "all" ? "active" : ""}
+          onClick={() => setFilter("all")}
+          type="button"
+        >
+          All ({logs.length})
+        </button>
+
+        <button
+          className={filter === "http" ? "active" : ""}
+          onClick={() => setFilter("http")}
+          type="button"
+        >
+          HTTP ({httpCount})
+        </button>
+
+        <button
+          className={filter === "http-error" ? "active" : ""}
+          onClick={() => setFilter("http-error")}
+          type="button"
+        >
+          HTTP Error ({httpErrorCount})
+        </button>
+
+        <button
+          className={filter === "rotation" ? "active" : ""}
+          onClick={() => setFilter("rotation")}
+          type="button"
+        >
+          Context ({contextRotationCount})
+        </button>
+
+        <button
+          className={filter === "realtime" ? "active" : ""}
+          onClick={() => setFilter("realtime")}
+          type="button"
+        >
+          Realtime ({realtimeCount})
+        </button>
+
+        <button
+            type="button"
+            className="logs-jump-button active"
+            onClick={onClearClick}
+          >
+           Clear Logs 
+        </button>
+
+        {!stickToTop && filteredLogs.length > 0 && (
+          <button
+            type="button"
+            className="logs-jump-button active"
+            onClick={jumpToLatest}
+          >
+            Jump to latest
+          </button>
+        )}
+
       </div>
-    )
+
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="log-list"
+      >
+        {filteredLogs.length === 0 ? (
+          <div className="log-empty">No logs for current filter.</div>
+        ) : (
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              position: "relative",
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const log = filteredLogs[virtualRow.index];
+
+              if (!log) {
+                return null;
+              }
+
+              return (
+                <div
+                  key={log.id}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className="log-row"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  {LogUiHelper.isHttpLogEntry(log) && <HttpLogCard log={log} />}
+
+                  {LogUiHelper.isHttpErrorLogEntry(log) && (
+                    <HttpLogCard log={log} />
+                  )}
+
+                  {LogUiHelper.isContextRotationLog(log) && (
+                    <ContextRotationLogCard log={log} />
+                  )}
+
+                  {LogUiHelper.isRealtimeLogEntry(log) && (
+                    <RealtimeLogCard log={log} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }

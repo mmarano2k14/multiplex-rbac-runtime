@@ -1,4 +1,6 @@
-﻿using MultiplexedRbac.Core.ExecutionContext;
+﻿using Microsoft.Extensions.Options;
+using MultiplexedRbac.Core.ExecutionContext;
+using MultiplexedRbac.Runtime;
 using StackExchange.Redis;
 using System.Text.Json;
 
@@ -6,19 +8,29 @@ namespace MultiplexedRbac.Stores.Cache
 {
     public sealed class RedisContextStore : IContextStore
     {
+        private readonly IConnectionMultiplexer _multiplexer;
         private readonly IDatabase _db;
         private readonly JsonSerializerOptions _jsonOptions;
+        private readonly ContextRuntimeOptions _options;
 
         private const string ContextPrefix = "ac:ctx:";
         private const string InFlightPrefix = "ac:inflight:";
 
-        private const int DefaultTtlSeconds = 900;        // 15 minutes
-        private const int RotationOverlapSeconds = 10;    // overlap window
-        private const int InFlightExtraSeconds = 5;       // safety margin
+        private const int DefaultTtlSeconds = 900;  // 15 minutes
+        private const int InFlightExtraSeconds = 5; // safety margin
 
-        public RedisContextStore(IConnectionMultiplexer multiplexer)
+        // SHA cache kept in memory by the application process
+        private string? _acquireScriptSha;
+        private string? _releaseScriptSha;
+        private string? _rotateScriptSha;
+
+        public RedisContextStore(
+            IConnectionMultiplexer multiplexer,
+            IOptions<ContextRuntimeOptions> options)
         {
+            _multiplexer = multiplexer;
             _db = multiplexer.GetDatabase();
+            _options = options.Value;
             _jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         }
 
@@ -28,6 +40,141 @@ namespace MultiplexedRbac.Stores.Cache
         private static string GenerateNewKey()
             => "ctx_" + Guid.NewGuid().ToString("N");
 
+        private const string AcquireScript = @"
+            local ctxKey = KEYS[1]
+            local inKey = KEYS[2]
+
+            local extra = tonumber(ARGV[1])
+            local defaultTtl = tonumber(ARGV[2])
+            local maxInFlight = tonumber(ARGV[3])
+
+            if redis.call('EXISTS', ctxKey) == 0 then
+              return 0
+            end
+
+            local ttl = redis.call('TTL', ctxKey)
+            if ttl < 0 then
+              ttl = defaultTtl
+            end
+
+            local n = redis.call('INCR', inKey)
+
+            if maxInFlight > 0 and n > maxInFlight then
+                redis.call('DECR', inKey)
+                return -1
+            end
+
+            redis.call('EXPIRE', inKey, ttl + extra)
+            return n
+        ";
+
+        private const string ReleaseScript = @"
+            local inKey = KEYS[1]
+
+            if redis.call('EXISTS', inKey) == 0 then
+                return 0
+            end
+
+            local n = redis.call('DECR', inKey)
+
+            if n <= 0 then
+                redis.call('DEL', inKey)
+            end
+
+            return n
+        ";
+
+        /// <summary>
+        /// Rotation script using millisecond overlap control.
+        ///
+        /// - new key gets the full normal TTL (seconds)
+        /// - old key is shortened to overlap window (milliseconds)
+        /// - if overlap is 0, the old key expires immediately
+        /// </summary>
+        private const string RotateScript = @"
+            local oldKey = KEYS[1]
+            local newKey = KEYS[2]
+            local inKey = KEYS[3]
+
+            local newTtlSeconds = tonumber(ARGV[1])
+            local overlapMs = tonumber(ARGV[2])
+            local inFlightGraceMs = tonumber(ARGV[3])
+
+            local value = redis.call('GET', oldKey)
+            if not value then
+              return nil
+            end
+
+            redis.call('SET', newKey, value, 'EX', newTtlSeconds)
+
+            local inFlight = tonumber(redis.call('GET', inKey) or '0')
+
+            local effectiveOverlapMs = overlapMs
+            if inFlight > 0 and inFlightGraceMs > effectiveOverlapMs then
+              effectiveOverlapMs = inFlightGraceMs
+            end
+
+            local oldPttl = redis.call('PTTL', oldKey)
+            if oldPttl < 0 then
+              redis.call('PEXPIRE', oldKey, effectiveOverlapMs)
+            elseif oldPttl > effectiveOverlapMs then
+              redis.call('PEXPIRE', oldKey, effectiveOverlapMs)
+            end
+
+            return value
+        ";
+
+        // ------------------------------------------------------------
+        // Generic script execution helper
+        // ------------------------------------------------------------
+        private async Task<RedisResult> EvaluateScriptAsync(
+            string script,
+            RedisKey[] keys,
+            RedisValue[] values,
+            Func<string?> getSha,
+            Action<string> setSha)
+        {
+            if (!_options.UseRedisLuaScriptShaCaching)
+            {
+                return await _db.ScriptEvaluateAsync(script, keys, values);
+            }
+
+            var sha = getSha();
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(sha))
+                {
+                    return await _db.ScriptEvaluateAsync(sha, keys, values);
+                }
+
+                sha = await LoadScriptShaAsync(script);
+                setSha(sha);
+
+                return await _db.ScriptEvaluateAsync(sha, keys, values);
+            }
+            catch (RedisServerException ex) when (ex.Message.StartsWith("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                sha = await LoadScriptShaAsync(script);
+                setSha(sha);
+
+                return await _db.ScriptEvaluateAsync(sha, keys, values);
+            }
+        }
+
+        private async Task<string> LoadScriptShaAsync(string script)
+        {
+            var endpoint = _multiplexer.GetEndPoints().FirstOrDefault()
+                ?? throw new InvalidOperationException("No Redis endpoints available.");
+
+            var server = _multiplexer.GetServer(endpoint);
+
+            // SCRIPT LOAD returns SHA1 (byte[])
+            var result = await server.ScriptLoadAsync(script);
+
+            return Convert.ToHexString(result).ToLowerInvariant();
+        }
+
         // ------------------------------------------------------------
         // Store
         // ------------------------------------------------------------
@@ -36,7 +183,6 @@ namespace MultiplexedRbac.Stores.Cache
             var key = GenerateNewKey();
             context.ContextKey = key;
             var json = JsonSerializer.Serialize(context, _jsonOptions);
-            
 
             await _db.StringSetAsync(
                 ContextKey(key),
@@ -58,11 +204,11 @@ namespace MultiplexedRbac.Stores.Cache
             var json = JsonSerializer.Serialize(context, _jsonOptions);
 
             await _db.StringSetAsync(
-                ContextKey(key), // => "ac:ctx:" + key
+                ContextKey(key),
                 json,
                 TimeSpan.FromSeconds(DefaultTtlSeconds));
 
-            return key; // returns logical key (what clients send in X-Access-Context)
+            return key;
         }
 
         // ------------------------------------------------------------
@@ -80,38 +226,27 @@ namespace MultiplexedRbac.Stores.Cache
         // ------------------------------------------------------------
         // Acquire In-Flight (Lua atomic)
         // ------------------------------------------------------------
-
-        private const string AcquireScript = @"
-            local ctxKey = KEYS[1]
-            local inKey = KEYS[2]
-            local extra = tonumber(ARGV[1])
-            local defaultTtl = tonumber(ARGV[2])
-
-            if redis.call('EXISTS', ctxKey) == 0 then
-              return 0
-            end
-
-            local ttl = redis.call('TTL', ctxKey)
-            if ttl < 0 then
-              ttl = defaultTtl
-            end
-
-            local n = redis.call('INCR', inKey)
-            redis.call('EXPIRE', inKey, ttl + extra)
-            return n
-            ";
-
-        public async Task<bool> TryAcquireInFlightAsync(string key)
+        public async Task<bool> TryAcquireInFlightAsync(string key, int maxInFlight)
         {
             if (string.IsNullOrWhiteSpace(key))
                 return false;
 
-            var rr = await _db.ScriptEvaluateAsync(
+            // unlimited demo mode
+            if (maxInFlight <= 0)
+                return true;
+
+            var rr = await EvaluateScriptAsync(
                 AcquireScript,
                 new RedisKey[] { ContextKey(key), InFlightKey(key) },
-                new RedisValue[] { (RedisValue)InFlightExtraSeconds, (RedisValue)DefaultTtlSeconds });
+                new RedisValue[]
+                {
+                    (RedisValue)InFlightExtraSeconds,
+                    (RedisValue)DefaultTtlSeconds,
+                    (RedisValue)maxInFlight
+                },
+                () => _acquireScriptSha,
+                sha => _acquireScriptSha = sha);
 
-            // RedisResult can be Int64; parse safely
             var n = (long)rr;
             return n > 0;
         }
@@ -119,68 +254,56 @@ namespace MultiplexedRbac.Stores.Cache
         // ------------------------------------------------------------
         // Release In-Flight (Lua atomic)
         // ------------------------------------------------------------
-        private static readonly LuaScript ReleaseScript = LuaScript.Prepare(@"
-            local inKey = KEYS[1]
-            if redis.call('EXISTS', inKey) == 0 then
-                return 0
-            end
-
-            local n = redis.call('DECR', inKey)
-            if n <= 0 then
-                redis.call('DEL', inKey)
-            end
-
-            return n
-        ");
-
         public async Task ReleaseInFlightAsync(string key)
         {
-            await _db.ScriptEvaluateAsync(
+            await EvaluateScriptAsync(
                 ReleaseScript,
-                new RedisKey[] { InFlightKey(key) });
+                new RedisKey[] { InFlightKey(key) },
+                Array.Empty<RedisValue>(),
+                () => _releaseScriptSha,
+                sha => _releaseScriptSha = sha);
         }
 
         // ------------------------------------------------------------
-        // Rotation (Lua overlap-safe)
+        // Rotation (Lua overlap-safe, overlap in milliseconds)
         // ------------------------------------------------------------
-
-        private const string RotateScript = @"
-            local oldKey = KEYS[1]
-            local newKey = KEYS[2]
-            local newTtl = tonumber(ARGV[1])
-            local overlap = tonumber(ARGV[2])
-
-            local value = redis.call('GET', oldKey)
-            if not value then
-              return nil
-            end
-
-            redis.call('SET', newKey, value, 'EX', newTtl)
-
-            local oldTtl = redis.call('TTL', oldKey)
-            if oldTtl < 0 then
-              redis.call('EXPIRE', oldKey, overlap)
-            elseif oldTtl > overlap then
-              redis.call('EXPIRE', oldKey, overlap)
-            end
-
-            return value
-            ";
-
-        public async Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(string key)
+        public async Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(
+            string key,
+            TimeSpan overlapWindow)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new ArgumentException("Key cannot be null/empty.", nameof(key));
 
             var newKey = GenerateNewKey();
 
-            // IMPORTANT:
-            // - KEYS are the real Redis keys (with prefix)
-            // - ARGV are numbers (TTL seconds)
-            var result = await _db.ScriptEvaluateAsync(
+            var overlapMs = Math.Max(
+                0L,
+                (long)Math.Ceiling(overlapWindow.TotalMilliseconds));
+
+            // Small safety floor to avoid old key disappearing too early
+            // while requests already acquired on that key are still finishing.
+            var inFlightGraceMs = Math.Max(
+                0L,
+                InFlightExtraSeconds * 1000L);
+
+            inFlightGraceMs = 0;
+
+            var result = await EvaluateScriptAsync(
                 RotateScript,
-                keys: new RedisKey[] { ContextKey(key), ContextKey(newKey) },
-                values: new RedisValue[] { DefaultTtlSeconds, RotationOverlapSeconds });
+                new RedisKey[]
+                {
+                    ContextKey(key),
+                    ContextKey(newKey),
+                    InFlightKey(key)
+                },
+                new RedisValue[]
+                {
+            DefaultTtlSeconds,
+            overlapMs,
+            inFlightGraceMs
+                },
+                () => _rotateScriptSha,
+                sha => _rotateScriptSha = sha);
 
             if (result.IsNull)
                 throw new KeyNotFoundException("Cannot rotate: context not found or expired.");
@@ -189,7 +312,6 @@ namespace MultiplexedRbac.Stores.Cache
             var ctx = JsonSerializer.Deserialize<Core.ExecutionContext.ExecutionContext>(json, _jsonOptions)
                       ?? throw new InvalidOperationException("Invalid context JSON in Redis.");
 
-            // Optional but consistent with your middleware behavior:
             ctx.ContextKey = key;
 
             return (newKey, ctx);

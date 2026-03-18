@@ -1,41 +1,44 @@
-// lib/burst/BurstApiAdapter.ts
-
-import { RequestSpec } from "@/lib/http/HttpClientType";
-
+import { HeaderOverride, RequestSpec } from "@/lib/http/HttpClientType";
 import type { MultiplexedRbacApi } from "@/lib/rbac/MultiplexedRbacApi";
 import { ApiCallResult, IBurstApi } from "./BurstController";
 
 /**
- * Adapte MultiplexedRbacApi à l'interface burst.
+ * MultiplexedRbacApi à l'interface burst.
  *
  * Important:
- * - Le burst NE gère PAS la rotation.
- * - La rotation doit rester dans MultiplexedRbacApi / ClientSession (single source of truth).
+ * - Le burst NE gère PAS la rotation globale de session.
+ * - La rotation reste dans MultiplexedRbacApi / ClientSession.
+ * - En revanche, un mode burst peut imposer un contextKey figé
+ *   pour une vague donnée via contextKeyOverride.
  */
 export class BurstApiAdapter implements IBurstApi {
   constructor(private readonly api: MultiplexedRbacApi) {}
 
-  async call(spec: RequestSpec): Promise<ApiCallResult> {
+  async call(
+    spec: RequestSpec,
+    options?: HeaderOverride
+  ): Promise<ApiCallResult> {
     const startedAt = performance.now();
 
     try {
-      const r = await this.api.call(spec);
+      const r = await this.api.call(spec, options);
 
       const durationMs = Math.max(0, performance.now() - startedAt);
 
-      // Expected shape:
-      // - { kind: "ok", response: { status: number, ... } }
-      // - { kind: "error", error: { error: string, details?: string }, status?: number }
       if (r?.kind === "ok") {
         const status: number | undefined = r?.response?.status;
         if (typeof status !== "number") {
-          return { kind: "error", durationMs, message: "Missing status in OK response" };
+          return {
+            kind: "error",
+            durationMs,
+            message: "Missing status in OK response",
+          };
         }
 
-        return { kind: "ok", status, durationMs };
+        return { kind: "ok", status, durationMs, rotation: r.rotation };
       }
 
-      const status: number | undefined = r?.response?.status ?? r?.response?.status;
+      const status: number | undefined = r?.response?.status;
       const msg =
         r?.error?.error
           ? `${r.error.error}${r.error.details ? `: ${r.error.details}` : ""}`
@@ -44,7 +47,11 @@ export class BurstApiAdapter implements IBurstApi {
       return { kind: "error", status, durationMs, message: msg };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      return { kind: "error", durationMs: Math.max(0, performance.now() - startedAt), message: msg };
+      return {
+        kind: "error",
+        durationMs: Math.max(0, performance.now() - startedAt),
+        message: msg,
+      };
     }
   }
 }

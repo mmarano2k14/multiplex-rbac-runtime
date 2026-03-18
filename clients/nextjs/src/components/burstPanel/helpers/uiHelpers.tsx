@@ -20,10 +20,11 @@ export class UiHelpers {
 
   public static Stat({ label, value }: { label: string; value: React.ReactNode }) {
     return (
-      <div style={{ padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
-        <div style={{ fontSize: 12, opacity: 0.7 }}>{label}</div>
-        <div style={{ fontSize: 16, fontWeight: 600 }}>{value}</div>
-      </div>
+            <div className="kpi-card">
+              <span className="kpi-label">{label}</span>
+              <strong>{value}</strong>
+            </div>
+
     );
   }
 

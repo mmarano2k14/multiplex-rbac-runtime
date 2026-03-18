@@ -29,6 +29,6 @@ export function useConsoleContext() {
     state,
     dispatch: controller.dispatch,
     actions: controller.actions,
-    api: controller.api
+    api: controller.api,
   };
 }

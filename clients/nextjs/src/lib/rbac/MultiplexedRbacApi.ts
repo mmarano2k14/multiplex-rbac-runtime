@@ -1,7 +1,7 @@
 
 import { HttpClient } from "../http/HttpClient";
-import { CallResult, ProxyError, ProxyResponse, RequestSpec } from "../http/HttpClientType";
-import { IBusyListener, ILogSink } from "../logs/contracts";
+import { CallResult, HeaderOverride, ProxyError, ProxyResponse, RequestSpec } from "../http/HttpClientType";
+import { IBusyListener, ILogSink } from "../logs/inMemoryLogType";
 import { ClientSession, Rotation } from "./ClientSession";
 
 export class MultiplexedRbacApi {
@@ -61,24 +61,33 @@ export class MultiplexedRbacApi {
     this.session.demoUserId = v;
   }
 
-  public async call(spec: RequestSpec, signal?: AbortSignal): Promise<CallResult> {
+  set maxInFlight(v: string) {
+    this.session.maxInFlight = v;
+  }
+
+  set rotationOverlapMs(v: string) {
+    this.session.rotationOverlapMs = v;
+  }
+
+  public async call(spec: RequestSpec, options?: HeaderOverride,  signal?: AbortSignal): Promise<CallResult> {
     const id = this.uid();
     const t = new Date().toISOString();
 
     try {
         this.setBusy(true);
         
-        const headers = this.session.buildHeaders();
+        const headers = this.session.buildHeaders(options);
 
         this._log.push({
-        id,
-        t,
-        name: spec.name,
-        method: spec.method,
-        path: spec.path,
-        baseUrl: this._baseUrl,
-        requestHeaders : headers,
-        requestBody: spec.body,
+          kind:"http",
+          id,
+          t,
+          name: spec.name,
+          method: spec.method,
+          path: spec.path,
+          baseUrl: this._baseUrl,
+          requestHeaders : headers,
+          requestBody: spec.body,
         });
 
 
@@ -100,7 +109,7 @@ export class MultiplexedRbacApi {
             ok: data.ok,
             status: data.status,
             statusText: data.statusText,
-            responseHeaders: data.headers,
+            //responseHeaders: data.headers,
             responseBody: data.body,
             rotation,
         });
@@ -127,6 +136,7 @@ export class MultiplexedRbacApi {
         path: "/demo/login",
         body: { username }
       },
+      undefined,
       signal
     );
 
@@ -154,6 +164,7 @@ export class MultiplexedRbacApi {
         path: "/demo/bootstrap",
         body: {  }
       },
+      undefined,
       signal
     );
 
@@ -176,6 +187,7 @@ export class MultiplexedRbacApi {
   public async getContextKey(signal?: AbortSignal): Promise<CallResult> {
     const res = await this.call(
       { name: "Get ContextKey", method: "GET", path: "/demo/context" },
+      undefined,
       signal
     );
 
@@ -194,6 +206,7 @@ export class MultiplexedRbacApi {
   public readInvoice(invoiceId: string, signal?: AbortSignal): Promise<CallResult> {
     return this.call(
       { name: "READ invoice", method: "GET", path: `/billing/${encodeURIComponent(invoiceId)}` },
+      undefined,
       signal
     );
   }
@@ -206,6 +219,7 @@ export class MultiplexedRbacApi {
         path: `/billing/${encodeURIComponent(invoiceId)}/refund`,
         body: { amount },
       },
+      undefined,
       signal
     );
   }

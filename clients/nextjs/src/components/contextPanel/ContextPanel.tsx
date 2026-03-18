@@ -1,5 +1,6 @@
 "use client";
 
+import { InFlightMaxValue, maxInFlightOptions, rotationOverlapPresets } from "@/lib/console/ConsoleType";
 import React, { JSX } from "react";
 
 export type ContextPanelProps = {
@@ -7,66 +8,71 @@ export type ContextPanelProps = {
 
   demoUserId: string;
   contextKey: string;
+  maxInFlight: InFlightMaxValue;
+  rotationOverlapMs: string;
 
   onDemoUserIdChange: (v: string) => void;
   onContextKeyChange: (v: string) => void;
+  onMaxInFlightChange: (v: InFlightMaxValue) => void;
+  onRotationOverlapMsChange: (v: string) => void;
   onGetContextClick: () => void;
   onClearClick: () => void;
 };
 
-export function ContextPanel(props: ContextPanelProps) : JSX.Element {
-    const {
-    demoUserId,
-    contextKey,
-    onDemoUserIdChange,
-    onContextKeyChange,
+
+export function ContextPanel(props: ContextPanelProps): JSX.Element {
+  const {
+    disabled,
+    maxInFlight,
+    rotationOverlapMs,
+    onMaxInFlightChange,
+    onRotationOverlapMsChange,
   } = props;
 
-  return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Context</div>
+  const currentOverlapIndex = Math.max(
+    0,
+    rotationOverlapPresets.indexOf(rotationOverlapMs)
+  );
 
-        <div style={{ display: "grid", gap: 8 }}>
-        <label
-            style={{
-            display: "grid",
-            gridTemplateColumns: "140px 1fr",
-            gap: 8,
-            alignItems: "center",
-            }}
-        >
-            <span style={{ fontSize: 13 }}>Demo UserId</span>
-            <input
-            value={demoUserId}
-            onChange={(e) => onDemoUserIdChange(e.target.value)}
-            disabled={true}
-            style={{ padding: 8, borderRadius: 8, border: "1px solid #ccc" }}
-            />
-        </label>
+ return (
+  <>
+    
 
-        <label
-            style={{
-            display: "grid",
-            gridTemplateColumns: "140px 1fr",
-            gap: 8,
-            alignItems: "center",
-            }}
-        >
-            <span style={{ fontSize: 13 }}>X-Access-Context</span>
-            <input
-            value={contextKey}
-            onChange={(e) => onContextKeyChange(e.target.value) }
-            disabled={true}
-            placeholder="auto from /demo/context, and auto-rotated"
-            style={{ padding: 8, borderRadius: 8, border: "1px solid #ccc" }}
-            />
-        </label>
-
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-            Rotation is automatic: if API returns <code>x-access-context</code>, the client
-            session updates the current key.
-        </div>
-        </div>
+    <div className="header-inline">
+      <label>Max In-Flight</label>
+      <select
+        value={maxInFlight}
+        onChange={(e) =>
+          onMaxInFlightChange(e.target.value as InFlightMaxValue)
+        }
+        disabled={disabled}
+      >
+        {maxInFlightOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </div>
-  )
+
+    <div className="header-inline">
+      <label>Rotation overlap <span>({rotationOverlapMs} ms)</span></label>
+
+      <input
+        type="range"
+        min={0}
+        max={rotationOverlapPresets.length - 1}
+        step={1}
+        value={currentOverlapIndex}
+        onChange={(e) => {
+          const index = Number(e.target.value);
+          onRotationOverlapMsChange(rotationOverlapPresets[index]);
+        }}
+        disabled={disabled}
+      />
+
+      
+    </div>
+  </>
+);
 }

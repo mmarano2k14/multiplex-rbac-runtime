@@ -6,8 +6,8 @@ export class BurstMachine {
       state: "Idle",
       report: {
         config: BurstMachine.sanitize(defaultConfig),
-        progress: { started: 0, completed: 0, inFlight: 0 },
-        counters: { ok: 0, unauthorized: 0, forbidden: 0, other: 0, errors: 0 },
+        progress: { started: 0, completed: 0, inFlight: 0, total: 0 },
+        counters: { ok: 0, unauthorized: 0, forbidden: 0, other: 0, errors: 0, rejected:0 },
         timing: {},
         stats: { durationsMs: [] },
       },
@@ -43,9 +43,12 @@ export class BurstMachine {
       }
 
       case "Start": {
+        /*
         const cfg = BurstMachine.sanitize(
           model.report?.config ?? BurstMachine.defaultConfig()
         );
+        */
+       const cfg = BurstMachine.sanitize(ev.config);
 
         return {
           state: "Running",
@@ -55,9 +58,7 @@ export class BurstMachine {
       }
 
       case "Reset": {
-        const cfg = BurstMachine.sanitize(
-          model.report?.config ?? BurstMachine.defaultConfig()
-        );
+        const cfg = BurstMachine.sanitize(BurstMachine.defaultConfig());
         return BurstMachine.initial(cfg);
       }
 
@@ -79,9 +80,12 @@ export class BurstMachine {
       }
 
       case "Start": {
+        /*
         const cfg = BurstMachine.sanitize(
           model.report?.config ?? BurstMachine.defaultConfig()
         );
+        */
+        const cfg = BurstMachine.sanitize(ev.config);
 
         return {
           state: "Running",
@@ -175,6 +179,7 @@ export class BurstMachine {
             const c = { ...r.counters };
             if (ev.status === 401) c.unauthorized += 1;
             else if (ev.status === 403) c.forbidden += 1;
+            else if (ev.status === 429) c.rejected += 1;
             else c.other += 1;
 
             return {
@@ -263,23 +268,64 @@ export class BurstMachine {
   // ----------------- helpers -----------------
 
   static sanitize(cfg: BurstConfig): BurstConfig {
-    return {
-      total: Math.max(1, Math.floor(cfg.total)),
-      concurrency: Math.max(1, Math.floor(cfg.concurrency)),
-      delayMs: Math.max(0, Math.floor(cfg.delayMs)),
-      planKey: cfg.planKey,
-    };
+    const total = Math.max(1, Math.floor(cfg.total));
+    const delayMs = Math.max(0, Math.floor(cfg.delayMs));
+
+    switch (cfg.dispatchMode) {
+      case "single-burst":
+        return {
+          dispatchMode: "single-burst",
+          total,
+          delayMs,
+          planKey: cfg.planKey,
+        };
+
+      case "maintained-concurrency":
+        return {
+          dispatchMode: "maintained-concurrency",
+          total,
+          delayMs,
+          planKey: cfg.planKey,
+          concurrency: Math.max(1, Math.floor(cfg.concurrency)),
+        };
+
+      case "wave-batches":
+        return {
+          dispatchMode: "wave-batches",
+          total,
+          delayMs,
+          planKey: cfg.planKey,
+          batchSize: Math.max(1, Math.floor(cfg.batchSize)),
+          wavePauseMs: Math.max(0, Math.floor(cfg.wavePauseMs)),
+        };
+
+      case "wave-batches-staggered":
+        return {
+          dispatchMode: "wave-batches-staggered",
+          total,
+          delayMs,
+          planKey: cfg.planKey,
+          batchSize: Math.max(1, Math.floor(cfg.batchSize)),
+          wavePauseMs: Math.max(0, Math.floor(cfg.wavePauseMs)),
+        };
+    }
   }
 
   static defaultConfig(): BurstConfig {
-    return { total: 500, concurrency: 50, delayMs: 10, planKey: "read" };
+    return {
+      dispatchMode: "maintained-concurrency",
+      total: 500,
+      concurrency: 50,
+      delayMs: 10,
+      planKey: "read",
+    };
   }
 
   static newReport(cfg: BurstConfig, startedAt?: number): BurstReport {
     return {
       config: cfg,
-      progress: { started: 0, completed: 0, inFlight: 0 },
-      counters: { ok: 0, unauthorized: 0, forbidden: 0, other: 0, errors: 0 },
+      progress: { started: 0, completed: 0, inFlight: 0, total: cfg.total },
+      counters: { ok: 0, unauthorized: 0, forbidden: 0, other: 0, errors: 0, rejected:0 },
       timing: { startedAt },
       stats: { durationsMs: [] },
       error: undefined,

@@ -17,6 +17,9 @@ type Props = {
   data: BurstMetricPoint[];
 };
 
+const chartFontFamily =
+  'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
 function formatDuration(ms?: number): string {
   if (typeof ms !== "number" || Number.isNaN(ms)) return "-";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -34,25 +37,63 @@ function formatRps(v?: number): string {
 }
 
 export function BurstGraph({ data }: Props): JSX.Element {
+  const hasData = data.length > 0;
+
+  if (!hasData) {
+    return (
+      <div className="burst-chart burst-chart--empty">
+        No live metrics yet.
+      </div>
+    );
+  }
+
   return (
-    <div style={{ width: "100%", height: 260 }}>
-      <ResponsiveContainer>
-        <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" />
+    <div className="burst-chart burst-chart--line">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart
+          data={data}
+          margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+          style={{ fontFamily: chartFontFamily }}
+        >
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#d1d5db" />
 
           <XAxis
             dataKey="elapsedMs"
             tickFormatter={(v) => formatElapsed(v)}
             minTickGap={32}
-            tick={{ fontSize: 12 }}
+            tick={{
+              fontSize: 12,
+              fill: "#6b7280",
+              fontFamily: chartFontFamily,
+              fontWeight: 500,
+            }}
+            tickLine={false}
+            axisLine={false}
           />
 
           <YAxis
             yAxisId="latency"
             tickFormatter={(v) => formatDuration(v)}
             width={70}
-            tick={{ fontSize: 12 }}
-            label={{ value: "Latency", angle: -90, position: "insideLeft" }}
+            tick={{
+              fontSize: 12,
+              fill: "#6b7280",
+              fontFamily: chartFontFamily,
+              fontWeight: 500,
+            }}
+            tickLine={false}
+            axisLine={false}
+            label={{
+              value: "Latency",
+              angle: -90,
+              position: "insideLeft",
+              style: {
+                fontSize: 12,
+                fill: "#6b7280",
+                fontFamily: chartFontFamily,
+                fontWeight: 500,
+              },
+            }}
           />
 
           <YAxis
@@ -60,19 +101,63 @@ export function BurstGraph({ data }: Props): JSX.Element {
             orientation="right"
             tickFormatter={(v) => formatRps(v)}
             width={50}
-            tick={{ fontSize: 12 }}
-            label={{ value: "RPS", angle: 90, position: "insideRight" }}
+            tick={{
+              fontSize: 12,
+              fill: "#6b7280",
+              fontFamily: chartFontFamily,
+              fontWeight: 500,
+            }}
+            tickLine={false}
+            axisLine={false}
+            label={{
+              value: "RPS",
+              angle: 90,
+              position: "insideRight",
+              style: {
+                fontSize: 12,
+                fill: "#6b7280",
+                fontFamily: chartFontFamily,
+                fontWeight: 500,
+              },
+            }}
           />
 
           <Tooltip
+            cursor={{ opacity: 0.08 }}
+            contentStyle={{
+              borderRadius: 10,
+              border: "1px solid #e5e7eb",
+              boxShadow: "0 4px 14px rgba(0,0,0,0.08)",
+              fontFamily: chartFontFamily,
+              fontSize: 12,
+            }}
+            labelStyle={{
+              fontFamily: chartFontFamily,
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#111827",
+            }}
+            itemStyle={{
+              fontFamily: chartFontFamily,
+              fontSize: 12,
+              color: "#111827",
+            }}
             labelFormatter={(value) => `t = ${formatElapsed(Number(value))}`}
             formatter={(value, name) => {
-              if (name === "RPS") return [formatRps(Number(value)), name];
+              if (name === "RPS") {
+                return [formatRps(Number(value)), name];
+              }
+
               return [formatDuration(Number(value)), name];
             }}
           />
 
-          <Legend />
+          <Legend
+            wrapperStyle={{
+              fontSize: 12,
+              fontFamily: chartFontFamily,
+            }}
+          />
 
           <Line
             yAxisId="latency"

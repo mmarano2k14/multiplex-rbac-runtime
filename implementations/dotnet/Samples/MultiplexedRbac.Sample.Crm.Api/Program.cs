@@ -5,6 +5,8 @@ using MultiplexedRbac.Runtime;
 using MultiplexedRbac.Runtime.DI;
 using MultiplexedRbac.Runtime.Messaging.NServiceBus;
 using MultiplexedRbac.Runtime.Messaging.NServiceBus.DI;
+using MultiplexedRbac.Runtime.Realtime.DI;
+using MultiplexedRbac.Runtime.Realtime.Providers.SignalR;
 using MultiplexedRbac.Sample.Crm.Api.Auth;
 using MultiplexedRbac.Sample.Crm.Services;
 using NServiceBus;
@@ -104,10 +106,32 @@ builder.Services.AddAuthorization();
 // - NServiceBus behaviors (Part 6)
 
 builder.Services
-    .AddMultiplexedRbacRuntime(builder.Configuration)
+    .AddMultiplexedRbacRuntime(
+        builder.Configuration,
+        options =>
+        {
+            options.MaxInFlightPerContextKey = 10;
+            options.AllowClientMaxInFlightOverride = true;
+            options.DemoMaxInFlightHeader = "X-Demo-Max-InFlight";
+            options.InFlightCounterTtl = TimeSpan.FromSeconds(30);
+            options.LogConcurrencyViolations = true;
+            options.UseRedisLuaScriptShaCaching = true;
+            options.AllowClientRotationOverlapOverride = true;
+            options.RotationOverlapWindowHeader = "X-Demo-Rotation-Overlap-Ms";
+            options.RotationOverlapWindow = TimeSpan.FromMilliseconds(10000);
+        })
     .AddMultiplexedRbacHttp()
     .AddMultiplexedRbacNServiceBus()
     .AddCrmServices()
+    .AddSignalRRealtimeProvider(options =>
+    {
+        options.CorsPolicy = "SignalRCors";
+        options.AllowedOrigins =
+        [
+            "http://localhost:3000"
+        ];
+        options.UseUserIdentifier<QueryStringRealtimeUserIdentifierResolver>();
+    })
     .AddMultiplexedRbacAuthorizedServices(typeof(Program).Assembly);
 
 builder.Services.AddSingleton<MultiplexedRbac.Sample.Crm.Api.Context.DemoSeedState>();
@@ -191,6 +215,7 @@ app.UseWhen(ctx =>
     var p = ctx.Request.Path;
     return !p.StartsWithSegments("/demo")
         && !p.StartsWithSegments("/swagger")
+        && !p.StartsWithSegments("/runtime")
         && !p.StartsWithSegments("/openapi");
 },
 branch =>
@@ -203,8 +228,17 @@ branch =>
 
 
 // 4️⃣ ASP.NET authorization layer
+app.UseRouting();
+
+app.UseCors("SignalRCors");
+
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapMultiplexRealtime("/runtime/live")
+   .RequireCors("SignalRCors");
+
+app.MapMethods("/cors-test", new[] { "OPTIONS", "GET" }, () => Results.Ok("ok"))
+   .RequireCors("SignalRCors");
 
 app.Run();

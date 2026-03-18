@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useReducer } from "react";
-
-import type { MultiplexedRbacApi } from "@/lib/rbac/MultiplexedRbacApi";
 import type { BurstConfig } from "./BurstMachineType";
 import { BurstMachine } from "./BurstMachine";
 import { BurstController } from "./BurstController";
 import { BurstApiAdapter } from "./BurstApiAdapter";
+import { ConsoleContextAccessor } from "../ConsoleType";
 
-export function useBurstController(api: MultiplexedRbacApi, defaultConfig?: BurstConfig) {
+export function useBurstController(
+  consoleContextAccessor: ConsoleContextAccessor,
+  defaultConfig?: BurstConfig
+) {
   const initialCfg = defaultConfig ?? BurstMachine.defaultConfig();
 
   const [model, dispatch] = useReducer(
@@ -17,9 +19,15 @@ export function useBurstController(api: MultiplexedRbacApi, defaultConfig?: Burs
     (cfg: BurstConfig) => BurstMachine.initial(cfg)
   );
 
-  const adapter = useMemo(() => new BurstApiAdapter(api), [api]);
+  const adapter = useMemo(
+    () => new BurstApiAdapter(consoleContextAccessor.api),
+    [consoleContextAccessor.api]
+  );
 
-  const controller = useMemo(() => new BurstController(dispatch), [dispatch]);
+  const controller = useMemo(
+    () => new BurstController(dispatch, consoleContextAccessor),
+    [dispatch, consoleContextAccessor]
+  );
 
   const actions = useMemo(() => {
     return {
@@ -32,8 +40,8 @@ export function useBurstController(api: MultiplexedRbacApi, defaultConfig?: Burs
       stop() {
         controller.stop();
       },
-      async start() {
-        await controller.start(adapter, model);
+      async start(configOverride?: BurstConfig) {
+        await controller.start(adapter, model, configOverride);
       },
     };
   }, [controller, adapter, model]);

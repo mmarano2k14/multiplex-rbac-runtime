@@ -2,18 +2,17 @@
 
 import React, { JSX } from "react";
 import { Button } from "@/components/ui/Button";
+import { BurstScenarioDefinition } from "@/lib/console/burst/scenarios/BurstScenarioPresetType";
+import { BurstScenarioFactory } from "@/lib/console/burst/scenarios/BurstScenarioFactory";
 
 export type RequestPanelProps = {
   disabled: boolean;
-
   invoiceId: string;
   amount: number;
-
   onInvoiceIdChange: (v: string) => void;
   onAmountChange: (v: number) => void;
-
-  onReadClick: () => void;
-  onRefundClick: () => void;
+  onReadClick: (scenario: BurstScenarioDefinition) => void;
+  onRefundClick: (scenario: BurstScenarioDefinition) => void;
   onClearLogClick: () => void;
 };
 
@@ -26,49 +25,44 @@ export function RequestPanel(props: RequestPanelProps): JSX.Element {
     onAmountChange,
     onReadClick,
     onRefundClick,
-    onClearLogClick,
   } = props;
 
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginTop: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Requests</div>
+    <section className="panel">
+      <h3>Request</h3>
 
-      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr 1fr" }}>
+      {/* Inputs */}
+      <div className="form-grid">
         <div>
-          <div style={{ fontSize: 13, marginBottom: 6 }}>InvoiceId</div>
+          <label>InvoiceId</label>
           <input
             value={invoiceId}
             onChange={(e) => onInvoiceIdChange(e.target.value)}
-            disabled={disabled}
-            style={{ padding: 8, borderRadius: 8, border: "1px solid #ccc", width: "100%" }}
+            disabled={true}
           />
         </div>
 
         <div>
-          <div style={{ fontSize: 13, marginBottom: 6 }}>Amount</div>
+          <label>Amount</label>
           <input
             type="number"
             value={amount}
             onChange={(e) => onAmountChange(Number(e.target.value))}
-            disabled={disabled}
-            style={{ padding: 8, borderRadius: 8, border: "1px solid #ccc", width: "100%" }}
+            disabled={true}
           />
         </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-          <Button loading={disabled} disabled={disabled} onClick={onReadClick}>
-            READ
-          </Button>
-
-          <Button loading={disabled} disabled={disabled} onClick={onRefundClick}>
-            REFUND
-          </Button>
-
-          <Button disabled={disabled} onClick={onClearLogClick}>
-            Clear Log
-          </Button>
-        </div>
       </div>
-    </div>
+
+      {/* Actions */}
+      <div className="action-row">
+        <Button loading={disabled} disabled={disabled} onClick={() => onReadClick(BurstScenarioFactory.simpleRequest("read"))}>
+          READ
+        </Button>
+
+        <Button loading={disabled} disabled={disabled} onClick={() => onRefundClick(BurstScenarioFactory.simpleRequest("refund"))}>
+          REFUND
+        </Button>
+      </div>
+    </section>
   );
 }

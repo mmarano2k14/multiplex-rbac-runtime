@@ -1,12 +1,16 @@
 # Multiplexed RBAC Runtime
 
-Deterministic authorization architecture for large-scale multi-tenant SaaS platforms inspired by IAM models such as AWS ARN.
+Deterministic authorization architecture designed for large-scale, multi-tenant SaaS platforms, inspired by IAM models such as AWS ARN.
 
-Multiplexed RBAC introduces **Tenant Resource Names (TRN)**, distributed context rotation, and a deterministic authorization engine designed to solve authorization complexity in modern SaaS systems.
+Multiplexed RBAC introduces **Tenant Resource Names (TRN)**, a **distributed context rotation model**, and a deterministic authorization engine to address the growing complexity of authorization in modern distributed systems.
 
-This repository provides a **reference implementation of the architecture across multiple runtimes**.
+By combining **rotational execution contexts**, **atomic coordination**, and **runtime enforcement**, the system ensures consistent, safe, and scalable authorization even under high concurrency.
 
-![Version](https://img.shields.io/badge/Version-1.0.O-blue)
+This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
+
+![Version](https://img.shields.io/badge/Version-1.0.1-blue)
+
+**This project is still under active development. Some features may be incomplete and UI or functional issues may occur.**
 
 ---
 
@@ -240,16 +244,145 @@ Clients must therefore always reuse the latest returned key.
 # Runtime Options Example
 
 ```csharp
+/// <summary>
+/// Runtime configuration for the Multiplexed RBAC execution pipeline.
+/// 
+/// This class centralizes all runtime behaviors related to:
+/// - access context transport
+/// - session lifecycle
+/// - context key rotation
+/// - concurrency protection (anti-race / anti-replay)
+/// 
+/// These options are consumed primarily by:
+/// - ExecutionContextMiddleware
+/// - ContextStore implementations (InMemory / Redis)
+/// </summary>
 public sealed class ContextRuntimeOptions
 {
-    public string AccessContextHeader { get; init; } = "X-Access-Context";
+    /// <summary>
+    /// Header used to transmit the Access Context handle.
+    /// 
+    /// The client sends this header with each request, and the server
+    /// may return a new value if the context key is rotated.
+    /// </summary>
+    public string AccessContextHeader { get; set; } = "X-Access-Context";
 
-    public TimeSpan SessionIdleTimeout { get; init; }
+    /// <summary>
+    /// Logical session idle timeout.
+    /// 
+    /// Determines when a session should be considered expired due
+    /// to inactivity. This works alongside Redis TTL but represents
+    /// the logical lifetime of a session.
+    /// </summary>
+    public TimeSpan SessionIdleTimeout { get; set; }
         = TimeSpan.FromMinutes(20);
 
-    public bool EnableRotation { get; init; } = true;
+    /// <summary>
+    /// Enables automatic context key rotation at the end of a request.
+    /// 
+    /// Rotation helps mitigate replay risks and limits long-term
+    /// reuse of context handles.
+    /// </summary>
+    public bool EnableRotation { get; set; } = true;
 
-    public int RotateWhenStatusCodeBelow { get; init; } = 400;
+    /// <summary>
+    /// Rotate the context key only when the response status code
+    /// is below this threshold.
+    /// 
+    /// Default behavior: rotate only on successful responses (&lt; 400).
+    /// </summary>
+    public int RotateWhenStatusCodeBelow { get; set; } = 400;
+
+    /// <summary>
+    /// Default maximum number of concurrent in-flight requests allowed
+    /// for a single access context key.
+    /// 
+    /// 1  = strict single-flight protection (recommended)
+    /// n  = bounded concurrent reuse
+    /// <= 0 = unlimited reuse (unsafe, demo/debug only)
+    /// </summary>
+    public int MaxInFlightPerContextKey { get; set; } = 10;
+
+    /// <summary>
+    /// Allows clients to override the MaxInFlightPerContextKey value
+    /// using a request header.
+    /// 
+    /// This feature is intended only for testing or demo environments
+    /// and should remain disabled in production.
+    /// </summary>
+    public bool AllowClientMaxInFlightOverride { get; set; } = false;
+
+    /// <summary>
+    /// Header name used by demo clients to request a custom max in-flight value.
+    /// 
+    /// Example:
+    /// X-Demo-Max-InFlight: 5
+    /// </summary>
+    public string DemoMaxInFlightHeader { get; set; } = "X-Demo-Max-InFlight";
+
+    /// <summary>
+    /// Defines the behavior when the in-flight limit is exceeded.
+    /// 
+    /// Currently only the Reject policy is implemented.
+    /// Future policies may allow waiting or queueing strategies.
+    /// </summary>
+    public InFlightOverflowPolicy OverflowPolicy { get; set; }
+        = InFlightOverflowPolicy.Reject;
+
+    /// <summary>
+    /// HTTP status code returned when the in-flight limit
+    /// for a context key is exceeded.
+    /// 
+    /// Default: 429 Too Many Requests.
+    /// </summary>
+    public int ConcurrentLimitExceededStatusCode { get; set; }
+        = StatusCodes.Status429TooManyRequests;
+
+    /// <summary>
+    /// TTL used for Redis-based in-flight counters.
+    /// 
+    /// This protects against situations where a process crashes
+    /// before releasing the counter. The TTL ensures that
+    /// abandoned counters eventually expire.
+    /// </summary>
+    public TimeSpan InFlightCounterTtl { get; set; }
+        = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// When enabled, the TTL of the in-flight counter is refreshed
+    /// on each successful acquire operation.
+    /// 
+    /// This prevents expiration during long-running requests.
+    /// </summary>
+    public bool RefreshInFlightCounterTtlOnAcquire { get; set; } = true;
+
+    /// <summary>
+    /// Enables security logging when concurrency violations occur.
+    /// 
+    /// Useful for detecting replay attempts, misbehaving clients,
+    /// or unexpected concurrent usage of the same context key.
+    /// </summary>
+    public bool LogConcurrencyViolations { get; set; } = true;
+
+    /// <summary>
+    /// Use Redis preload script and Sha caching
+    /// </summary>
+    public bool UseRedisLuaScriptShaCaching { get; set; } = true;
+
+    /// <summary>
+    /// Aloow to averlop rotation Window for testign purpose
+    /// </summary>
+    public bool AllowClientRotationOverlapOverride { get; set; } = true;
+
+    /// <summary>
+    /// Header used in demo mode to override the rotation overlap window.
+    /// </summary>
+    public string RotationOverlapWindowHeader { get; set; } = "X-Demo-Rotation-Overlap-Ms";
+
+    /// <summary>
+    /// Default overlap window applied after context rotation.
+    /// </summary>
+    public TimeSpan RotationOverlapWindow { get; set; } = TimeSpan.FromSeconds(10);
 }
 ```
 
@@ -280,6 +413,65 @@ public Task RefundInvoice(string id)
 
 ---
 
+# Realtime Logging & Observability (SignalR / WebSocket)
+
+The runtime includes built-in support for **real-time observability** through:
+
+* SignalR  
+* WebSocket  (not fully tested)
+
+This enables live streaming of:
+
+* request lifecycle events  
+* context rotation events  
+* concurrency and in-flight tracking  
+* authorization decisions  
+
+---
+
+## Background Worker Architecture
+
+To guarantee zero impact on request performance, all observability events are processed through a **background worker pipeline**:
+
+* events are pushed to a **non-blocking channel**  
+* a **background worker consumes events asynchronously**  
+* reducers process and transform events outside of the request pipeline  
+* events are then dispatched to realtime providers (SignalR / WebSocket)  
+
+This ensures:
+
+* no blocking operations in the request hot path  
+* constant request latency regardless of logging volume  
+* safe handling of high-frequency event streams  
+
+---
+
+## Design Characteristics
+
+* fully decoupled from HTTP request execution  
+* cancellation-safe (graceful shutdown support)  
+* pluggable transport providers  
+* supports null provider (disabled mode fallback)  
+* designed for high-throughput distributed environments  
+
+---
+
+## Key Benefit
+
+This architecture allows the system to provide **high-fidelity, real-time observability** without compromising:
+
+* performance  
+* determinism  
+* scalability  
+
+Making it suitable for:
+
+* load testing  
+* debugging complex authorization flows  
+* production-grade monitoring  
+
+---
+
 # Implementations
 
 Current runtimes:
@@ -299,10 +491,8 @@ Future runtimes:
 Future improvements:
 
 * Wildcard rules
-* WebSockets for live logs
 * UI updates
 * Consolidated global UI state
-* Consolidated UI Graphs Metrics speed render
 
 ---
 
@@ -319,6 +509,8 @@ This project simulates a login flow that seeds the distributed context store wit
 Use:
 
 `/demo/login`
+
+![Architecture](docs/images/ui/5.png)
 
 This endpoint creates the initial execution context, stores it in the context store, and returns the first access context key.
 
@@ -363,16 +555,76 @@ After logging in, use the client to:
 
 * send manual requests
 * trigger burst requests
-* observe context rotation
+* launch predefined scenarios
+* observe context rotation in real time
 * validate that authorization remains deterministic during rotation
 
-Burst testing demonstrates that:
+---
+
+### Advanced UI Controls (Testing & Demo)
+
+The client interface now exposes runtime tuning capabilities for advanced testing:
+
+* **Max In-Flight Control**
+  * Dynamically adjust the maximum number of concurrent requests per context
+  * Simulates contention and concurrency limits
+  * Helps validate rejection policies and system stability under load
+
+* **Rotation Overlap Window**
+  * Configure the overlap duration between old and new context keys
+  * Enables testing of race conditions during key rotation
+  * Ensures safe transition between rotated contexts
+
+* **Scenario Launcher**
+  * Execute predefined load patterns:
+    * Single burst
+    * Maintained concurrency
+    * Wave-based batching
+  * Allows reproducible and deterministic stress testing
+  * Provides better insight into system behavior under different traffic models
+
+---
+
+### Observability & Visualization
+
+The interface provides real-time visibility into:
+
+* context key lifecycle and rotation flow
+* request distribution and concurrency behavior
+* in-flight request tracking per context
+* rejection patterns and overflow handling
+* live logs and event streaming (WebSocket / SignalR)
+
+
+> - rotation graph
+
+![Architecture](docs/images/ui/1.png)
+
+> - concurrency behavior
+
+![Architecture](docs/images/ui/4.png)
+
+> - scenario execution
+
+![Architecture](docs/images/ui/3.png)
+
+
+> - real-time logs
+
+![Architecture](docs/images/ui/2.png)
+
+---
+
+### What Burst Testing Demonstrates
+
+Burst and scenario-based testing validate that:
 
 * in-flight requests remain safe during rotation
 * Redis Lua scripts guarantee atomic coordination
 * rotated keys propagate correctly via `X-Access-Context`
-* authorization remains deterministic even under repeated requests
-
+* concurrency limits are properly enforced (Max In-Flight)
+* rotation overlap prevents race-condition failures
+* authorization remains deterministic even under repeated and high-frequency requests
 ---
 
 # Medium Technical Article Series

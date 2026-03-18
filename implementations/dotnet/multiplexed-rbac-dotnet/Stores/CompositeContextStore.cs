@@ -28,10 +28,12 @@ namespace MultiplexedRbac.Stores
             try
             {
                 var ctx = await _primary.GetAsync(key);
+
                 if (ctx is not null)
                 {
                     _fallback.Set(key, ctx);
                 }
+
                 return ctx;
             }
             catch
@@ -40,15 +42,15 @@ namespace MultiplexedRbac.Stores
             }
         }
 
-        public async Task<bool> TryAcquireInFlightAsync(string key)
+        public async Task<bool> TryAcquireInFlightAsync(string key, int maxInFlight)
         {
             try
             {
-                return await _primary.TryAcquireInFlightAsync(key);
+                return await _primary.TryAcquireInFlightAsync(key, maxInFlight);
             }
             catch
             {
-                return await _fallback.TryAcquireInFlightAsync(key);
+                return await _fallback.TryAcquireInFlightAsync(key, maxInFlight);
             }
         }
 
@@ -64,12 +66,15 @@ namespace MultiplexedRbac.Stores
             }
         }
 
-        public async Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(string key)
+        public async Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(
+            string key,
+            TimeSpan overlapWindow)
         {
             try
             {
-                var rotated = await _primary.RotateAsync(key);
+                var rotated = await _primary.RotateAsync(key, overlapWindow);
 
+                // Keep fallback cache aligned
                 _fallback.Set(key, rotated.context);
                 _fallback.Set(rotated.newKey, rotated.context);
 
@@ -81,7 +86,9 @@ namespace MultiplexedRbac.Stores
                     throw;
 
                 var ctx = await _fallback.GetAsync(key);
-                if (ctx is null) throw;
+                if (ctx is null)
+                    throw;
+
                 return (key, ctx);
             }
         }

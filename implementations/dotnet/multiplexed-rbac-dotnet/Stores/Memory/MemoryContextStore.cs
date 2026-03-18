@@ -23,13 +23,13 @@ namespace MultiplexedRbac.Stores.Memory
         public Task<Core.ExecutionContext.ExecutionContext?> GetAsync(string key)
             => Task.FromResult(_cache.TryGetValue(key, out Core.ExecutionContext.ExecutionContext? ctx) ? ctx : null);
 
-        public Task<bool> TryAcquireInFlightAsync(string key)
+        public Task<bool> TryAcquireInFlightAsync(string key, int maxInFlight)
             => Task.FromResult(true);
 
         public Task ReleaseInFlightAsync(string key)
             => Task.CompletedTask;
 
-        public Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(string key)
+        public Task<(string newKey, Core.ExecutionContext.ExecutionContext context)> RotateAsync(string key, TimeSpan overlapWindow)
             => throw new InvalidOperationException("RotateAsync is not supported on memory fallback (primary required).");
 
         public void Set(string key, Core.ExecutionContext.ExecutionContext ctx) => _cache.Set(key, ctx, _ttl);

@@ -1,8 +1,12 @@
+import { HeaderOverride } from "../http/HttpClientType";
+
 export type Rotation = { from: string; to: string };
 
 export class ClientSession {
   private _contextKey = "";
   private _demoUserId = "demo-user-1";
+  private _maxInFlight = "5";
+  private _rotationOverlapMs = "1000";
 
   public get contextKey(): string {
     return this._contextKey;
@@ -18,10 +22,27 @@ export class ClientSession {
     this._demoUserId = (v ?? "").trim();
   }
 
-  public buildHeaders(): Record<string, string> {
+  public get maxInFlight(): string {
+    return this._maxInFlight;
+  }
+  public set maxInFlight(v: string) {
+    this._maxInFlight = (v ?? "").trim();
+  }
+
+  public get rotationOverlapMs(): string {
+    return this._rotationOverlapMs;
+  }
+  public set rotationOverlapMs(v: string) {
+    this._rotationOverlapMs = (v ?? "").trim();
+  }
+
+  public buildHeaders(options?: HeaderOverride): Record<string, string> {
     const h: Record<string, string> = {};
-    if (this._contextKey) h["X-Access-Context"] = this._contextKey;
+    const contextKey = options?.contextKeyOverride ?? this._contextKey;
+    if (this._contextKey) h["X-Access-Context"] = contextKey
     if (this._demoUserId) h["X-Demo-UserId"] = this._demoUserId;
+    if (this._maxInFlight) h["X-Demo-Max-InFlight"] = this._maxInFlight;
+    if (this._rotationOverlapMs) h["X-Demo-Rotation-Overlap-Ms"] = this._rotationOverlapMs;
     return h;
   }
 

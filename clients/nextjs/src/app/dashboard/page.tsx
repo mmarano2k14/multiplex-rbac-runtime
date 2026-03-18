@@ -1,136 +1,261 @@
 "use client";
 
-import React, { JSX } from "react";
+import { JSX, useState } from "react";
 
-import { SpinnerStyles } from "@/components/ui/Spinner";
 import { BurstPanel } from "@/components/burstPanel/BurstPanel";
-
 import { useBurstController } from "@/lib/console/burst/useBurstController";
+
 import { RequestPanel } from "@/components/requestPanel/RequestPanel";
 import { ContextPanel } from "@/components/contextPanel/ContextPanel";
 import { TargetPanel } from "@/components/targetPanel/TargetPanel";
 import { LogsPanel } from "@/components/logsPanel/LogsPanel";
+
 import { useConsoleContext } from "@/lib/console/contextProvider/useConsoleContext";
-import { Button } from "@/components/ui/Button";
 
+import { BurstScenarioDefinition } from "@/lib/console/burst/scenarios/BurstScenarioPresetType";
+import { InFlightMaxValue } from "@/lib/console/ConsoleType";
 
-// ---------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------
+import { ScenarioPresetsPanel } from "@/components/burstPanel/scenarios/ScenarioPresetsPanel";
+import { BurstPanelForm } from "@/components/burstPanel/BurstPanelForm";
+import { BottomDrawer } from "@/components/ui/BottomDrawer";
+import { ConsoleStatusBar } from "@/components/ui/status/ConsoleStatusBar";
+import { BurstPanelHelpers } from "@/components/burstPanel/helpers/BurstPanelHelpers";
+import { BurstActions } from "@/components/burstPanel/sections/BurstActions";
+
+type SidebarTabKey = "scenarios" | "request" | "burst";
+
 export default function Page(): JSX.Element {
-  // ------------------------------------------------------------
-  // Console machine/controller
-  // ------------------------------------------------------------
-
   const { state, actions, dispatch, api } = useConsoleContext();
+  const burst = useBurstController({ api, dispatch });
 
-  //const consoleCtl = useConsoleController(PRESETS);
-  //const { state, dispatch, actions, api } = consoleCtl;
+  const [isLogsCollapsed, setIsLogsCollapsed] = useState(false);
+  const [logsHeight, setLogsHeight] = useState(320);
 
-  // ------------------------------------------------------------
-  // Burst machine/controller
-  // ------------------------------------------------------------
-  const burst = useBurstController(api);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabKey>("scenarios");
+
+  const isRunning = BurstPanelHelpers.isRunning(burst.model);
+
+  async function handleLaunchScenario(scenario: BurstScenarioDefinition) {
+  
+    try {
+      if(scenario.maxInFlight){
+        dispatch({
+          type: "maxInFlightChanged",
+          maxInFlightValue: scenario.maxInFlight as InFlightMaxValue,
+        });
+      }
+
+      if(scenario.rotationOverlapMs){
+        dispatch({
+          type: "rotationOverlapMsChange",
+          rotationOverlapMs: scenario.rotationOverlapMs,
+        });
+      }
+
+      await burst.actions.start(scenario.burstConfig);
+    } finally {
+      
+    }
+  }
+
+
+  function handleSidebarTabClick(tab: SidebarTabKey): void {
+    setActiveSidebarTab(tab);
+    setIsSidebarCollapsed(false);
+  }
 
   return (
-    <div style={{ padding: 16, fontFamily: "ui-sans-serif, system-ui" }}>
-      <SpinnerStyles />
+    <div className="console-shell">
+      <header className="console-header">
+        <div className="header-left">
+          <TargetPanel
+            disabled={state.busy}
+            baseUrl={state.baseUrl}
+            onTargetChanges={(v) =>
+              dispatch({ type: "TargetChanged", baseUrl: v })
+            }
+          />
+          <ConsoleStatusBar
+            status={burst.model.state}
+            busy={isRunning}
+            lastError={state.lastError}
+            username={state.demoUserId}
+            contextKey={api.contextKey}
+            onDismissError={actions.resetError}
+          />  
 
-      <h1 style={{ fontSize: 22, fontWeight: 700 }}>
-        Multiplexed RBAC — HTTP Console (Next.js)
-      </h1>
+        </div>
 
-      {/* top status */}
+        <div className="header-right">
+          <ContextPanel
+            disabled={isRunning}
+            demoUserId={state.demoUserId}
+            contextKey={api.contextKey}
+            maxInFlight={state.maxInFlight}
+            rotationOverlapMs={state.rotationOverlapMs}
+            onDemoUserIdChange={() => {}}
+            onContextKeyChange={() => {}}
+            onGetContextClick={actions.getContextKey}
+            onMaxInFlightChange={(v) =>
+              dispatch({ type: "maxInFlightChanged", maxInFlightValue: v })
+            }
+            onRotationOverlapMsChange={(v) =>
+              dispatch({ type: "rotationOverlapMsChange", rotationOverlapMs: v })
+            }
+            onClearClick={() =>
+              dispatch({ type: "ContextChanged", contextKey: "" })
+            }
+          />
+
+          <BurstActions 
+            disabled={isRunning}
+            isRunning={isRunning}
+            onStart={burst.actions.start}
+            onStop={burst.actions.stop}
+            onReset={burst.actions.reset}
+          /> 
+
+        </div>
+      </header>
+
       <div
+        className="console-content"
         style={{
-          marginTop: 8,
-          display: "flex",
-          gap: 12,
-          alignItems: "center",
-          flexWrap: "wrap",
+          paddingBottom: isLogsCollapsed ? "56px" : `${logsHeight}px`,
         }}
       >
-        <div style={{ fontSize: 12, opacity: 0.8 }}>
-          State: <b>{state.status}</b>
-        </div>
+        <div
+          className={
+            isSidebarCollapsed
+              ? "console-body console-body--sidebar-collapsed"
+              : "console-body"
+          }
+        >
+          <aside
+            className={
+              isSidebarCollapsed
+                ? "console-sidebar console-sidebar--collapsed"
+                : "console-sidebar"
+            }
+          >
+            <div className="console-sidebar__header">
+              {!isSidebarCollapsed && (
+                <div className="console-sidebar__title">Controls</div>
+              )}
 
-        <div style={{ fontSize: 12, opacity: 0.8 }}>
-          Busy: <b>{state.busy ? "true" : "false"}</b>
-        </div>
-
-        {state.lastError && (
-          <>
-            <div style={{ fontSize: 12, color: "crimson" }}>
-              <b>Error:</b> {state.lastError}
+              <button
+                type="button"
+                className="console-sidebar__toggle"
+                onClick={() => setIsSidebarCollapsed((v) => !v)}
+                aria-expanded={!isSidebarCollapsed}
+              >
+                {isSidebarCollapsed ? "▶" : "◀"}
+              </button>
             </div>
-            <Button disabled={state.busy} onClick={actions.resetError}>
-              Dismiss
-            </Button>
-          </>
-        )}
+
+            {isSidebarCollapsed ? (
+              <div className="console-sidebar__collapsed-tabs">
+                <button
+                  type="button"
+                  className={
+                    activeSidebarTab === "scenarios"
+                      ? "console-sidebar__mini-tab active"
+                      : "console-sidebar__mini-tab"
+                  }
+                  onClick={() => handleSidebarTabClick("scenarios")}
+                  title="Scenario Presets"
+                >
+                  S
+                </button>
+
+                <button
+                  type="button"
+                  className={
+                    activeSidebarTab === "request"
+                      ? "console-sidebar__mini-tab active"
+                      : "console-sidebar__mini-tab"
+                  }
+                  onClick={() => handleSidebarTabClick("request")}
+                  title="Request"
+                >
+                  R
+                </button>
+
+                <button
+                  type="button"
+                  className={
+                    activeSidebarTab === "burst"
+                      ? "console-sidebar__mini-tab active"
+                      : "console-sidebar__mini-tab"
+                  }
+                  onClick={() => handleSidebarTabClick("burst")}
+                  title="Burst"
+                >
+                  B
+                </button>
+              </div>
+            ) : (
+              <div className="console-sidebar__content">
+                <ScenarioPresetsPanel
+                  planKey="read"
+                  onLaunch={handleLaunchScenario}
+                />
+
+                <RequestPanel
+                  disabled={isRunning}
+                  invoiceId={state.invoiceId}
+                  amount={state.amount}
+                  onInvoiceIdChange={(v) =>
+                    dispatch({ type: "InvoiceChanged", invoiceId: v })
+                  }
+                  onAmountChange={(v) =>
+                    dispatch({ type: "AmountChanged", amount: v })
+                  }
+                  onReadClick={handleLaunchScenario}
+                  onRefundClick={handleLaunchScenario}
+                  onClearLogClick={actions.clearLogs}
+                />
+
+                <BurstPanelForm
+                  disabled={state.busy}
+                  model={burst.model}
+                  onConfigure={burst.actions.configure}
+                  onStart={burst.actions.start}
+                  onStop={burst.actions.stop}
+                  onReset={burst.actions.reset}
+                />
+              </div>
+            )}
+          </aside>
+
+          <main className="console-main">
+            <BurstPanel
+              disabled={state.busy}
+              model={burst.model}
+              onConfigure={burst.actions.configure}
+              onStart={burst.actions.start}
+              onStop={burst.actions.stop}
+              onReset={burst.actions.reset}
+            />
+          </main>
+        </div>
       </div>
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Target + Context */}
-      {/* ---------------------------------------------------------------- */}
-      <div
-        style={{
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: "1fr 1fr",
-          marginTop: 12,
-        }}
+      <BottomDrawer
+        title="Live log"
+        isCollapsed={isLogsCollapsed}
+        height={logsHeight}
+        minHeight={140}
+        maxHeight={620}
+        onCollapsedChange={setIsLogsCollapsed}
+        onHeightChange={setLogsHeight}
       >
-        {/* Target */}
-        <TargetPanel 
-          disabled={state.busy} 
-          baseUrl={state.baseUrl} 
-          onTargetChanges={(v) => dispatch({ type: "TargetChanged", baseUrl:v})}        
+        <LogsPanel 
+          logs={state.logs}  
+          onClearClick={actions.clearLogs}  
         />
-
-        {/* Context */}
-        <ContextPanel 
-          disabled={state.busy} 
-          demoUserId={state.demoUserId} 
-          contextKey={state.contextKey} 
-          onDemoUserIdChange={() => {}}
-          onContextKeyChange={() => {}}
-          onGetContextClick={actions.getContextKey} 
-          onClearClick={() => dispatch({ type: "ContextChanged", contextKey: ""})}
-        />
-          
-      </div>
-
-      {/* ---------------------------------------------------------------- */}
-      {/* RequestPanel (dumb) */}
-      {/* ---------------------------------------------------------------- */}
-      <RequestPanel
-        disabled={state.busy}
-        invoiceId={state.invoiceId}
-        amount={state.amount}
-        onInvoiceIdChange={(v) => dispatch({ type: "InvoiceChanged", invoiceId: v })}
-        onAmountChange={(v) => dispatch({ type: "AmountChanged", amount: v })}
-        onReadClick={actions.readInvoice}
-        onRefundClick={actions.refundInvoice}
-        onClearLogClick={actions.clearLogs}
-      />
-
-      {/* ---------------------------------------------------------------- */}
-      {/* BurstPanel (dumb + burst machine) */}
-      {/* ---------------------------------------------------------------- */}
-      <BurstPanel
-        disabled={state.busy}
-        model={burst.model}
-        onConfigure={burst.actions.configure}
-        onStart={burst.actions.start}
-        onStop={burst.actions.stop}
-        onReset={burst.actions.reset}
-      />
-
-      {/* ---------------------------------------------------------------- */}
-      {/* Logs */}
-      {/* ---------------------------------------------------------------- */}
-      <LogsPanel logs={state.logs} />
+      </BottomDrawer>
     </div>
   );
 }

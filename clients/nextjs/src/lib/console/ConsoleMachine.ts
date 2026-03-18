@@ -6,13 +6,15 @@ export class ConsoleMachine {
     return {
       status: "Idle",
       baseUrl: presets[0]?.baseUrl ?? "http://localhost:5000",
-      demoUserId: "demo-user-1",
+      demoUserId: "",
       contextKey: "",
+      maxInFlight:"5",
       invoiceId: "INV-001",
       amount: 100,
       logs: [],
       lastError: undefined,
       busy: false,
+      rotationOverlapMs: "1000"
     };
   }
 
@@ -57,6 +59,10 @@ export class ConsoleMachine {
             return { ...state, invoiceId: ev.invoiceId };
         case "AmountChanged":
             return { ...state, amount: ev.amount };
+        case "maxInFlightChanged":
+            return { ...state, maxInFlight: ev.maxInFlightValue };
+        case "rotationOverlapMsChange":
+            return { ...state, rotationOverlapMs: ev.rotationOverlapMs };
         case "LogsChanged":
             return { ...state, logs: ev.logs };
         case "ClearLogs":
@@ -134,7 +140,10 @@ export class ConsoleMachine {
             return { ...state, invoiceId: ev.invoiceId };
         case "AmountChanged":
             return { ...state, amount: ev.amount };
-
+        case "maxInFlightChanged":
+            return { ...state, maxInFlight: ev.maxInFlightValue };
+        case "rotationOverlapMsChange":
+            return { ...state, rotationOverlapMs: ev.rotationOverlapMs };
         case "LogsChanged":
             return { ...state, logs: ev.logs };
 
@@ -164,7 +173,10 @@ export class ConsoleMachine {
             return { ...state, invoiceId: ev.invoiceId };
         case "AmountChanged":
             return { ...state, amount: ev.amount };
-
+        case "maxInFlightChanged":
+            return { ...state, maxInFlight: ev.maxInFlightValue };
+        case "rotationOverlapMsChange":
+            return { ...state, rotationOverlapMs: ev.rotationOverlapMs };
         case "LogsChanged":
             return { ...state, logs: ev.logs };
         case "ClearLogs":
