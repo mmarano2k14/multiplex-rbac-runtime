@@ -1,4 +1,4 @@
-import { BurstPlan, BurstPlanKey } from "./BurstMachineType";
+import { BurstPlan, BurstPlanKey } from "../runtime/BurstMachineType";
 
 export class BurstPlans {
   static readonly Read: BurstPlan = {

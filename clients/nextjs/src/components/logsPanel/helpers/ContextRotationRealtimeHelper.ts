@@ -1,4 +1,4 @@
-import { ConsoleLogEntry, RealtimeLogEntry } from "@/lib/logs/inMemoryLogType";
+import { ConsoleLogEntry, RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 import { LogUiHelper } from "./LogUiHelper";
 
 export type ContextRotationRealtimePayload = {

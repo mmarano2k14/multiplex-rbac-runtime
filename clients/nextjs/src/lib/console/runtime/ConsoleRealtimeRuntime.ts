@@ -1,7 +1,8 @@
 import type { IConsoleRealtimeRuntime } from "./IConsoleRealtimeRuntime";
-import { RealtimeClientFactory } from "../realtime/RealtimeClientFactory";
-import { RealtimeConnectionState, RuntimeLogEvent, ContextRotatedEvent } from "../realtime/RealtimeType";
-import { RealtimeLogEntry } from "@/lib/logs/inMemoryLogType";
+import { RealtimeClientFactory } from "../../infrastructure/realtime/RealtimeClientFactory";
+import { RealtimeConnectionState, RuntimeLogEvent, ContextRotatedEvent } from "../../infrastructure/realtime/RealtimeType";
+import { RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
+
 
 type ConsoleRealtimeRuntimeDependencies = {
   getBaseUrl: () => string;

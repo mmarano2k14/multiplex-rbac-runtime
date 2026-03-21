@@ -1,7 +1,7 @@
 import React, { JSX, useState } from "react";
-import { HttpLogEntry } from "@/lib/logs/inMemoryLogType";
 import { LogBadge } from "./LogBadge";
 import { HttpLogHelper } from "../helpers/HttpLogHelper";
+import { HttpLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 
 
 export type HttpLogCardProps = {

@@ -2,7 +2,130 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows a deterministic authorization model designed for large-scale multi-tenant SaaS systems, focusing on consistency, isolation, and observability under high concurrency.
+This project follows a deterministic runtime and observability model designed for high-concurrency testing, focusing on consistency, isolation, and analysis under load.
+
+---
+
+## [1.0.1.1] - 2026-03-20
+
+### Added
+
+#### Storage Abstraction & Multi-Provider Support
+
+- Introduced generic `IEntityStore<T>` abstraction for persistence
+- Added `find(query)` support with:
+  - filtering (`where`)
+  - sorting (`orderBy`)
+  - limiting (`limit`)
+- Implemented pluggable storage providers:
+  - `local-storage`
+  - `simulated-api`
+  - `api-proxy`
+  - `api-simple`
+- Enabled seamless switching between storage backends without impacting domain logic
+- Added simulated API mode with latency to mimic real-world network conditions
+
+---
+
+#### BurstRun Domain Model
+
+- Introduced `BurstRun` as a persisted snapshot of execution
+- Defined clear separation between:
+  - runtime execution (`BurstRuntime`)
+  - metrics (`BurstReport`)
+  - persisted result (`BurstRun`)
+- Added support for parent-child run relationships via `basedOnRunId`
+- Prepared structure for run history, replay, and comparison
+
+---
+
+#### BurstRunStore (Unified Store)
+
+- Implemented single `BurstRunStore` abstraction
+- Extended `EntityStoreFacadeBase` for generic CRUD and query delegation
+- Implemented `IBurstRunStore` with domain-specific methods:
+  - `getLatest()`
+  - `getByParentRunId()`
+- Removed duplicated provider-specific BurstRun stores
+- Centralized business logic while keeping infrastructure fully pluggable
+
+---
+
+#### Type-Safe Store Configuration
+
+- Introduced discriminated union for store configuration:
+  - `BurstRunLocalStoreOptions`
+  - `BurstRunApiStoreOptions`
+- Added type-safe narrowing via mode-based detection
+- Improved IntelliSense and prevented invalid configuration combinations
+
+---
+
+### Changed
+
+#### Project Structure
+
+- Restructured project into clear architectural layers:
+  - `infrastructure/`
+    - storage
+    - transport
+    - realtime
+    - logs
+  - `burst/domain/`
+- Moved generic storage logic into `infrastructure/storage`
+- Isolated Burst-specific logic in `burst/domain`
+
+---
+
+#### Naming & Concept Alignment
+
+- Renamed and clarified core concepts:
+  - runtime → execution state
+  - report → metrics
+  - run → persisted snapshot (`BurstRun`)
+- Standardized terminology across the codebase
+
+---
+
+#### HTTP / Transport Layer
+
+- Refactored HTTP client to align with storage providers
+- Maintained compatibility with existing Next.js proxy implementation
+- Standardized request flow across API-based providers
+
+---
+
+### Removed
+
+- Removed duplicated BurstRun storage implementations:
+  - `LocalStorageBurstRunStore`
+  - `SimulatedApiBurstRunStore`
+  - `ProxyApiBurstRunStore`
+  - `SimpleApiBurstRunStore`
+- Replaced with unified `BurstRunStore` using generic providers
+
+---
+
+### Preparation
+
+#### BurstRun Persistence
+
+- Prepared system to persist execution results after runtime completion
+- Enabled future implementation of:
+  - run history
+  - replay
+  - comparison between runs
+
+---
+
+#### AI-Driven Analysis
+
+- Structured run data to support AI consumption
+- Prepared for future feature:
+  - “Explain this run”
+  - automatic failure analysis
+  - scenario suggestion based on results
+- Normalized metrics and error patterns for AI input
 
 ---
 

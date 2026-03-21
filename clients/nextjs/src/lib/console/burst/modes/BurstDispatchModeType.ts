@@ -1,6 +1,6 @@
-import type { RequestSpec } from "@/lib/http/HttpClientType";
-import type { IBurstApi } from "../BurstController";
-import type { BurstConfig, BurstEvent } from "../BurstMachineType";
+import type { RequestSpec } from "@/lib/infrastructure/transport/http/HttpClientType";
+import type { IBurstApi } from "../execution/BurstController";
+import type { BurstConfig, BurstEvent } from "../runtime/BurstMachineType";
 
 /**
  * Shared execution context passed to every dispatch mode implementation.

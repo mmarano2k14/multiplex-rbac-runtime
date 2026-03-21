@@ -4,7 +4,7 @@ import {
   SingleBurstConfig,
   WaveBatchesConfig,
   WaveBatchesStaggeredConfig,
-} from "@/lib/console/burst/BurstMachineType";
+} from "@/lib/console/burst/runtime/BurstMachineType";
 import { BurstScenarioDefinition, BurstScenarioKey } from "./BurstScenarioPresetType";
 
 export class BurstScenarioFactory {

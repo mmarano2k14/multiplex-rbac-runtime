@@ -1,7 +1,7 @@
-import { BurstConfig, BurstEvent, BurstModel, BurstReport } from "./BurstMachineType";
+import { BurstConfig, BurstEvent, BurstRuntime, BurstReport } from "./BurstMachineType";
 
 export class BurstMachine {
-  static initial(defaultConfig: BurstConfig): BurstModel {
+  static initial(defaultConfig: BurstConfig): BurstRuntime {
     return {
       state: "Idle",
       report: {
@@ -15,7 +15,7 @@ export class BurstMachine {
     };
   }
 
-  static reduce(model: BurstModel, ev: BurstEvent): BurstModel {
+  static reduce(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     switch (model.state) {
       case "Idle":
         return BurstMachine.reduceIdle(model, ev);
@@ -30,7 +30,7 @@ export class BurstMachine {
     }
   }
 
-  private static reduceIdle(model: BurstModel, ev: BurstEvent): BurstModel {
+  private static reduceIdle(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     switch (ev.type) {
       case "Configure": {
         const nextCfg = BurstMachine.sanitize(ev.config);
@@ -67,7 +67,7 @@ export class BurstMachine {
     }
   }
 
-  private static reduceCompleted(model: BurstModel, ev: BurstEvent): BurstModel {
+  private static reduceCompleted(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     switch (ev.type) {
       case "Configure": {
         const nextCfg = BurstMachine.sanitize(ev.config);
@@ -106,7 +106,7 @@ export class BurstMachine {
     }
   }
 
-  private static reduceError(model: BurstModel, ev: BurstEvent): BurstModel {
+  private static reduceError(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     switch (ev.type) {
         case "Configure": {
             const nextCfg = BurstMachine.sanitize(ev.config);
@@ -132,7 +132,7 @@ export class BurstMachine {
     }
   }
 
-  private static reduceRunning(model: BurstModel, ev: BurstEvent): BurstModel {
+  private static reduceRunning(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     if (!model.report) return { ...model, state: "Error", report: null, stopRequested: false };
     switch (ev.type) {
         case "Configure":
@@ -225,7 +225,7 @@ export class BurstMachine {
     }
   }
 
-  private static reduceStopping(model: BurstModel, ev: BurstEvent): BurstModel {
+  private static reduceStopping(model: BurstRuntime, ev: BurstEvent): BurstRuntime {
     // allow inflight to drain; controller may still dispatch results
     if (!model.report) return { ...model, state: "Error", report: null, stopRequested: true };
 
@@ -242,7 +242,7 @@ export class BurstMachine {
         case "ResultError":
             // reuse Running logic by temporary call:
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return BurstMachine.reduce({ ...model, state: "Running" }, ev as any) as BurstModel;
+            return BurstMachine.reduce({ ...model, state: "Running" }, ev as any) as BurstRuntime;
 
         case "Finish": {
             const r = model.report;

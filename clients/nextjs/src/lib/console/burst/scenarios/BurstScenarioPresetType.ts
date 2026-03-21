@@ -1,4 +1,4 @@
-import { BurstConfig, BurstDispatchModeKey } from "../BurstMachineType";
+import { BurstConfig, BurstDispatchModeKey } from "../runtime/BurstMachineType";
 
 export type BurstScenarioKey = BurstDispatchModeKey
 export type BurstScenarioRecommendedParameter = {

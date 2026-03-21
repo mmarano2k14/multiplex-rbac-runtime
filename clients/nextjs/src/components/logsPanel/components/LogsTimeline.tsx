@@ -1,4 +1,4 @@
-import { ConsoleLogEntry } from "@/lib/logs/inMemoryLogType";
+import { ConsoleLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 import React, { JSX, useEffect, useMemo, useState } from "react";
 
 

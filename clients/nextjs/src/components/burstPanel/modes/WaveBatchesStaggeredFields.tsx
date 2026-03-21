@@ -1,7 +1,7 @@
 "use client";
 
 import { JSX } from "react";
-import type { WaveBatchesStaggeredConfig } from "@/lib/console/burst/BurstMachineType";
+import type { WaveBatchesStaggeredConfig } from "@/lib/console/burst/runtime/BurstMachineType";
 
 export type WaveBatchesStaggeredFieldsProps = {
   disabled: boolean;

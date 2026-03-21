@@ -1,7 +1,7 @@
 "use client";
 
 import { JSX } from "react";
-import type { WaveBatchesConfig } from "@/lib/console/burst/BurstMachineType";
+import type { WaveBatchesConfig } from "@/lib/console/burst/runtime/BurstMachineType";
 
 export type WaveBatchesFieldsProps = {
   disabled: boolean;

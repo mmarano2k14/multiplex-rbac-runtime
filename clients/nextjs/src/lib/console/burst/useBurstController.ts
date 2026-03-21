@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useReducer } from "react";
-import type { BurstConfig } from "./BurstMachineType";
-import { BurstMachine } from "./BurstMachine";
-import { BurstController } from "./BurstController";
-import { BurstApiAdapter } from "./BurstApiAdapter";
+import type { BurstConfig } from "./runtime/BurstMachineType";
+import { BurstMachine } from "./runtime/BurstMachine";
+import { BurstController } from "./execution/BurstController";
+
 import { ConsoleContextAccessor } from "../ConsoleType";
+import { BurstApiAdapter } from "./api/BurstApiAdapter";
 
 export function useBurstController(
   consoleContextAccessor: ConsoleContextAccessor,

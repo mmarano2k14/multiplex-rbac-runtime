@@ -1,7 +1,7 @@
 "use client";
 
 import React, { JSX } from "react";
-import { TargetPreset } from "@/lib/http/HttpClientType";
+import { TargetPreset } from "@/lib/infrastructure/transport/http/HttpClientType";
 
 // ---------------------------------------------------------------------
 // Presets

@@ -1,12 +1,12 @@
-import { ConsoleContextAccessor } from "../ConsoleType";
-import type { BurstConfig, BurstEvent, BurstModel } from "./BurstMachineType";
-import { BurstPlans } from "./BurstPlans";
-import type { HeaderKeyRotation, HeaderOverride, RequestSpec } from "@/lib/http/HttpClientType";
-import type { IBurstDispatchMode } from "./modes/BurstDispatchModeType";
-import { SingleBurstDispatchMode } from "./modes/SingleBurstDispatchMode";
-import { MaintainedConcurrencyDispatchMode } from "./modes/MaintainedConcurrencyDispatchMode";
-import { WaveBatchesDispatchMode } from "./modes/WaveBatchesDispatchMode";
-import { WaveBatchesStaggeredDispatchMode } from "./modes/WaveBatchesStaggeredDispatchMode";
+import { ConsoleContextAccessor } from "../../ConsoleType";
+import type { BurstConfig, BurstEvent, BurstRuntime } from "../runtime/BurstMachineType";
+import { BurstPlans } from "../scenarios/BurstPlans";
+import type { HeaderKeyRotation, HeaderOverride, RequestSpec } from "@/lib/infrastructure/transport/http/HttpClientType";
+import type { IBurstDispatchMode } from "../modes/BurstDispatchModeType";
+import { SingleBurstDispatchMode } from "../modes/SingleBurstDispatchMode";
+import { MaintainedConcurrencyDispatchMode } from "../modes/MaintainedConcurrencyDispatchMode";
+import { WaveBatchesDispatchMode } from "../modes/WaveBatchesDispatchMode";
+import { WaveBatchesStaggeredDispatchMode } from "../modes/WaveBatchesStaggeredDispatchMode";
 
 export type ApiCallResult =
   | { kind: "ok"; status: number; durationMs: number; rotation?: HeaderKeyRotation }
@@ -46,7 +46,7 @@ export class BurstController {
 
   public async start(
     api: IBurstApi,
-    model: BurstModel,
+    model: BurstRuntime,
     configOverride?: BurstConfig
   ): Promise<void> {
     const st = model.state;

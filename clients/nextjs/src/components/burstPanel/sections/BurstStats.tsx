@@ -2,14 +2,14 @@
 
 import { JSX } from "react";
 import { UiHelpers } from "../helpers/uiHelpers";
-import type { BurstCounters, BurstModel, BurstState, BurstStats as BurstStatsType } from "@/lib/console/burst/BurstMachineType";
+import type { BurstCounters, BurstRuntime, BurstState, BurstStats as BurstStatsType } from "@/lib/console/burst/runtime/BurstMachineType";
 import { BurstPanelHelpers } from "../helpers/BurstPanelHelpers";
 
 export type BurstStatsProps = {
   counters?: BurstCounters;
   stats?: BurstStatsType;
   state?: BurstState;
-  model: BurstModel;
+  model: BurstRuntime;
 };
 
 /**

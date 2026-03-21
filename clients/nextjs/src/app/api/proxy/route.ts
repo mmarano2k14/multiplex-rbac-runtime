@@ -1,28 +1,6 @@
+import { HttpMethod, ProxyError, ProxyRequest, ProxyResponse } from "@/lib/infrastructure/transport/http/HttpClientType";
 import { NextResponse } from "next/server";
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-
-export type ProxyRequest = {
-  baseUrl: string;
-  path: string;
-  method: HttpMethod;
-  body?: unknown;
-  headers?: Record<string, string>;
-};
-
-export type ProxyResponse = {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  url: string;
-  headers: Record<string, string>;
-  body: string;
-};
-
-export type ProxyError = {
-  error: string;
-  details?: string;
-};
 
 function safeJoin(baseUrl: string, path: string): string {
   const b = baseUrl.replace(/\/+$/, "");

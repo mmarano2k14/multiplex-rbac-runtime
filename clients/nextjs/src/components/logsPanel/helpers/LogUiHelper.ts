@@ -1,8 +1,5 @@
-import {
-  ConsoleLogEntry,
-  HttpLogEntry,
-  RealtimeLogEntry,
-} from "@/lib/logs/inMemoryLogType";
+import { ConsoleLogEntry, HttpLogEntry, RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
+
 
 export class LogUiHelper {
   public static getLogColor(log: ConsoleLogEntry): string {

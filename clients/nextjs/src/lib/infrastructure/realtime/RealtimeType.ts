@@ -1,4 +1,5 @@
-import { InMemoryLogSinkItem } from "@/lib/logs/inMemoryLogType";
+import { InMemoryLogSinkItem } from "../logs/inMemoryLogType";
+
 
 export type RealtimeConnectionState =
   | "idle"

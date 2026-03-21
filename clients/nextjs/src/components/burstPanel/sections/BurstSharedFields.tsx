@@ -5,7 +5,7 @@ import type {
   BurstConfig,
   BurstDispatchModeKey,
   BurstPlanKey,
-} from "@/lib/console/burst/BurstMachineType";
+} from "@/lib/console/burst/runtime/BurstMachineType";
 import { BurstPanelHelpers } from "../helpers/BurstPanelHelpers";
 
 export type BurstSharedFieldsProps = {

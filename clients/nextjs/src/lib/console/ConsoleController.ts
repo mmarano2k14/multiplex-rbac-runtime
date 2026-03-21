@@ -1,7 +1,7 @@
 import { MultiplexedRbacApi } from "../rbac/MultiplexedRbacApi";
 import { ConsoleState, ConsoleEvent } from "./ConsoleType";
-import { RealtimeClient } from "./realtime/RealtimeClient";
-import { RealtimeConnectionState } from "./realtime/RealtimeType";
+import { RealtimeClient } from "../infrastructure/realtime/RealtimeClient";
+import { RealtimeConnectionState } from "../infrastructure/realtime/RealtimeType";
 
 
 export type ConsoleActions = {

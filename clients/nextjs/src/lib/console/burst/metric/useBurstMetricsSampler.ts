@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { BurstModel } from "../BurstMachineType";
+import type { BurstRuntime } from "../runtime/BurstMachineType";
 import type { BurstMetricPoint } from "./BurstMetricsType";
 
 type InternalBurstMetricPoint = BurstMetricPoint & {
   runStartedAt?: number;
 };
 
-export function useBurstMetricsSampler(model: BurstModel) {
+export function useBurstMetricsSampler(model: BurstRuntime) {
   const [metrics, setMetrics] = useState<InternalBurstMetricPoint[]>([]);
 
   const prevCompletedRef = useRef<number>(0);

@@ -9,12 +9,12 @@ import React, {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import { ConsoleLogEntry } from "@/lib/logs/inMemoryLogType";
 import { HttpLogCard } from "./components/HttpLogCard";
 import { RealtimeLogCard } from "./components/RealtimeLogCard";
 import { LogFilterKind } from "./LogsPanelType";
 import { LogUiHelper } from "./helpers/LogUiHelper";
 import { ContextRotationLogCard } from "./components/ContextRotationLogCard";
+import { ConsoleLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 
 export type LogsPanelProps = {
   logs: ConsoleLogEntry[];

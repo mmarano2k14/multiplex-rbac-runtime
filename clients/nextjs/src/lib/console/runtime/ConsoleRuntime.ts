@@ -1,6 +1,6 @@
-import { InMemoryLogSink } from "@/lib/logs/InMemoryLogSink";
+
 import { MultiplexedRbacApi } from "@/lib/rbac/MultiplexedRbacApi";
-import type { TargetPreset } from "@/lib/http/HttpClientType";
+import type { TargetPreset } from "@/lib/infrastructure/transport/http/HttpClientType";
 
 import type {
   ConsoleActions,
@@ -11,7 +11,9 @@ import type { ConsoleEvent, ConsoleState } from "../ConsoleType";
 import type { IConsoleRuntime } from "./IConsoleRuntime";
 import { ConsoleRealtimeRuntime } from "./ConsoleRealtimeRuntime";
 import type { IConsoleRealtimeRuntime } from "./IConsoleRealtimeRuntime";
-import { ConsoleLogEntry, RealtimeLogEntry } from "@/lib/logs/inMemoryLogType";
+import { InMemoryLogSink } from "@/lib/infrastructure/logs/InMemoryLogSink";
+import { ConsoleLogEntry, RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
+
 
 type ConsoleRuntimeDependencies = {
   presets: TargetPreset[];
@@ -24,8 +26,6 @@ type RunResult = {
   status?: number;
   error?: string;
 };
-
-
 
 /**
  * Framework-agnostic console runtime.

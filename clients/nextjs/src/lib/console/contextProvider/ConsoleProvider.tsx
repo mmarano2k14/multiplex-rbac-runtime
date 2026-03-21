@@ -2,7 +2,7 @@
 
 import { ReactNode, useEffect } from "react";
 import { ConsoleContext } from "./useConsoleContext";
-import { TargetPreset } from "@/lib/http/HttpClientType";
+import { TargetPreset } from "@/lib/infrastructure/transport/http/HttpClientType";
 import { useConsoleController } from "../useConsoleController";
 
 const PRESETS: TargetPreset[] = [

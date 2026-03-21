@@ -1,4 +1,4 @@
-import { ConsoleLogEntry } from "../logs/inMemoryLogType";
+import { ConsoleLogEntry } from "../infrastructure/logs/inMemoryLogType";
 import { MultiplexedRbacApi } from "../rbac/MultiplexedRbacApi";
 
 

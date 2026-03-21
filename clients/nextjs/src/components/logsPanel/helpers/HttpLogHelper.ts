@@ -1,4 +1,4 @@
-import { HttpLogEntry } from "@/lib/logs/inMemoryLogType";
+import { HttpLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 import { LogBadge } from "../LogsPanelType";
 
 export class HttpLogHelper {

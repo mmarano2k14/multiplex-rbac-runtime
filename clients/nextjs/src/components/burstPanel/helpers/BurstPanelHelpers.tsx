@@ -2,9 +2,9 @@ import { JSX } from "react";
 import type {
   BurstConfig,
   BurstDispatchModeKey,
-  BurstModel,
+  BurstRuntime,
   BurstPlanKey,
-} from "@/lib/console/burst/BurstMachineType";
+} from "@/lib/console/burst/runtime/BurstMachineType";
 import { MaintainedConcurrencyFields } from "../modes/MaintainedConcurrencyFields";
 import { SingleBurstFields } from "../modes/SingleBurstFields";
 import { WaveBatchesFields } from "../modes/WaveBatchesFields";
@@ -64,21 +64,21 @@ export class BurstPanelHelpers {
   /**
    * Returns the current config from the model, or a safe fallback.
    */
-  public static getConfig(model: BurstModel): BurstConfig {
+  public static getConfig(model: BurstRuntime): BurstConfig {
     return model.report?.config ?? BurstPanelHelpers.getFallbackConfig();
   }
 
   /**
    * True when the burst is actively running or draining.
    */
-  public static isRunning(model: BurstModel): boolean {
+  public static isRunning(model: BurstRuntime): boolean {
     return model.state === "Running" || model.state === "Stopping";
   }
 
   /**
    * Extracts the elapsed time from the report.
    */
-  public static getElapsedMs(model: BurstModel): number | undefined {
+  public static getElapsedMs(model: BurstRuntime): number | undefined {
     const report = model.report;
     if (!report?.timing.startedAt) return undefined;
 

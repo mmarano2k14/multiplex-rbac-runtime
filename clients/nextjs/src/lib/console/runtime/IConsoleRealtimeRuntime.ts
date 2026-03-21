@@ -1,7 +1,7 @@
 
 
-import { RealtimeClient } from "../realtime/RealtimeClient";
-import { RealtimeConnectionState } from "../realtime/RealtimeType";
+import { RealtimeClient } from "../../infrastructure/realtime/RealtimeClient";
+import { RealtimeConnectionState } from "../../infrastructure/realtime/RealtimeType";
 
 export interface IConsoleRealtimeRuntime {
   readonly client: RealtimeClient;

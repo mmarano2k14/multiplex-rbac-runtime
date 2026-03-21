@@ -1,16 +1,11 @@
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-export type TargetPreset = {
-  label: string;
+export type ProxyRequest = {
   baseUrl: string;
-};
-
-export type RequestSpec = {
-  name: string;
-  method: HttpMethod;
   path: string;
+  method: HttpMethod;
   body?: unknown;
-  headers?: Record<string, string> | undefined;
+  headers?: Record<string, string>;
 };
 
 export type ProxyResponse = {
@@ -27,13 +22,26 @@ export type ProxyError = {
   details?: string;
 };
 
+export type TargetPreset = {
+  label: string;
+  baseUrl: string;
+};
+
+export type RequestSpec = {
+  name: string;
+  method: HttpMethod;
+  path: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+};
+
 export type HeaderKeyRotation = {
-  from: string; 
-  to: string 
+  from: string;
+  to: string;
 };
 
 export type HeaderOverride = {
-  contextKeyOverride? : string;
+  contextKeyOverride?: string;
 };
 
 export type CallResult =

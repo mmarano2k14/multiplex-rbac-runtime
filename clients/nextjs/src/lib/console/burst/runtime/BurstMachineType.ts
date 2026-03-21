@@ -1,4 +1,4 @@
-import { RequestSpec } from "@/lib/http/HttpClientType";
+import { RequestSpec } from "@/lib/infrastructure/transport/http/HttpClientType";
 
 export type BurstState = "Idle" | "Running" | "Stopping" | "Completed" | "Error";
 
@@ -109,7 +109,7 @@ export type BurstReport = {
   error?: string;
 };
 
-export type BurstModel = {
+export type BurstRuntime = {
   state: BurstState;
   report: BurstReport | null;
   // "stop requested" signal (also mirrored by controller abort token)

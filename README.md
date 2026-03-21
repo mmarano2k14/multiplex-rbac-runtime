@@ -1,14 +1,63 @@
 # Multiplexed RBAC Runtime
 
-Deterministic authorization architecture designed for large-scale, multi-tenant SaaS platforms, inspired by IAM models such as AWS ARN.
+## Deterministic Authorization Runtime for High-Concurrency SaaS Systems
 
-Multiplexed RBAC introduces **Tenant Resource Names (TRN)**, a **distributed context rotation model**, and a deterministic authorization engine to address the growing complexity of authorization in modern distributed systems.
+> A deterministic authorization runtime designed to replace inconsistent RBAC implementations in distributed systems.
 
-By combining **rotational execution contexts**, **atomic coordination**, and **runtime enforcement**, the system ensures consistent, safe, and scalable authorization even under high concurrency.
+Multiplexed RBAC is a **deterministic authorization runtime** designed for large-scale, multi-tenant platforms.
+
+It introduces **Tenant Resource Names (TRN)**, **distributed context rotation**, and a **runtime enforcement model** to ensure consistent, safe, and scalable authorization under high concurrency.
+
+Unlike traditional RBAC systems, this architecture:
+
+- guarantees **deterministic permission evaluation**
+- supports **safe concurrent request handling**
+- enables **distributed authorization state**
+- provides **real-time observability**
+- remains **fully portable across runtimes**
+
+---
+
+### Key Capabilities
+
+- 🔐 Deterministic authorization engine (TRN-based)
+- 🔄 Distributed context rotation with atomic coordination (Redis + Lua)
+- ⚡ High-concurrency safe execution model (in-flight protection)
+- 📡 Real-time observability (SignalR / WebSocket)
+- 🧪 Scenario-based load testing (burst, concurrency, wave patterns)
+- 🧠 AI-ready runtime analysis (planned)
+
+---
+
+### What This Project Demonstrates
+
+This repository is not just a library.
+
+It is a **reference architecture** showing how to build:
+
+- a **distributed authorization runtime**
+- a **deterministic execution model**
+- a **safe concurrency system**
+- an **observable platform layer**
+
+---
+
+> Designed for engineers building complex SaaS platforms where authorization must remain **correct, observable, and scalable under load**.
+
+---
 
 This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
 
-![Version](https://img.shields.io/badge/Version-1.0.1-blue)
+[![Version](https://img.shields.io/badge/Version-1.1.0.0-blue)](./CHANGELOG.md)
+[![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
+
+![Status](https://img.shields.io/badge/Status-active%20development-orange)
+![Deterministic Runtime](https://img.shields.io/badge/Runtime-deterministic-brightgreen)
+![Concurrency](https://img.shields.io/badge/Concurrency-safe-blue)
+![Redis](https://img.shields.io/badge/Redis-required-red)
+![RabbitMQ](https://img.shields.io/badge/RabbitMQ-required-orange)
+![NServiceBus](https://img.shields.io/badge/NServiceBus-license-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 **This project is still under active development. Some features may be incomplete and UI or functional issues may occur.**
 
@@ -16,7 +65,7 @@ This repository provides a **reference implementation across multiple runtimes**
 
 # Why Multiplexed RBAC?
 
-Traditional RBAC implementations often break down in complex SaaS platforms because:
+Traditional RBAC implementations often break down in complex SaaS platforms due to:
 
 * authorization logic becomes scattered across services
 * permission evaluation becomes inconsistent
@@ -60,6 +109,8 @@ This allows:
 # Authorization Architecture
 
 ```
+## Execution Flow
+
 Client / Service
       ↓
 Authentication (JWT)
@@ -493,6 +544,59 @@ Future improvements:
 * Wildcard rules
 * UI updates
 * Consolidated global UI state
+* AI orchestration layer (RAG-based runtime analysis)
+* BurstRun analysis engine for scenario recommendation and anomaly detection
+* AI-assisted test scenario generation based on runtime results
+
+---
+
+# Requirements
+
+To run the full sample and test the runtime behavior, the following dependencies must be installed and configured:
+
+---
+
+## Infrastructure
+
+### Redis
+
+- Used as the distributed context store
+- Required for:
+  - execution context storage
+  - atomic rotation coordination (Lua scripts)
+  - in-flight request tracking
+
+---
+
+### RabbitMQ
+
+- Required for the event-driven sample using NServiceBus
+- Enables testing of:
+  - service-to-service authorization
+  - asynchronous workflows
+  - distributed message handling
+
+---
+
+## NServiceBus
+
+- The sample uses **NServiceBus** for messaging
+
+### License
+
+- A **free trial license key** is required
+- You can obtain it here:
+  - https://particular.net/nservicebus
+
+- Configure the license in your project (e.g. appsettings or code configuration)
+
+---
+
+## Notes
+
+- Redis is mandatory for distributed context rotation behavior
+- RabbitMQ + NServiceBus are required only for the event-driven sample scenario
+- The API and client can still run without messaging, but full architecture validation requires all components
 
 ---
 

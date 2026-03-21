@@ -1,12 +1,12 @@
 "use client";
 
 import { JSX, useMemo } from "react";
-import { ConsoleLogEntry } from "@/lib/logs/inMemoryLogType";
 import { LogUiHelper } from "../helpers/LogUiHelper";
 import {
   ContextRotationRealtimeEvent,
   ContextRotationRealtimeHelper,
 } from "../helpers/ContextRotationRealtimeHelper";
+import { ConsoleLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 
 type Segment = {
   from: string;

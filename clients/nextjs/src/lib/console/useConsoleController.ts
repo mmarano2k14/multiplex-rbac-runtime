@@ -4,7 +4,7 @@ import { useEffect, useReducer, useState } from "react";
 
 import { ConsoleMachine } from "./ConsoleMachine";
 import type { ConsoleController } from "./ConsoleController";
-import type { TargetPreset } from "../http/HttpClientType";
+import type { TargetPreset } from "../infrastructure/transport/http/HttpClientType";
 
 import { ConsoleRuntime } from "./runtime/ConsoleRuntime";
 import type { IConsoleRuntime } from "./runtime/IConsoleRuntime";

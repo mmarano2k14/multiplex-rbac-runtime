@@ -4,8 +4,8 @@ import { JSX, useMemo, useState } from "react";
 
 import type {
   BurstConfig,
-  BurstModel,
-} from "@/lib/console/burst/BurstMachineType";
+  BurstRuntime,
+} from "@/lib/console/burst/runtime/BurstMachineType";
 
 import { BurstHistogram } from "@/lib/console/burst/metric/BurstHistogram";
 import { useBurstMetricsSampler } from "@/lib/console/burst/metric/useBurstMetricsSampler";
@@ -20,7 +20,7 @@ import { useConsoleContext } from "@/lib/console/contextProvider/useConsoleConte
 
 export type BurstPanelProps = {
   disabled: boolean;
-  model: BurstModel;
+  model: BurstRuntime;
   onConfigure: (cfg: BurstConfig) => void;
   onStart: () => void;
   onStop: () => void;

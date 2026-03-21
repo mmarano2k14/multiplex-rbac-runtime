@@ -4,8 +4,8 @@ import { JSX } from "react";
 
 import type {
   BurstConfig,
-  BurstModel,
-} from "@/lib/console/burst/BurstMachineType";
+  BurstRuntime,
+} from "@/lib/console/burst/runtime/BurstMachineType";
 
 
 import { BurstPanelHelpers } from "./helpers/BurstPanelHelpers";
@@ -14,7 +14,7 @@ import { BurstActions } from "./sections/BurstActions";
 
 export type BurstPanelProps = {
   disabled: boolean;
-  model: BurstModel;
+  model: BurstRuntime;
   onConfigure: (cfg: BurstConfig) => void;
   onStart: () => void;
   onStop: () => void;

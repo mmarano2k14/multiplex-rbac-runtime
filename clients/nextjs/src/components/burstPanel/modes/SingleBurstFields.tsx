@@ -1,7 +1,7 @@
 "use client";
 
 import { JSX } from "react";
-import type { SingleBurstConfig } from "@/lib/console/burst/BurstMachineType";
+import type { SingleBurstConfig } from "@/lib/console/burst/runtime/BurstMachineType";
 
 export type SingleBurstFieldsProps = {
   disabled: boolean;

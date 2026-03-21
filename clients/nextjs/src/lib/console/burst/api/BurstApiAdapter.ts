@@ -1,6 +1,7 @@
-import { HeaderOverride, RequestSpec } from "@/lib/http/HttpClientType";
+import { HeaderOverride, RequestSpec } from "@/lib/infrastructure/transport/http/HttpClientType";
 import type { MultiplexedRbacApi } from "@/lib/rbac/MultiplexedRbacApi";
-import { ApiCallResult, IBurstApi } from "./BurstController";
+import { ApiCallResult, IBurstApi } from "../execution/BurstController";
+
 
 /**
  * MultiplexedRbacApi à l'interface burst.

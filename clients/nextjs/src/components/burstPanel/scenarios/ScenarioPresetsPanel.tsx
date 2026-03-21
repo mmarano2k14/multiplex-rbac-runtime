@@ -2,7 +2,7 @@
 
 import { JSX, useMemo, useState } from "react";
 import { BurstScenarioFactory } from "@/lib/console/burst/scenarios/BurstScenarioFactory";
-import { BurstPlanKey } from "@/lib/console/burst/BurstMachineType";
+import { BurstPlanKey } from "@/lib/console/burst/runtime/BurstMachineType";
 import { ScenarioInfoModal } from "./ScenarioInfoModal";
 import {
   BurstScenarioDefinition,

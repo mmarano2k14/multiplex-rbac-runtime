@@ -1,7 +1,7 @@
 import React, { JSX } from "react";
 import { LogBadge } from "./LogBadge";
-import { RealtimeLogEntry } from "@/lib/logs/inMemoryLogType";
 import { RealtimeLogHelper } from "../helpers/RealtimeLogHelper";
+import { RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 
 
 export type RealtimeLogCardProps = {

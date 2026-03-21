@@ -1,4 +1,4 @@
-import { TargetPreset } from "../http/HttpClientType";
+import { TargetPreset } from "../infrastructure/transport/http/HttpClientType";
 import { ConsoleEvent, ConsoleState } from "./ConsoleType";
 
 export class ConsoleMachine {

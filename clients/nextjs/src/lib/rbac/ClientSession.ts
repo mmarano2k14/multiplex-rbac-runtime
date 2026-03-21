@@ -1,4 +1,4 @@
-import { HeaderOverride } from "../http/HttpClientType";
+import { HeaderOverride } from "../infrastructure/transport/http/HttpClientType";
 
 export type Rotation = { from: string; to: string };
 

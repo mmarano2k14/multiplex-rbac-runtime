@@ -1,7 +1,7 @@
 "use client";
 
 import { JSX } from "react";
-import type { MaintainedConcurrencyConfig } from "@/lib/console/burst/BurstMachineType";
+import type { MaintainedConcurrencyConfig } from "@/lib/console/burst/runtime/BurstMachineType";
 
 export type MaintainedConcurrencyFieldsProps = {
   disabled: boolean;

@@ -1,4 +1,4 @@
-import { RealtimeLogEntry } from "@/lib/logs/inMemoryLogType";
+import { RealtimeLogEntry } from "@/lib/infrastructure/logs/inMemoryLogType";
 import { LogBadge } from "../LogsPanelType";
 
 export class RealtimeLogHelper {

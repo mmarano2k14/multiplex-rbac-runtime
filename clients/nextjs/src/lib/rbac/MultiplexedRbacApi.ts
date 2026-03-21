@@ -1,7 +1,7 @@
 
-import { HttpClient } from "../http/HttpClient";
-import { CallResult, HeaderOverride, ProxyError, ProxyResponse, RequestSpec } from "../http/HttpClientType";
-import { IBusyListener, ILogSink } from "../logs/inMemoryLogType";
+import { ILogSink, IBusyListener } from "../infrastructure/logs/inMemoryLogType";
+import { HttpClient } from "../infrastructure/transport/http/HttpClient";
+import { CallResult, HeaderOverride, ProxyError, ProxyResponse, RequestSpec } from "../infrastructure/transport/http/HttpClientType";
 import { ClientSession, Rotation } from "./ClientSession";
 
 export class MultiplexedRbacApi {
