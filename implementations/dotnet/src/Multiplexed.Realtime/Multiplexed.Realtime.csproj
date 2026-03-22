@@ -10,4 +10,8 @@
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
 
+	<ItemGroup>
+	  <ProjectReference Include="..\Multiplexed.Abstractions\Multiplexed.Abstractions.csproj" />
+	</ItemGroup>
+
 </Project>

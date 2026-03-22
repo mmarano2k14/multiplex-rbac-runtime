@@ -1,4 +1,4 @@
-﻿using MultiplexedRbac.Core.Authorization.Attributes;
+﻿using Multiplexed.Rbac.Core.Authorization.Attributes;
 using System;
 using System.Collections.Generic;
 using System.Linq;

@@ -1,18 +1,18 @@
 ﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
-using MultiplexedRbac.Core.ExecutionContext;
-using MultiplexedRbac.Runtime;
-using MultiplexedRbac.Runtime.DI;
-using MultiplexedRbac.Runtime.Messaging.NServiceBus;
-using MultiplexedRbac.Runtime.Messaging.NServiceBus.DI;
-using MultiplexedRbac.Runtime.Realtime.DI;
-using MultiplexedRbac.Runtime.Realtime.Providers.SignalR;
+using Multiplexed.Rbac.Core.ExecutionContext;
+using Multiplexed.Rbac.Core.Runtime;
+using Multiplexed.Rbac.Core.Runtime.DI;
+using Multiplexed.Rbac.Core.Runtime.Messaging.NServiceBus;
+using Multiplexed.Rbac.Core.Runtime.Messaging.NServiceBus.DI;
+using Multiplexed.Realtime.DI;
+using Multiplexed.Realtime.Resolvers;
 using MultiplexedRbac.Sample.Crm.Api.Auth;
 using MultiplexedRbac.Sample.Crm.Services;
-using NServiceBus;
+
 
 // Alias to avoid System.ExecutionContext confusion
-using ExecutionContext = MultiplexedRbac.Core.ExecutionContext.ExecutionContext;
+using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://localhost:5000");
@@ -86,9 +86,9 @@ builder.Services.AddSwaggerGen(c =>
 // Required because ExecutionContextMiddleware denies unauthenticated users.
 
 builder.Services
-    .AddAuthentication(FakeAuthHandler.Scheme)
+    .AddAuthentication(FakeAuthHandler.AuthenticationScheme)
     .AddScheme<AuthenticationSchemeOptions, FakeAuthHandler>(
-        FakeAuthHandler.Scheme, _ => { });
+        FakeAuthHandler.AuthenticationScheme, _ => { });
 
 builder.Services.AddAuthorization();
 
@@ -123,7 +123,8 @@ builder.Services
     .AddMultiplexedRbacHttp()
     .AddMultiplexedRbacNServiceBus()
     .AddCrmServices()
-    .AddSignalRRealtimeProvider(options =>
+    .AddMultiplexRealtime()
+    .AddSignalRRealtimeTransport(options =>
     {
         options.CorsPolicy = "SignalRCors";
         options.AllowedOrigins =

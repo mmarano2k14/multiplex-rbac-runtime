@@ -1,13 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
+    <ProjectReference Include="..\..\src\Multiplexed.Rbac.Core\Multiplexed.Rbac.Core.csproj" />
   </ItemGroup>
 
 </Project>

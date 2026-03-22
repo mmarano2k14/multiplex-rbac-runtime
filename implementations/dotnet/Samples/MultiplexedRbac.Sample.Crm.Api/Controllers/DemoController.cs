@@ -1,9 +1,8 @@
 ﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using MultiplexedRbac.Core.ExecutionContext;
-using MultiplexedRbac.Runtime;
+using Multiplexed.Rbac.Core.ExecutionContext;
+using Multiplexed.Rbac.Core.Runtime;
 using MultiplexedRbac.Sample.Crm.Api.Auth;
 using MultiplexedRbac.Sample.Crm.Api.Context;
 using System.Net.Sockets;

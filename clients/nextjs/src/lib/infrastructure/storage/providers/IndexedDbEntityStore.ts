@@ -78,10 +78,9 @@ export class IndexedDbEntityStore<T, TId = string>
 
   // Removes the internal IndexedDB key before returning the entity to the domain.
   private fromStoredEntity(entity: StoredEntity<T>): T {
-    const { __entityStoreId: _ignored, ...rest } = entity as StoredEntity<T> &
-      Record<string, unknown>;
+    const { ...rest } = entity as StoredEntity<T> & Record<string, unknown>;
 
-    return rest as T;
+    return rest as T; 
   }
 
   // Executes a readonly request and resolves with the request result.

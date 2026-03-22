@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.Hosting;
 using NServiceBus;
-using MultiplexedRbac.Runtime.DI;
-using MultiplexedRbac.Runtime.Messaging.NServiceBus;
-using MultiplexedRbac.Runtime.Messaging.NServiceBus.DI;
+using Multiplexed.Rbac.Core.Runtime.DI;
+using Multiplexed.Rbac.Core.Runtime.Messaging.NServiceBus;
+using Multiplexed.Rbac.Core.Runtime.Messaging.NServiceBus.DI;
 using MultiplexedRbac.Sample.Crm.Services;
 
 var builder = Host.CreateApplicationBuilder(args);

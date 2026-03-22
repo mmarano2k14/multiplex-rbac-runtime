@@ -1,6 +1,6 @@
-﻿using MultiplexedRbac.Core.Authorization.Attributes;
-using MultiplexedRbac.Core.Authorization.Engine;
-using MultiplexedRbac.Core.Authorization.Proxy;
+﻿using Multiplexed.Rbac.Core.Authorization.Attributes;
+using Multiplexed.Rbac.Core.Authorization.Engine;
+using Multiplexed.Rbac.Core.Authorization.Proxy;
 using Xunit;
 
 namespace MultiplexedRbac.Tests.Proxy

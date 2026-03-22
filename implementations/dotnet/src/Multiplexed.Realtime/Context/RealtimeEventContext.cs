@@ -1,10 +1,11 @@
-﻿using Multiplexed.Realtime.Dispatching;
+﻿using Multiplexed.Abstractions.Runtime;
+using Multiplexed.Realtime.Dispatching;
 using Multiplexed.Realtime.Events.Abstractions;
 using Multiplexed.Realtime.Events.Runtime;
 
 namespace Multiplexed.Realtime.Context
 {
-    public sealed class RealtimeEventContext : IRealtimeEventContext
+    public sealed class RealtimeEventContext : IRuntimeEventContext
     {
         private readonly IRuntimeEventDispatcher _dispatcher;
 

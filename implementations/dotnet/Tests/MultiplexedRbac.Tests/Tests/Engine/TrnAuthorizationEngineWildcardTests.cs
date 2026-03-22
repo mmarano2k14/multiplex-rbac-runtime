@@ -1,18 +1,18 @@
 ﻿using Microsoft.Extensions.Options;
-using MultiplexedRbac.Core.Authorization.Engine;
-using MultiplexedRbac.Core.Authorization.Scope;
-using MultiplexedRbac.Core.Authorization.Trn;
-using MultiplexedRbac.Core.ExecutionContext;
-using MultiplexedRbac.Runtime;
+using Multiplexed.Rbac.Core.Authorization.Engine;
+using Multiplexed.Rbac.Core.Authorization.Scope;
+using Multiplexed.Rbac.Core.Authorization.Trn;
+using Multiplexed.Rbac.Core.ExecutionContext;
+using Multiplexed.Rbac.Core.Runtime;
 using Xunit;
 
 namespace MultiplexedRbac.Tests.Engine
 {
     public sealed class TrnAuthorizationEngineWildcardTests
     {
-        private static Core.ExecutionContext.ExecutionContext BuildCtx(params string[] trns)
+        private static Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext BuildCtx(params string[] trns)
         {
-            return new Core.ExecutionContext.ExecutionContext
+            return new Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
             {
                 ContextKey = "context-key-xxx",
                 Project = "tev",

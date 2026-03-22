@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using NServiceBus;
 using MultiplexedRbac.Sample.Crm.Contracts.Events;
-using MultiplexedRbac.Core.Authorization.Engine;
+using Multiplexed.Rbac.Core.Authorization.Engine;
 
 // using MultiplexedRbac.Core.Authorization;  // ton IAuthorizationEngine (Part 4)
 

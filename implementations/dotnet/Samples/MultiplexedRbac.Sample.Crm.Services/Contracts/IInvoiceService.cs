@@ -1,5 +1,5 @@
-﻿using MultiplexedRbac.Core.Authorization.Attributes;
-using MultiplexedRbac.Core.Authorization.Scope;
+﻿using Multiplexed.Rbac.Core.Authorization.Attributes;
+
 
 namespace MultiplexedRbac.Sample.Crm.Services.Contracts;
 

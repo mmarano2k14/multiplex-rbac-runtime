@@ -6,6 +6,84 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.2] - 2026-03-22
+
+### Added
+
+#### Storage Abstraction & Multi-Provider Support
+- Introduced storage abstraction layer for entity persistence
+- Added IndexedDbEntityStore implementation for browser-based persistence
+- Enabled multi-provider storage strategy (local, simulated API, future extensions)
+
+#### Modular Platform Architecture
+- Introduced modular project structure under `src/`
+- Split core runtime into independent modules:
+  - `Multiplexed.Rbac.Core`
+  - `Multiplexed.Realtime`
+  - `Multiplexed.Abstractions`
+- Established clear dependency boundaries and separation of concerns
+
+#### Realtime Module Extraction
+- Extracted realtime pipeline into standalone `Multiplexed.Realtime` project
+- Introduced transport-based architecture (`IRealtimeTransport`, providers)
+- Added background worker for event processing and dispatching
+- Enabled plug-and-play provider model (SignalR, NullTransport, future providers)
+
+#### Shared Abstractions Layer
+- Introduced `Multiplexed.Abstractions` for cross-module contracts
+- Added `IRuntimeEventContext` abstraction to decouple core from realtime
+- Removed direct dependency between RBAC core and realtime infrastructure
+
+#### AI Module (Foundation)
+- Added `Multiplexed.AI` project
+- Introduced provider-based AI architecture (`IAIProvider`)
+- Added `AIService` orchestration layer
+- Included fake AI provider for testing and future integration
+
+---
+
+### Changed
+
+#### .NET Upgrade
+- Upgraded entire solution to **.NET 10**
+- Removed legacy ASP.NET Core package references (2.x)
+- Replaced with modern `FrameworkReference` where required
+
+#### Runtime Event Pipeline Refactor
+- Replaced reducers with handler-based architecture (`IRuntimeEventHandler`)
+- Introduced dispatcher pattern for event routing
+- Improved separation between dispatching, handling, and transport layers
+
+#### Namespace & Project Renaming
+- Renamed main project to `Multiplexed.Rbac.Core`
+- Removed redundant `Core/Core` namespace nesting
+- Standardized namespaces across modules:
+  - `Multiplexed.Rbac.Core.*`
+  - `Multiplexed.Realtime.*`
+  - `Multiplexed.Abstractions.*`
+
+#### Dependency Injection Improvements
+- Centralized DI registration per module (`AddMultiplexRealtime`, etc.)
+- Fixed lifetime mismatches for NServiceBus pipeline compatibility
+- Ensured root-safe service resolution for behaviors
+
+#### Solution Structure
+- Introduced `src/` layout for .NET projects
+- Updated project references for samples and tests
+- Renamed solution to `Multiplexed.sln`
+
+---
+
+### Notes
+
+This release represents a major architectural milestone:
+
+- Transition from a monolithic RBAC runtime to a modular platform
+- Introduction of clean boundaries between core, realtime, and infrastructure
+- Foundation for future extensibility (AI, additional transports, providers)
+
+---
+
 ## [1.0.1.1] - 2026-03-20
 
 ### Added
@@ -22,6 +100,7 @@ This project follows a deterministic runtime and observability model designed fo
   - `simulated-api`
   - `api-proxy`
   - `api-simple`
+  - `indexed-db`
 - Enabled seamless switching between storage backends without impacting domain logic
 - Added simulated API mode with latency to mimic real-world network conditions
 

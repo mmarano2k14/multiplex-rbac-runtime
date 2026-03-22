@@ -1,19 +1,20 @@
-﻿using System.Reflection;
-using System.Threading.Channels;
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.Runtime;
 using Multiplexed.Realtime.Abstractions;
+using Multiplexed.Realtime.Context;
 using Multiplexed.Realtime.Dispatching;
 using Multiplexed.Realtime.Events;
 using Multiplexed.Realtime.Events.Abstractions;
-using Multiplexed.Realtime.Transports;
-using Multiplexed.Realtime.Transports.SignalR;
-using Multiplexed.Realtime.Context;
 using Multiplexed.Realtime.Handlers;
+using Multiplexed.Realtime.Transports;
 using Multiplexed.Realtime.Transports.Null;
+using Multiplexed.Realtime.Transports.SignalR;
+using System.Reflection;
+using System.Threading.Channels;
 
-namespace MultiplexedRbac.Runtime.Realtime.DI;
+namespace Multiplexed.Realtime.DI;
 
 /// <summary>
 /// Registers the core realtime runtime infrastructure with the default
@@ -58,7 +59,7 @@ public static class RealtimeServiceCollectionExtensions
 
         services.TryAddSingleton(channel);
 
-        services.TryAddSingleton<IRealtimeEventContext, RealtimeEventContext>();
+        services.AddSingleton<IRuntimeEventContext, RealtimeEventContext>();
         services.TryAddSingleton<IRuntimeEventDispatcher, RuntimeEventDispatcher>();
         services.TryAddScoped<IRuntimeEventHandlerDispatcher, RuntimeEventHandlerDispatcher>();
         services.AddHostedService<RuntimeEventWorker>();
@@ -78,7 +79,7 @@ public static class RealtimeServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddSignalRRealtimeProvider(
+    public static IServiceCollection AddSignalRRealtimeTransport(
             this IServiceCollection services,
             Action<SignalRRealtimeTransportOptions> configure)
     {

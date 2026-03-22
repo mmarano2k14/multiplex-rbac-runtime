@@ -48,7 +48,7 @@ It is a **reference architecture** showing how to build:
 
 This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
 
-[![Version](https://img.shields.io/badge/Version-1.1.0.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.1.2-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ![Status](https://img.shields.io/badge/Status-active%20development-orange)

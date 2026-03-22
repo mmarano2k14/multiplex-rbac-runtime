@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using MultiplexedRbac.Core.Authorization.Engine;
+using Multiplexed.Rbac.Core.Authorization.Engine;
 using MultiplexedRbac.Sample.Crm.Services.Contracts;
 
 namespace MultiplexedRbac.Sample.Crm.Api.Controllers

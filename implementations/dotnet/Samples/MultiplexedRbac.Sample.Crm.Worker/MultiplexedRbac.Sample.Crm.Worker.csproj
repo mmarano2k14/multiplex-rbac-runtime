@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-MultiplexedRbac.Sample.Crm.Worker-e191e452-8bc8-4fa8-bcf3-64018494f6fe</UserSecretsId>
@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
+    <ProjectReference Include="..\..\src\Multiplexed.Rbac.Core\Multiplexed.Rbac.Core.csproj" />
     <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Contracts\MultiplexedRbac.Sample.Crm.Contracts.csproj" />
     <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Services\MultiplexedRbac.Sample.Crm.Services.csproj" />
   </ItemGroup>
