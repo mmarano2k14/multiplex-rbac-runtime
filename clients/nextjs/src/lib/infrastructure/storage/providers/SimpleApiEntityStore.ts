@@ -138,15 +138,12 @@ export class SimpleApiEntityStore<T, TId = string>
   }
 
   private buildUrl(query?: EntityQuery): string {
-    const base = `${this.baseUrl}${this.resourcePath}`;
+    const url = new URL(`${this.baseUrl}${this.resourcePath}`);
 
-    if (!query?.limit) {
-      return base;
+    if (query?.limit && query.limit > 0) {
+      url.searchParams.set("limit", String(query.limit));
     }
 
-    const params = new URLSearchParams();
-    params.set("limit", String(query.limit));
-
-    return `${base}?${params.toString()}`;
+    return url.toString();
   }
 }

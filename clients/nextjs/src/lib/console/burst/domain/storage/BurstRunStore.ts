@@ -1,12 +1,9 @@
-
 import { EntityStoreFacadeBase } from "@/lib/infrastructure/storage/EntityStoreFacadeBase";
 import type { BurstRun } from "../BurstRun";
 import type { BurstRunStoreOptions, IBurstRunStore } from "./BurstRunStoreType";
 import { EntityStoreFactory } from "@/lib/infrastructure/storage/EntityStoreFactory";
 
 // BurstRun store facade.
-// Generic CRUD/find comes from EntityStoreFacadeBase.
-// Custom BurstRun queries stay here.
 export class BurstRunStore
   extends EntityStoreFacadeBase<BurstRun, string>
   implements IBurstRunStore
@@ -23,7 +20,6 @@ export class BurstRunStore
       ((left: BurstRun, right: BurstRun) => {
         const leftTime = left.createdAt ?? "";
         const rightTime = right.createdAt ?? "";
-
         return leftTime < rightTime ? 1 : leftTime > rightTime ? -1 : 0;
       });
 
@@ -39,7 +35,20 @@ export class BurstRunStore
           deserialize: options?.deserialize,
         })
       );
+      return;
+    }
 
+    if (mode === "indexed-db") {
+      super(
+        EntityStoreFactory.createEntityStore<BurstRun, string>({
+          mode,
+          dbName: options?.dbName ?? "console-storage",
+          storeName: options?.storeName ?? "burst-runs",
+          version: options?.version ?? 1,
+          getId,
+          compare,
+        })
+      );
       return;
     }
 
@@ -71,7 +80,7 @@ export class BurstRunStore
     });
   }
 
-  public static createBurstRunStore(options?: BurstRunStoreOptions) : BurstRunStore{
+  public static createBurstRunStore(options?: BurstRunStoreOptions): BurstRunStore {
     return new BurstRunStore(options);
   }
 }

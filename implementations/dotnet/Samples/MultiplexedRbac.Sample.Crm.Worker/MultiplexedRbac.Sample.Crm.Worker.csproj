@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
+    <ProjectReference Include="..\..\src\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
     <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Contracts\MultiplexedRbac.Sample.Crm.Contracts.csproj" />
     <ProjectReference Include="..\MultiplexedRbac.Sample.Crm.Services\MultiplexedRbac.Sample.Crm.Services.csproj" />
   </ItemGroup>

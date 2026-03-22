@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
+    <ProjectReference Include="..\..\src\multiplexed-rbac-dotnet\multiplexed-rbac-dotnet.csproj" />
   </ItemGroup>
 
 </Project>

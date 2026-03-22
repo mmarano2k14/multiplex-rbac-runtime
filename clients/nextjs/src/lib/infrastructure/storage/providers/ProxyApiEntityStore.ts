@@ -2,9 +2,9 @@ import { EntityStoreBase } from "../EntityStoreBase";
 import type { EntityFindQuery, EntityQuery } from "../EntityStoreType";
 import type { ApiEntityStoreOptions } from "../EntityStoreOptions";
 import { HttpClient } from "../../transport/http/HttpClient";
-import { RequestSpec } from "../../transport/http/HttpClientType";
+import type { RequestSpec } from "../../transport/http/HttpClientType";
 
-// API store using the existing Next.js proxy
+// API store using the existing proxy
 export class ProxyApiEntityStore<T, TId = string>
   extends EntityStoreBase<T, TId>
 {

@@ -9,9 +9,7 @@ import type {
 export abstract class EntityStoreFacadeBase<T, TId = string>
   implements IEntityStore<T, TId>
 {
-  protected constructor(
-    protected readonly inner: IEntityStore<T, TId>
-  ) {}
+  protected constructor(protected readonly inner: IEntityStore<T, TId>) {}
 
   public async getAll(query?: EntityQuery): Promise<T[]> {
     return this.inner.getAll(query);

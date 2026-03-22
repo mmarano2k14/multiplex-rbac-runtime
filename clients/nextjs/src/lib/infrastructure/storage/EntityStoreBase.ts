@@ -82,7 +82,10 @@ export abstract class EntityStoreBase<T, TId = string>
 
   private matchesWhere(
     item: T,
-    where: Record<string, string | number | boolean | null | Array<string | number | boolean | null>>
+    where: Record<
+      string,
+      string | number | boolean | null | Array<string | number | boolean | null>
+    >
   ): boolean {
     const record = item as Record<string, unknown>;
 

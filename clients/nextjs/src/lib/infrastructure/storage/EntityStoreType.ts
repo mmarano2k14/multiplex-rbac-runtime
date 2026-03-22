@@ -1,9 +1,10 @@
 export type EntityStoreMode =
   | "local-storage"
   | "simulated-api"
+  | "indexed-db"
   | "api-proxy"
   | "api-simple";
-  
+
 // Generic query options
 export type EntityQuery = {
   limit?: number;
@@ -34,7 +35,5 @@ export interface IEntityStore<T, TId = string> {
   save(entity: T): Promise<void>;
   delete(id: TId): Promise<void>;
   clear(): Promise<void>;
-
-  // Query by serializable criteria
   find(query: EntityFindQuery): Promise<T[]>;
 }
