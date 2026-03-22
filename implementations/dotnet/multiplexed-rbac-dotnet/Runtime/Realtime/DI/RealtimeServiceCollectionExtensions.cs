@@ -3,15 +3,15 @@ using System.Threading.Channels;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using MultiplexedRbac.Runtime.Realtime;
 using MultiplexedRbac.Runtime.Realtime.Abstractions;
 using MultiplexedRbac.Runtime.Realtime.Dispatching;
 using MultiplexedRbac.Runtime.Realtime.Events;
 using MultiplexedRbac.Runtime.Realtime.Events.Abstractions;
-using MultiplexedRbac.Runtime.Realtime.Providers;
-using MultiplexedRbac.Runtime.Realtime.Providers.Abstractions;
-using MultiplexedRbac.Runtime.Realtime.Providers.SignalR;
-using MultiplexedRbac.Runtime.Realtime.Reducers;
+using MultiplexedRbac.Runtime.Realtime.Transports;
+using MultiplexedRbac.Runtime.Realtime.Transports.SignalR;
+using MultiplexedRbac.Runtime.Realtime.Transports.Null;
+using MultiplexedRbac.Runtime.Realtime.Context;
+using MultiplexedRbac.Runtime.Realtime.Handlers;
 
 namespace MultiplexedRbac.Runtime.Realtime.DI;
 
@@ -60,14 +60,14 @@ public static class RealtimeServiceCollectionExtensions
 
         services.TryAddSingleton<IRealtimeEventContext, RealtimeEventContext>();
         services.TryAddSingleton<IRuntimeEventDispatcher, RuntimeEventDispatcher>();
-        services.TryAddScoped<IRuntimeEventReducerDispatcher, RuntimeEventReducerDispatcher>();
+        services.TryAddScoped<IRuntimeEventHandlerDispatcher, RuntimeEventHandlerDispatcher>();
         services.AddHostedService<RuntimeEventWorker>();
 
-        services.TryAddSingleton<NullRealtimeProvider>();
+        services.TryAddSingleton<NullRealtimeTransport>();
 
-        services.TryAddSingleton<IRealtimeProviderHost>(sp =>
-            new RealtimeProviderHost<NullRealtimeProvider>(
-                sp.GetRequiredService<NullRealtimeProvider>()));
+        services.TryAddSingleton<IRealtimeTransportHost>(sp =>
+            new RealtimeTransportHost<NullRealtimeTransport>(
+                sp.GetRequiredService<NullRealtimeTransport>()));
 
         var resolvedAssemblies = assemblies is { Length: > 0 }
             ? assemblies
@@ -80,12 +80,12 @@ public static class RealtimeServiceCollectionExtensions
 
     public static IServiceCollection AddSignalRRealtimeProvider(
             this IServiceCollection services,
-            Action<SignalRRealtimeProviderOptions> configure)
+            Action<SignalRRealtimeTransportOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var options = new SignalRRealtimeProviderOptions();
+        var options = new SignalRRealtimeTransportOptions();
         configure(options);
 
         if (options.AllowedOrigins is null || options.AllowedOrigins.Length == 0)
@@ -108,11 +108,11 @@ public static class RealtimeServiceCollectionExtensions
 
         services.AddSignalR();
 
-        services.TryAddSingleton<SignalRRealtimeProvider>();
+        services.TryAddSingleton<SignalRRealtimeTransport>();
 
-        services.Replace(ServiceDescriptor.Singleton<IRealtimeProviderHost>(sp =>
-            new RealtimeProviderHost<SignalRRealtimeProvider>(
-                sp.GetRequiredService<SignalRRealtimeProvider>())));
+        services.Replace(ServiceDescriptor.Singleton<IRealtimeTransportHost>(sp =>
+            new RealtimeTransportHost<SignalRRealtimeTransport>(
+                sp.GetRequiredService<SignalRRealtimeTransport>())));
 
         /*
          * Optional user identifier resolution strategy.
@@ -129,7 +129,7 @@ public static class RealtimeServiceCollectionExtensions
                 typeof(IRealtimeUserIdentifierResolver),
                 options.UserIdentifierResolverType));
 
-            services.Replace(ServiceDescriptor.Singleton<IUserIdProvider, SignalRUserIdProviderAdapter>());
+            services.Replace(ServiceDescriptor.Singleton<IUserIdProvider, SignalRRealtimeTransportAdapter>());
         }
 
         return services;
@@ -146,8 +146,8 @@ public static class RealtimeServiceCollectionExtensions
 
         foreach (var eventType in eventTypes)
         {
-            var serviceType = typeof(IRuntimeEventReducer<>).MakeGenericType(eventType);
-            var implementationType = typeof(RealtimeDispatchReducer<>).MakeGenericType(eventType);
+            var serviceType = typeof(IRuntimeEventHandler<>).MakeGenericType(eventType);
+            var implementationType = typeof(RealtimeDispatchHandler<>).MakeGenericType(eventType);
 
             services.TryAddScoped(serviceType, implementationType);
         }

@@ -5,7 +5,7 @@ namespace MultiplexedRbac.Runtime.Realtime.Dispatching
     /// <summary>
     /// Dispatches a runtime event to all reducers registered for its concrete type.
     /// </summary>
-    public interface IRuntimeEventReducerDispatcher
+    public interface IRuntimeEventHandlerDispatcher
     {
         /// <summary>
         /// Executes all reducers associated with the concrete runtime event type.

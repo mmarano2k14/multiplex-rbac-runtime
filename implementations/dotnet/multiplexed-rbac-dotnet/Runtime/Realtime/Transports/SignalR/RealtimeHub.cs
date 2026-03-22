@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
+namespace MultiplexedRbac.Runtime.Realtime.Transports.SignalR
 {
     /// <summary>
     /// SignalR hub responsible for realtime communication with runtime clients.

@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Net.WebSockets;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.WebSockets
+namespace MultiplexedRbac.Runtime.Realtime.Transports.WebSockets
 {
     /// <summary>
     /// Stores active WebSocket connections and allows routing by

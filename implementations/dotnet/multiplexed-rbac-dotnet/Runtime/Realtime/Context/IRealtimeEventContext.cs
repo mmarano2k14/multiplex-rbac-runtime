@@ -1,4 +1,4 @@
-﻿namespace MultiplexedRbac.Runtime.Realtime
+﻿namespace MultiplexedRbac.Runtime.Realtime.Context
 {
     /// <summary>
     /// High-level helper used by runtime components to emit structured runtime events

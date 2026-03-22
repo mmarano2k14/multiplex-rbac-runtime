@@ -1,6 +1,6 @@
 ﻿using System.Net.WebSockets;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.WebSockets
+namespace MultiplexedRbac.Runtime.Realtime.Transports.WebSockets
 {
     /// <summary>
     /// Represents one active WebSocket client connection.

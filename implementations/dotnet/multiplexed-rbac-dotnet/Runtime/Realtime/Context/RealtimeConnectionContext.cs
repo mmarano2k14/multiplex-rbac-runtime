@@ -1,7 +1,7 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 
-namespace MultiplexedRbac.Runtime.Realtime.Abstractions
+namespace MultiplexedRbac.Runtime.Realtime.Context
 {
     /// <summary>
     /// Transport-agnostic connection context used by realtime infrastructure

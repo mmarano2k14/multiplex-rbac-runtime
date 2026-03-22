@@ -8,7 +8,7 @@ namespace MultiplexedRbac.Runtime.Realtime.Dispatching;
 
 /// <summary>
 /// Background worker responsible for consuming runtime events from the channel
-/// and dispatching them to reducers outside of the request hot path.
+/// and dispatching them to handlers outside of the request hot path.
 ///
 /// This worker must never break the host startup or shutdown flow.
 /// Cancellation is treated as a normal lifecycle event.
@@ -35,7 +35,7 @@ public sealed class RuntimeEventWorker : BackgroundService
 
     /// <summary>
     /// Continuously reads runtime events from the channel and dispatches them
-    /// to registered reducers in a background loop.
+    /// to registered handlers in a background loop.
     /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -49,10 +49,10 @@ public sealed class RuntimeEventWorker : BackgroundService
                     {
                         using var scope = _scopeFactory.CreateScope();
 
-                        var reducerDispatcher = scope.ServiceProvider
-                            .GetRequiredService<IRuntimeEventReducerDispatcher>();
+                        var handlerDispatcher = scope.ServiceProvider
+                            .GetRequiredService<IRuntimeEventHandlerDispatcher>();
 
-                        await reducerDispatcher
+                        await handlerDispatcher
                             .DispatchAsync(runtimeEvent, stoppingToken)
                             .ConfigureAwait(false);
                     }

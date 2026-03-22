@@ -1,12 +1,12 @@
 ﻿using MultiplexedRbac.Runtime.Realtime.Events.Abstractions;
 using MultiplexedRbac.Runtime.Realtime.Events;
-using MultiplexedRbac.Runtime.Realtime.Providers.Abstractions;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text;
 using System.Reflection;
+using MultiplexedRbac.Runtime.Realtime.Abstractions;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.WebSockets
+namespace MultiplexedRbac.Runtime.Realtime.Transports.WebSockets
 {
     /// <summary>
     /// WebSocket-based realtime provider.
@@ -14,13 +14,13 @@ namespace MultiplexedRbac.Runtime.Realtime.Providers.WebSockets
     /// Publishes runtime events to connected WebSocket clients using the
     /// routing rules defined by RealtimeTarget.
     /// </summary>
-    public sealed class WebSocketRealtimeProvider : IRealtimeProvider, IRealtimeEndpointMappable
+    public sealed class WebSocketRealtimeTransport : IRealtimeTransport, IRealtimeEndpointMapper
     {
         private readonly WebSocketClientRegistry _registry;
         private static readonly ConcurrentDictionary<Type, string> EventNameCache = new();
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-        public WebSocketRealtimeProvider(WebSocketClientRegistry registry)
+        public WebSocketRealtimeTransport(WebSocketClientRegistry registry)
         {
             _registry = registry;
         }

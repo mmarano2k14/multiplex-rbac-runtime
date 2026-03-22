@@ -1,11 +1,11 @@
 ﻿using MultiplexedRbac.Runtime.Realtime.Abstractions;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
+namespace MultiplexedRbac.Runtime.Realtime.Transports.SignalR
 {
     /// <summary>
     /// Configuration options for the SignalR realtime provider.
     /// </summary>
-    public sealed class SignalRRealtimeProviderOptions
+    public sealed class SignalRRealtimeTransportOptions
     {
         /// <summary>
         /// Name of the CORS policy to apply to the realtime endpoint.

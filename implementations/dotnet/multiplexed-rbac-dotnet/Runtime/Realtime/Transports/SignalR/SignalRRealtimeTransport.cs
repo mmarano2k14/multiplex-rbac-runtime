@@ -1,11 +1,11 @@
 ﻿using Microsoft.AspNetCore.SignalR;
+using MultiplexedRbac.Runtime.Realtime.Abstractions;
 using MultiplexedRbac.Runtime.Realtime.Events;
 using MultiplexedRbac.Runtime.Realtime.Events.Abstractions;
-using MultiplexedRbac.Runtime.Realtime.Providers.Abstractions;
 using System.Collections.Concurrent;
 using System.Reflection;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
+namespace MultiplexedRbac.Runtime.Realtime.Transports.SignalR
 {
     /// <summary>
     /// SignalR-based realtime provider.
@@ -13,14 +13,14 @@ namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
     /// This provider publishes runtime events to SignalR clients and is also
     /// responsible for mapping the SignalR hub endpoint into ASP.NET routing.
     /// </summary>
-    public sealed class SignalRRealtimeProvider : IRealtimeProvider, IRealtimeEndpointMappable
+    public sealed class SignalRRealtimeTransport : IRealtimeTransport, IRealtimeEndpointMapper
     {
         private readonly IHubContext<RealtimeHub> _hubContext;
 
         // Cache public realtime event names to avoid repeated reflection.
         private static readonly ConcurrentDictionary<Type, string> EventNameCache = new();
 
-        public SignalRRealtimeProvider(IHubContext<RealtimeHub> hubContext)
+        public SignalRRealtimeTransport(IHubContext<RealtimeHub> hubContext)
         {
             _hubContext = hubContext ?? throw new ArgumentNullException(nameof(hubContext));
         }

@@ -1,4 +1,4 @@
-﻿using MultiplexedRbac.Runtime.Realtime.Providers.Abstractions;
+﻿using MultiplexedRbac.Runtime.Realtime.Abstractions;
 
 namespace MultiplexedRbac.Runtime.Realtime.DI
 {
@@ -19,7 +19,7 @@ namespace MultiplexedRbac.Runtime.Realtime.DI
         {
             ArgumentNullException.ThrowIfNull(endpoints);
 
-            var providerHost = endpoints.ServiceProvider.GetRequiredService<IRealtimeProviderHost>();
+            var providerHost = endpoints.ServiceProvider.GetRequiredService<IRealtimeTransportHost>();
 
             var builder = providerHost.MapEndpoints(endpoints, path);
 

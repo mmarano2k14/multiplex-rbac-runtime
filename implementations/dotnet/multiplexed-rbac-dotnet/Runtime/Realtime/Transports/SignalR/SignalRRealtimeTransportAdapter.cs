@@ -1,7 +1,8 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MultiplexedRbac.Runtime.Realtime.Abstractions;
+using MultiplexedRbac.Runtime.Realtime.Context;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
+namespace MultiplexedRbac.Runtime.Realtime.Transports.SignalR
 {
     /// <summary>
     /// SignalR adapter that bridges the transport-agnostic
@@ -10,11 +11,11 @@ namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
     /// This keeps the runtime abstraction independent from SignalR while still
     /// allowing Clients.User(userId) routing to work.
     /// </summary>
-    public sealed class SignalRUserIdProviderAdapter : IUserIdProvider
+    public sealed class SignalRRealtimeTransportAdapter : IUserIdProvider
     {
         private readonly IRealtimeUserIdentifierResolver _resolver;
 
-        public SignalRUserIdProviderAdapter(IRealtimeUserIdentifierResolver resolver)
+        public SignalRRealtimeTransportAdapter(IRealtimeUserIdentifierResolver resolver)
         {
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         }

@@ -1,6 +1,6 @@
 ﻿using MultiplexedRbac.Runtime.Realtime.Events;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.Abstractions
+namespace MultiplexedRbac.Runtime.Realtime.Abstractions
 {
     /// <summary>
     /// Represents a realtime transport capable of publishing runtime events
@@ -9,7 +9,7 @@ namespace MultiplexedRbac.Runtime.Realtime.Providers.Abstractions
     /// Implementations may use SignalR, raw WebSockets, SSE, or any other
     /// realtime communication mechanism.
     /// </summary>
-    public interface IRealtimeProvider
+    public interface IRealtimeTransport
     {
         /// <summary>
         /// Publishes a runtime event through the underlying realtime transport.

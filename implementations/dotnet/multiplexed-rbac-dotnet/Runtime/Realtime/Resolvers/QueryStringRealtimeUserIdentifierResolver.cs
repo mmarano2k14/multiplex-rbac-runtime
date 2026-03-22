@@ -1,4 +1,5 @@
 ﻿using MultiplexedRbac.Runtime.Realtime.Abstractions;
+using MultiplexedRbac.Runtime.Realtime.Context;
 
 namespace MultiplexedRbac.Runtime.Realtime.Providers.SignalR
 {

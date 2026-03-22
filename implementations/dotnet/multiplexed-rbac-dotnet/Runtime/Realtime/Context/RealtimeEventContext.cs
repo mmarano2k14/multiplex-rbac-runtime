@@ -2,7 +2,7 @@
 using MultiplexedRbac.Runtime.Realtime.Events.Abstractions;
 using MultiplexedRbac.Runtime.Realtime.Events.Runtime;
 
-namespace MultiplexedRbac.Runtime.Realtime
+namespace MultiplexedRbac.Runtime.Realtime.Context
 {
     public sealed class RealtimeEventContext : IRealtimeEventContext
     {

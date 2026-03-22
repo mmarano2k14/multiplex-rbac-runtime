@@ -1,7 +1,7 @@
 ﻿using System.Net.WebSockets;
 using System.Text;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers.WebSockets
+namespace MultiplexedRbac.Runtime.Realtime.Transports.WebSockets
 {
     /// <summary>
     /// Maps and handles the raw WebSocket realtime endpoint.

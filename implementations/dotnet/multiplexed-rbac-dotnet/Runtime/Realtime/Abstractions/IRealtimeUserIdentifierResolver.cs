@@ -1,4 +1,6 @@
-﻿namespace MultiplexedRbac.Runtime.Realtime.Abstractions
+﻿using MultiplexedRbac.Runtime.Realtime.Context;
+
+namespace MultiplexedRbac.Runtime.Realtime.Abstractions
 {
     /// <summary>
     /// Resolves a logical realtime user identifier from a transport-agnostic

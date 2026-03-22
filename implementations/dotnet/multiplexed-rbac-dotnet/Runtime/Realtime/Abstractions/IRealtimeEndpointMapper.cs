@@ -1,4 +1,4 @@
-﻿namespace MultiplexedRbac.Runtime.Realtime.Providers.Abstractions
+﻿namespace MultiplexedRbac.Runtime.Realtime.Abstractions
 {
     /// <summary>
     /// Optional contract implemented by realtime providers that need to expose
@@ -9,7 +9,7 @@
     /// - WebSocket provider maps a websocket endpoint
     /// - Null provider does nothing and does not implement this contract
     /// </summary>
-    public interface IRealtimeEndpointMappable
+    public interface IRealtimeEndpointMapper
     {
         /// <summary>
         /// Maps provider-specific endpoints into the ASP.NET endpoint pipeline.

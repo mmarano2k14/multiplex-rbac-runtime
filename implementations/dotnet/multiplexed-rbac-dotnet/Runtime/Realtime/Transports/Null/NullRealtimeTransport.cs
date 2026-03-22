@@ -1,7 +1,7 @@
-﻿using MultiplexedRbac.Runtime.Realtime.Events;
-using MultiplexedRbac.Runtime.Realtime.Providers.Abstractions;
+﻿using MultiplexedRbac.Runtime.Realtime.Abstractions;
+using MultiplexedRbac.Runtime.Realtime.Events;
 
-namespace MultiplexedRbac.Runtime.Realtime.Providers
+namespace MultiplexedRbac.Runtime.Realtime.Transports.Null
 {
     /// <summary>
     /// Default no-op realtime provider.
@@ -10,7 +10,7 @@ namespace MultiplexedRbac.Runtime.Realtime.Providers
     /// This allows the runtime to keep the same event pipeline without
     /// requiring conditional checks everywhere.
     /// </summary>
-    public sealed class NullRealtimeProvider : IRealtimeProvider
+    public sealed class NullRealtimeTransport : IRealtimeTransport
     {
         /// <summary>
         /// Ignores the runtime event.
