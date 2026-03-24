@@ -6,6 +6,61 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.3] - 2026-03-24
+
+### Added
+
+#### AI Execution Runtime (V1)
+
+- Introduced `AiExecutionEngine` as the core orchestrator for deterministic AI pipeline execution
+- Added `CreateAsync(...)` to initialize AI executions from HTTP-bound RBAC context
+- Added `ExecuteNextAsync(...)` as the primary step execution primitive (distributed-ready)
+- Added `ExecuteAllAsync(...)` helper for sequential/local execution flows
+
+#### Execution Context Isolation
+
+- Introduced AI-owned context seeding via `IContextStore.SeedAsync(...)`
+- Ensured strict separation between HTTP context and AI execution context
+- Added `ExecutionContextSnapshot` to preserve original request identity (TenantId, UserId, ContextKey)
+
+#### Step-Based Execution Model
+
+- Introduced step-driven execution using `IAiStep`
+- Dynamic step resolution via `IServiceProvider`
+- Sequential execution using `CurrentStepIndex` cursor model
+- Added execution state tracking:
+  - `CompletedSteps`
+  - `Status` (Pending, Running, Completed, Failed)
+  - `Version` for optimistic concurrency
+
+#### Context Lifecycle Management
+
+- Context retrieval per step via `IContextStore.GetAsync(...)`
+- Injection into `IExecutionContextAccessor` (AsyncLocal)
+- Guaranteed cleanup via `Accessor.Clear()`
+- Context rotation after each step using `RotateAsync(...)`
+- TTL-based rotation for isolation and replay protection
+
+#### Deterministic Execution Guarantees
+
+- Introduced `ExecutionStepKey` for step-level concurrency control
+- Enabled safe re-execution and recovery patterns
+- Designed for idempotent and resumable execution flows
+
+---
+
+### Notes
+
+- `ExecuteNextAsync(...)` is designed as the primary entry point for future distributed/background execution
+- `ExecuteAllAsync(...)` is intended for local/testing scenarios only
+- Future iterations will introduce:
+  - distributed execution (workers / message bus)
+  - retry and conflict resolution strategies
+  - step-level locking and idempotency guarantees
+  - production-grade safe rotation strategy
+
+---
+
 ## [1.0.1.2] - 2026-03-22
 
 ### Added

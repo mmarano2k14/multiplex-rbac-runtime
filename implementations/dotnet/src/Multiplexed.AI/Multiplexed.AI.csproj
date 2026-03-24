@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Multiplexed.Abstractions\Multiplexed.Abstractions.csproj" />
+    <ProjectReference Include="..\Multiplexed.Rbac.Core\Multiplexed.Rbac.Core.csproj" />
   </ItemGroup>
 
 </Project>

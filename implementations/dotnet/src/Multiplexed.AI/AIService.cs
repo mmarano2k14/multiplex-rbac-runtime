@@ -12,9 +12,11 @@ namespace Multiplexed.AI
             _provider = provider;
         }
 
-        public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default)
+        public Task<AIResponse> CompleteAsync(
+            AIRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return _provider.CompleteAsync(prompt, cancellationToken);
+            return _provider.CompleteAsync(request, cancellationToken);
         }
     }
 }

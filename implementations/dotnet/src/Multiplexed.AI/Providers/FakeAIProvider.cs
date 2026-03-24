@@ -4,9 +4,16 @@ namespace Multiplexed.AI.Providers
 {
     public sealed class FakeAIProvider : IAIProvider
     {
-        public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default)
+        public Task<AIResponse> CompleteAsync(
+            AIRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return Task.FromResult($"[FAKE AI RESPONSE] {prompt}");
+            return Task.FromResult(new AIResponse
+            {
+                Content = $"[FAKE AI RESPONSE] {request.Prompt}",
+                Model = "fake",
+                Duration = TimeSpan.FromMilliseconds(10)
+            });
         }
     }
 }

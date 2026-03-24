@@ -2,6 +2,8 @@
 {
     public interface IAIProvider
     {
-        Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default);
+        Task<AIResponse> CompleteAsync(
+            AIRequest request,
+            CancellationToken cancellationToken = default);
     }
 }

@@ -1,7 +1,11 @@
-﻿namespace Multiplexed.AI.Abstractions
+﻿using Multiplexed.Abstractions.AI;
+
+namespace Multiplexed.AI.Abstractions
 {
     public interface IAIService
     {
-        Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default);
+        Task<AIResponse> CompleteAsync(
+            AIRequest request,
+            CancellationToken cancellationToken = default);
     }
 }
