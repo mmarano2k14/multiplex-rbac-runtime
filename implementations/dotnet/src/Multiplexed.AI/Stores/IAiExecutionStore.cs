@@ -1,4 +1,5 @@
-﻿using Multiplexed.AI.Runtime.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.AI.Runtime.Execution;
 
 namespace Multiplexed.AI.Stores
 {

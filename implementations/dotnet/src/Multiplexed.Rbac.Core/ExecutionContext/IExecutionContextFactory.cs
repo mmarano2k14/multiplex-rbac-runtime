@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Rbac.Core.ExecutionContext
+﻿using Multiplexed.Abstractions.Core.ExecutionContext;
+
+namespace Multiplexed.Rbac.Core.ExecutionContext
 {
     /// <summary>
     /// Creates durable execution context snapshots from live runtime contexts.

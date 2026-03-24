@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Rbac.Core.ExecutionContext
+﻿namespace Multiplexed.Abstractions.Core.ExecutionContext
 {
     public class NamespaceEntry
     {

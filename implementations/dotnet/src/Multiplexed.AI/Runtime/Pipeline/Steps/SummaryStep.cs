@@ -1,4 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI;
+using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions;
 using System;
 using System.Collections.Generic;
@@ -21,7 +23,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
         public string Name => "summary";
 
         public async Task<AiStepResult> ExecuteAsync(
-            AiStepContext context,
+            AiExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             // Retrieve input from context

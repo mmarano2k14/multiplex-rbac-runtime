@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+﻿using Multiplexed.Abstractions.Core.ExecutionContext;
 
 namespace Multiplexed.Rbac.Core.ExecutionContext
 {

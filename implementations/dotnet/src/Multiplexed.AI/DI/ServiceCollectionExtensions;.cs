@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime.Execution;

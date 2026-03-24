@@ -1,13 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace Multiplexed.Rbac.Core.ExecutionContext
+﻿namespace Multiplexed.Abstractions.Core.ExecutionContext
 {
-    /// <summary>
-    /// Represents a durable snapshot of an execution context.
-    /// This snapshot is intended to be persisted and later used to
-    /// reconstruct a runtime execution context outside the original HTTP request.
-    /// </summary>
     public sealed class ExecutionContextSnapshot
     {
         /// <summary>
