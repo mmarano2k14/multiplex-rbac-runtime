@@ -6,6 +6,51 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.4] - 2026-03-24
+
+### Added
+
+#### Execution State Separation (Record / State Model)
+
+- Introduced `AiExecutionState` to isolate mutable execution data from orchestration metadata
+- Refactored `AiExecutionRecord` to focus on orchestration, step tracking, and execution lifecycle
+- Decoupled execution state (`Data`, `Metadata`) from orchestration concerns
+- Enabled cleaner separation for future distributed execution and replay scenarios
+
+#### Composite AI Execution Store
+
+- Introduced `IAiExecutionStore` abstraction for unified execution persistence
+- Implemented:
+  - `RedisAiExecutionStore` as primary persistence layer
+  - `MemoryAiExecutionStore` as fallback layer
+  - `AiExecutionStore` as composite store with fallback strategy
+- Supports resilient execution state storage with Redis-first strategy and in-memory fallback
+
+#### Record + State Persistence Contract
+
+- Updated store contract to handle both `AiExecutionRecord` and `AiExecutionState`
+- Added:
+  - `GetRecordAsync(...)`
+  - `GetStateAsync(...)`
+  - `TryUpdateAsync(record, state, expectedStepKey)`
+- Ensures atomic-like updates across orchestration and execution state
+
+#### Improved Execution Consistency
+
+- Execution updates now persist both record and state together
+- Prevents desynchronization between orchestration flow and execution data
+- Strengthens deterministic guarantees for step transitions and recovery
+
+---
+
+### Notes
+
+- This version finalizes the V1 execution model with proper separation of concerns between orchestration and execution state
+- The system is now ready for distributed execution (worker-based) without structural refactoring
+- Context rotation remains part of the RBAC execution model but is not required for AI execution flows
+
+---
+
 ## [1.0.1.3] - 2026-03-24
 
 ### Added

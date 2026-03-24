@@ -71,6 +71,7 @@ namespace Multiplexed.Rbac.Core.Runtime.DI
             // (If it is AsyncLocal-based, Singleton is fine too - but don't change it here.)
             //services.AddScoped<IExecutionContextAccessor, ExecutionContextAccessor>();
             services.AddSingleton<IExecutionContextAccessor, ExecutionContextAccessor>();
+            services.AddSingleton<IExecutionContextFactory, ExecutionContextFactory>();
 
             // Proxy + dynamic registration (Part 4)
             // By default: scan calling assembly? No. We keep this explicit per host:
@@ -106,6 +107,7 @@ namespace Multiplexed.Rbac.Core.Runtime.DI
             // ------------------------------------------------------------
             // 4) Stores
             // ------------------------------------------------------------
+           
             services.AddSingleton<RedisContextStore>();
 
             services.AddSingleton(sp =>

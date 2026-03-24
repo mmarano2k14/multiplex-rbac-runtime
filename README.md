@@ -1,12 +1,25 @@
-# Multiplexed RBAC Runtime
+# Multiplexed Runtime — Deterministic Authorization & AI Execution
 
 ## Deterministic Authorization Runtime for High-Concurrency SaaS Systems
 
-> A deterministic authorization runtime designed to replace inconsistent RBAC implementations in distributed systems.
+> A deterministic runtime designed to eliminate inconsistent authorization and execution behaviors in distributed systems.
 
-Multiplexed RBAC is a **deterministic authorization runtime** designed for large-scale, multi-tenant platforms.
+Multiplexed RBAC is a **deterministic authorization runtime** built for large-scale, multi-tenant platforms operating under high concurrency.
 
-It introduces **Tenant Resource Names (TRN)**, **distributed context rotation**, and a **runtime enforcement model** to ensure consistent, safe, and scalable authorization under high concurrency.
+It introduces a structured execution model based on:
+
+- **Tenant Resource Names (TRN)**
+- **distributed context rotation**
+- **runtime-level enforcement**
+
+This ensures that authorization decisions remain:
+
+- consistent
+- safe under concurrency
+- fully observable
+- independent from request lifecycles
+
+---
 
 Unlike traditional RBAC systems, this architecture:
 
@@ -14,7 +27,16 @@ Unlike traditional RBAC systems, this architecture:
 - supports **safe concurrent request handling**
 - enables **distributed authorization state**
 - provides **real-time observability**
-- remains **fully portable across runtimes**
+- remains **portable across runtimes**
+
+---
+
+This project extends these deterministic runtime principles beyond authorization into:
+
+- distributed execution workflows
+- AI-driven orchestration pipelines
+
+forming a unified model for building **reliable, observable, and scalable runtime systems**.
 
 ---
 
@@ -26,6 +48,189 @@ Unlike traditional RBAC systems, this architecture:
 - 📡 Real-time observability (SignalR / WebSocket)
 - 🧪 Scenario-based load testing (burst, concurrency, wave patterns)
 - 🧠 AI-ready runtime analysis (planned)
+- 🧠 Deterministic AI execution engine (resumable, step-based orchestration)
+
+---
+
+> Designed for engineers building complex SaaS platforms where authorization must remain **correct, observable, and scalable under load**.
+
+---
+
+This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
+
+[![Version](https://img.shields.io/badge/Version-1.0.1.4-blue)](./CHANGELOG.md)
+[![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
+
+![Status](https://img.shields.io/badge/Status-active%20development-orange)
+![Deterministic Runtime](https://img.shields.io/badge/Runtime-deterministic-brightgreen)
+![Concurrency](https://img.shields.io/badge/Concurrency-safe-blue)
+![AI Runtime](https://img.shields.io/badge/AI-Deterministic%20Execution-purple)
+![Redis](https://img.shields.io/badge/Redis-required-red)
+![RabbitMQ](https://img.shields.io/badge/RabbitMQ-required-orange)
+![NServiceBus](https://img.shields.io/badge/NServiceBus-license-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+**This project is still under active development. Some features may be incomplete and UI or functional issues may occur.**
+---
+
+# Deterministic AI Execution Engine (in progress)
+
+In addition to the RBAC runtime, this project introduces a **deterministic AI execution engine** designed for orchestrating AI workflows in a safe, resumable, and distributed-ready manner.
+
+This engine is not a simple AI wrapper.
+
+It provides a structured execution model similar to workflow engines, adapted for AI-driven pipelines.
+
+## Core Concepts
+
+### Execution Orchestration
+
+- Step-based execution using `IAiStep`
+- Sequential and resumable execution flows
+- Multiple execution modes:
+  - `ExecuteAsync(...)`
+  - `ExecuteNextAsync(...)`
+  - `ExecuteAllAsync(...)`
+
+---
+
+### Record / State Separation
+
+The runtime separates orchestration from execution state:
+
+- `AiExecutionRecord`
+  - execution lifecycle
+  - step tracking
+  - status and progression
+
+- `AiExecutionState`
+  - mutable data
+  - step inputs/outputs
+  - metadata
+
+This separation enables:
+
+- clean replay and recovery
+- distributed execution support
+- safe state mutation without affecting orchestration logic
+
+---
+
+### Deterministic Execution Model
+
+- Step transitions are validated using `ExecutionStepKey`
+- Optimistic concurrency prevents race conditions
+- Execution is designed to be:
+  - idempotent
+  - resumable
+  - deterministic
+
+---
+
+### Context Isolation
+
+Each AI execution runs inside an **AI-owned execution context**:
+
+- cloned from the original request context
+- persisted in the distributed context store
+- rehydrated at each step execution
+
+This guarantees:
+
+- strict isolation
+- consistent identity propagation
+- no dependency on HTTP lifecycle
+
+---
+
+### Composite Execution Store
+
+The AI runtime uses a composite persistence model:
+
+- Redis (primary store)
+- Memory fallback (resilience)
+
+This enables:
+
+- durable execution state
+- safe recovery after failure
+- distributed orchestration readiness
+
+---
+
+### Observability
+
+Execution lifecycle is observable through:
+
+- step start / success / failure logs
+- structured realtime events
+- integration with SignalR / WebSocket
+
+---
+
+## Positioning
+
+This AI execution engine behaves similarly to:
+
+- workflow engines (Temporal, Durable Functions)
+- orchestration runtimes
+
+But is specifically designed for:
+
+- AI pipelines
+- prompt orchestration
+- tool chaining
+- deterministic execution under load
+
+---
+
+## Why It Matters
+
+Most AI integrations today are:
+
+- non-deterministic
+- tightly coupled to request lifecycles
+- difficult to observe and debug
+
+This runtime applies the same deterministic principles used in distributed systems to AI execution:
+
+- controlled state transitions
+- explicit execution flow
+- resumable orchestration
+
+Bringing reliability to AI workflows.
+
+---
+
+## AI Execution Flow
+
+```text
+Client Request
+      │
+      ▼
+AI Orchestrator
+      │
+      ▼
+Load / Create Execution Record
+      │
+      ▼
+Resolve Execution Context
+      │
+      ▼
+Execute Step (IAiStep)
+      │
+      ├──► Update Execution State
+      │
+      ├──► Persist (Redis / Memory)
+      │
+      └──► Emit Realtime Events
+      │
+      ▼
+Next Step Decision
+      │
+      ├──► Continue
+      └──► Complete
+```
 
 ---
 
@@ -39,27 +244,8 @@ It is a **reference architecture** showing how to build:
 - a **deterministic execution model**
 - a **safe concurrency system**
 - an **observable platform layer**
-
----
-
-> Designed for engineers building complex SaaS platforms where authorization must remain **correct, observable, and scalable under load**.
-
----
-
-This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
-
-[![Version](https://img.shields.io/badge/Version-1.0.1.3-blue)](./CHANGELOG.md)
-[![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
-
-![Status](https://img.shields.io/badge/Status-active%20development-orange)
-![Deterministic Runtime](https://img.shields.io/badge/Runtime-deterministic-brightgreen)
-![Concurrency](https://img.shields.io/badge/Concurrency-safe-blue)
-![Redis](https://img.shields.io/badge/Redis-required-red)
-![RabbitMQ](https://img.shields.io/badge/RabbitMQ-required-orange)
-![NServiceBus](https://img.shields.io/badge/NServiceBus-license-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-
-**This project is still under active development. Some features may be incomplete and UI or functional issues may occur.**
+- a **deterministic AI execution runtime**
+- a **resumable and distributed-ready workflow engine**
 
 ---
 
@@ -541,13 +727,14 @@ Future runtimes:
 
 Future improvements:
 
-* Wildcard rules
-* UI updates
-* Consolidated global UI state
-* AI orchestration layer (RAG-based runtime analysis)
-* BurstRun analysis engine for scenario recommendation and anomaly detection
-* AI-assisted test scenario generation based on runtime results
-
+* Wildcard rules TRN
+* Distributed execution (worker-based orchestration)
+* Retry and failure recovery strategies
+* Step-level idempotency guarantees
+* Advanced execution tracing and visualization
+* Multi-provider AI integration (OpenAI, Claude, etc.)
+* Prompt orchestration and tool chaining
+* AI-assisted runtime analysis and optimization
 ---
 
 # Requirements
@@ -778,6 +965,8 @@ By modeling authorization using **TRN (Tenant Resource Names)** and **rotational
 * deterministic
 * scalable
 * safe across distributed systems
+
+This project extends these principles beyond authorization into AI execution, demonstrating how deterministic runtime models can be applied to orchestrate complex AI workflows safely and consistently.
 
 ---
 

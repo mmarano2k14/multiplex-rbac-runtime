@@ -1,6 +1,9 @@
-﻿using Multiplexed.Abstractions.Runtime;
+﻿using System;
+using System.Linq;
+using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Steps;
+using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 
 namespace Multiplexed.AI.Runtime.Execution
@@ -13,7 +16,7 @@ namespace Multiplexed.AI.Runtime.Execution
     /// - seed a durable AI-owned RBAC context
     /// - execute one step at a time safely
     /// - rotate the RBAC context key between steps
-    /// - update persisted execution state
+    /// - update persisted execution record and execution state
     /// </summary>
     public sealed class AiExecutionEngine
     {
@@ -22,46 +25,35 @@ namespace Multiplexed.AI.Runtime.Execution
         private readonly IContextStore _contextStore;
         private readonly IRuntimeEventContext _realtime;
         private readonly IExecutionContextAccessor _accessor;
+        private readonly IExecutionContextFactory _contextFactory;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="AiExecutionEngine"/> class.
-        /// </summary>
-        /// <param name="steps">Registered AI steps available for execution.</param>
-        /// <param name="store">Persistent AI execution store.</param>
-        /// <param name="contextStore">RBAC context store used to resolve and rotate execution contexts.</param>
-        /// <param name="realtime">Runtime event context used for tracing and diagnostics.</param>
-        /// <param name="accessor">Execution context accessor used to bind the RBAC context during step execution.</param>
         public AiExecutionEngine(
             IEnumerable<IAiStep> steps,
             IAiExecutionStore store,
             IContextStore contextStore,
             IRuntimeEventContext realtime,
-            IExecutionContextAccessor accessor)
+            IExecutionContextAccessor accessor,
+            IExecutionContextFactory contextFactory)
         {
             ArgumentNullException.ThrowIfNull(steps);
             ArgumentNullException.ThrowIfNull(store);
             ArgumentNullException.ThrowIfNull(contextStore);
             ArgumentNullException.ThrowIfNull(realtime);
             ArgumentNullException.ThrowIfNull(accessor);
+            ArgumentNullException.ThrowIfNull(contextFactory);
+
 
             _steps = steps.ToList();
             _store = store;
             _contextStore = contextStore;
             _realtime = realtime;
             _accessor = accessor;
+            _contextFactory = contextFactory;
         }
 
         /// <summary>
-        /// Creates a new AI execution record and seeds a new durable AI-owned RBAC context.
-        /// 
-        /// IMPORTANT:
-        /// - The original HTTP context key must not be reused directly.
-        /// - A fresh AI context is created and seeded into the RBAC context store.
-        /// - The returned ContextKey becomes the only valid runtime key for future AI steps.
+        /// Creates a new AI execution and a separate persisted execution state.
         /// </summary>
-        /// <param name="input">Initial input data for the AI execution.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>Created AI execution record.</returns>
         public async Task<AiExecutionRecord> CreateAsync(
             string input,
             CancellationToken ct = default)
@@ -75,16 +67,7 @@ namespace Multiplexed.AI.Runtime.Execution
             var firstStep = _steps.FirstOrDefault()
                 ?? throw new InvalidOperationException("No AI steps are registered.");
 
-            var aiContext = new Rbac.Core.ExecutionContext.ExecutionContext
-            {
-                ContextKey = string.Empty,
-                TenantId = current.TenantId,
-                TenantGroupId = current.TenantGroupId,
-                UserId = current.UserId,
-                Project = current.Project,
-                CurrentNamespace = current.CurrentNamespace,
-                Namespaces = current.Namespaces?.ToList() ?? []
-            };
+            var aiContext = _contextFactory.CreateCopy(current, String.Empty);
 
             var newKey = await _contextStore.SeedAsync(aiContext);
 
@@ -93,22 +76,17 @@ namespace Multiplexed.AI.Runtime.Execution
                 ContextKey = newKey,
                 CurrentStep = firstStep.Name,
                 Status = "Pending",
-                ExecutionContextSnapshot = new ExecutionContextSnapshot
-                {
-                    ContextKey = current.ContextKey,
-                    TenantId = current.TenantId,
-                    TenantGroupId = current.TenantGroupId,
-                    UserId = current.UserId,
-                    Project = current.Project,
-                    CurrentNamespace = current.CurrentNamespace,
-                    Namespaces = current.Namespaces?.ToList() ?? [],
-                    CreatedAtUtc = DateTime.UtcNow
-                }
+                ExecutionContextSnapshot = _contextFactory.CreateSnapshot(current)
             };
 
-            record.Data["input"] = input;
+            var state = new AiExecutionState
+            {
+                ExecutionId = record.ExecutionId
+            };
 
-            await _store.CreateAsync(record, ct);
+            state.Data["input"] = input;
+
+            await _store.CreateAsync(record, state, ct);
 
             _realtime.LogInfo(
                 message: "AI execution created.",
@@ -124,47 +102,13 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Executes the full AI pipeline from the current step until completion.
-        /// 
-        /// IMPORTANT:
-        /// - This method repeatedly calls ExecuteNextAsync.
-        /// - It is useful for local or synchronous execution flows.
-        /// - For distributed/background execution, ExecuteNextAsync should remain the primary entry point.
-        /// </summary>
-        /// <param name="executionId">Execution identifier.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>Final execution record.</returns>
-        public async Task<AiExecutionRecord> ExecuteAllAsync(
-            string executionId,
-            CancellationToken ct = default)
-        {
-            if (string.IsNullOrWhiteSpace(executionId))
-                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
-
-            AiExecutionRecord record;
-
-            do
-            {
-                record = await ExecuteNextAsync(executionId, ct);
-            }
-            while (!string.Equals(record.Status, "Completed", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(record.Status, "Failed", StringComparison.OrdinalIgnoreCase));
-
-            return record;
-        }
-
-        /// <summary>
         /// Executes the next step of the specified AI execution.
         /// 
         /// IMPORTANT:
-        /// - The RBAC execution context is always loaded from the store using the current ContextKey.
-        /// - The snapshot is not used for execution.
-        /// - The context key is rotated after each successful step.
-        /// - The execution store is updated using optimistic concurrency via ExecutionStepKey.
+        /// - The live RBAC execution context is always loaded from the RBAC store using ContextKey.
+        /// - Execution state is loaded from the AI execution store.
+        /// - ContextKey is rotated after each successful step.
         /// </summary>
-        /// <param name="executionId">Execution identifier.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>Updated execution record.</returns>
         public async Task<AiExecutionRecord> ExecuteNextAsync(
             string executionId,
             CancellationToken ct = default)
@@ -172,8 +116,11 @@ namespace Multiplexed.AI.Runtime.Execution
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var record = await _store.GetAsync(executionId, ct)
+            var record = await _store.GetRecordAsync(executionId, ct)
                 ?? throw new InvalidOperationException("Execution not found.");
+
+            var state = await _store.GetStateAsync(executionId, ct)
+                ?? throw new InvalidOperationException("Execution state not found.");
 
             if (string.Equals(record.Status, "Completed", StringComparison.OrdinalIgnoreCase))
                 return record;
@@ -181,7 +128,7 @@ namespace Multiplexed.AI.Runtime.Execution
             var step = ResolveStep(record.CurrentStep);
             var expectedStepKey = record.ExecutionStepKey;
             var context = await LoadContext(record.ContextKey);
-            var pipelineContext = BuildPipelineContext(record);
+            var pipelineContext = BuildPipelineContext(record.ExecutionId, state);
 
             _accessor.Set(context);
 
@@ -206,6 +153,13 @@ namespace Multiplexed.AI.Runtime.Execution
                         Exception = ex.Message
                     });
 
+                await _store.TryUpdateAsync(
+                    record.ExecutionId,
+                    expectedStepKey,
+                    record,
+                    state,
+                    ct);
+
                 throw;
             }
             finally
@@ -228,10 +182,15 @@ namespace Multiplexed.AI.Runtime.Execution
                         result.Error
                     });
 
+                await _store.TryUpdateAsync(record.ExecutionId, expectedStepKey, record, state, ct);
                 return record;
             }
 
-            MergeResult(record, pipelineContext, result);
+            MergeResult(state, pipelineContext, result);
+
+            record.CompletedSteps.Add(record.CurrentStep);
+            record.Version++;
+
             await RotateContextAsync(record, ct);
             MoveNext(record, step);
 
@@ -239,6 +198,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 record.ExecutionId,
                 expectedStepKey,
                 record,
+                state,
                 ct);
 
             if (!updated)
@@ -258,10 +218,27 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
+        /// Executes the full pipeline from the current step until completion or failure.
+        /// </summary>
+        public async Task<AiExecutionRecord> ExecuteAllAsync(
+            string executionId,
+            CancellationToken ct = default)
+        {
+            AiExecutionRecord record;
+
+            do
+            {
+                record = await ExecuteNextAsync(executionId, ct);
+            }
+            while (!string.Equals(record.Status, "Completed", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(record.Status, "Failed", StringComparison.OrdinalIgnoreCase));
+
+            return record;
+        }
+
+        /// <summary>
         /// Resolves the current step by name.
         /// </summary>
-        /// <param name="stepName">Step name to resolve.</param>
-        /// <returns>The matching step instance.</returns>
         private IAiStep ResolveStep(string stepName)
         {
             return _steps.FirstOrDefault(x =>
@@ -270,10 +247,8 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Loads the current RBAC execution context from the shared context store.
+        /// Loads the current RBAC execution context from the shared RBAC context store.
         /// </summary>
-        /// <param name="key">RBAC context key.</param>
-        /// <returns>Live execution context.</returns>
         private async Task<Rbac.Core.ExecutionContext.ExecutionContext> LoadContext(string key)
         {
             var context = await _contextStore.GetAsync(key);
@@ -285,34 +260,29 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Builds a fresh pipeline context from the persisted execution record.
+        /// Builds a fresh pipeline context from the persisted execution state.
         /// </summary>
-        /// <param name="record">Persisted execution record.</param>
-        /// <returns>Pipeline context ready for step execution.</returns>
-        private AiStepContext BuildPipelineContext(AiExecutionRecord record)
+        private AiStepContext BuildPipelineContext(
+            string executionId,
+            AiExecutionState state)
         {
             var context = new AiStepContext
             {
-                ExecutionId = record.ExecutionId
+                ExecutionId = executionId
             };
 
-            foreach (var entry in record.Data)
+            foreach (var entry in state.Data)
                 context.Data[entry.Key] = entry.Value;
 
-            foreach (var entry in record.Metadata)
+            foreach (var entry in state.Metadata)
                 context.Metadata[entry.Key] = entry.Value;
 
             return context;
         }
 
         /// <summary>
-        /// Executes the specified step and logs the start of execution.
+        /// Executes the specified step and emits a start event.
         /// </summary>
-        /// <param name="step">Step to execute.</param>
-        /// <param name="record">Current execution record.</param>
-        /// <param name="context">Pipeline context.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>Step result.</returns>
         private async Task<AiStepResult> ExecuteStep(
             IAiStep step,
             AiExecutionRecord record,
@@ -332,30 +302,24 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Merges step output into the persisted execution state.
+        /// Merges the step result into the persisted execution state.
         /// </summary>
-        /// <param name="record">Execution record to update.</param>
-        /// <param name="context">Pipeline context containing merged data.</param>
-        /// <param name="result">Step result.</param>
         private void MergeResult(
-            AiExecutionRecord record,
+            AiExecutionState state,
             AiStepContext context,
             AiStepResult result)
         {
             foreach (var entry in result.Data)
                 context.Data[entry.Key] = entry.Value;
 
-            record.Data = context.Data;
-            record.Metadata = context.Metadata;
-            record.CompletedSteps.Add(record.CurrentStep);
-            record.Version++;
+            state.Data = context.Data;
+            state.Metadata = context.Metadata;
+            state.UpdatedAtUtc = DateTime.UtcNow;
         }
 
         /// <summary>
         /// Rotates the RBAC context key after successful step execution.
         /// </summary>
-        /// <param name="record">Execution record to update.</param>
-        /// <param name="ct">Cancellation token.</param>
         private async Task RotateContextAsync(
             AiExecutionRecord record,
             CancellationToken ct)
@@ -372,8 +336,6 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <summary>
         /// Advances the execution to the next step or marks it as completed.
         /// </summary>
-        /// <param name="record">Execution record to update.</param>
-        /// <param name="step">Step that has just completed.</param>
         private void MoveNext(
             AiExecutionRecord record,
             IAiStep step)
