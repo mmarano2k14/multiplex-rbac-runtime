@@ -39,7 +39,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             IAiRuntimeLogger logger)
         {
 
-            ArgumentNullException.ThrowIfNull(_exceptionClassifier);
+            ArgumentNullException.ThrowIfNull(exceptionClassifier);
             ArgumentNullException.ThrowIfNull(logger);
 
             _exceptionClassifier = exceptionClassifier;

@@ -6,6 +6,92 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.5] - 2026-03-25
+
+### Added
+
+#### Execution Engine & Runtime Abstractions
+
+- Introduced `IAiExecutionEngine` as the central orchestration entry point for AI execution
+- Added `IAiStepExecutor` abstraction to isolate step execution logic from pipeline orchestration
+- Introduced `AiExecutionStatus` enum to standardize execution lifecycle states (Running, Completed, Failed)
+- Added `AiRetryPolicyAttribute` to enable declarative retry configuration at step level
+
+#### Retry & Resilience
+
+- Introduced `IAiRetryExceptionClassifier` to centralize retry decision logic
+- Added default retry classification for common transient failures:
+  - `TimeoutException`
+  - `HttpRequestException`
+  - `TaskCanceledException`
+- Enabled deterministic retry handling within `AiStepExecutor`
+- Improved failure handling to clearly distinguish retryable vs terminal errors
+
+#### Structured Runtime Logging
+
+- Introduced `IAiRuntimeLogger` as a centralized logging facade for the AI runtime
+- Added specialized loggers:
+  - `IAiExecutionEngineLogger`
+  - `IAiPipelineLogger`
+  - `IAiPipelineServiceLogger`
+  - `IAiStepExecutorLogger`
+- Enabled clear separation of logging concerns across execution layers
+- Prepared logging architecture for integration with realtime observability providers
+
+#### Test Coverage
+
+- Added full unit test coverage for:
+  - Execution Engine lifecycle (`CreateAsync`, `ExecuteNextAsync`, `ExecuteAllAsync`)
+  - Step execution flow and completion behavior
+  - Retry logic with transient failure simulation
+  - Concurrency scenarios and execution stability
+- Introduced in-memory test implementations for:
+  - Execution store
+  - Context store
+  - Step executor and steps
+- Ensured deterministic behavior under test conditions
+
+---
+
+### Changed
+
+#### Runtime Architecture Refactoring
+
+- Refactored AI execution flow to clearly separate:
+  - Execution Engine (orchestration)
+  - Pipeline (step sequencing)
+  - Step Executor (execution + retry behavior)
+- Improved modularity and extensibility of the runtime
+- Simplified dependency injection by introducing a single logging entry point (`IAiRuntimeLogger`)
+
+#### Execution Flow Improvements
+
+- Standardized step progression using `CurrentStepIndex`
+- Improved terminal state handling with explicit completion logic
+- Ensured consistent execution state transitions across all execution paths
+
+#### Abstractions & Reusability
+
+- Moved shared execution concepts (e.g., context snapshot) into Abstractions layer
+- Improved consistency of execution contracts across runtime components
+- Prepared the system for future support of:
+  - distributed execution
+  - execution replay
+  - advanced telemetry decorators
+
+---
+
+### Notes
+
+- This version represents a significant internal architecture upgrade of the AI runtime
+- Focus is on determinism, composability, and observability readiness
+- Lays the foundation for upcoming features such as:
+  - realtime telemetry streaming
+  - RAG integration
+  - distributed execution support
+
+---
+
 ## [1.0.1.4] - 2026-03-24
 
 ### Added
