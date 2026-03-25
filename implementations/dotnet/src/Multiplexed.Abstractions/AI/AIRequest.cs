@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Multiplexed.Abstractions.AI
 {
-    public sealed class AIRequest
+    public sealed class AiRequest
     {
         public string Prompt { get; init; } = string.Empty;
 

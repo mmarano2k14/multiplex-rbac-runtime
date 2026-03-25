@@ -1,10 +1,14 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI;
+using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
+using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Runtime.Pipeline.Steps;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
@@ -26,24 +30,50 @@ namespace Multiplexed.AI.DI
         {
             ArgumentNullException.ThrowIfNull(services);
 
-            // Provider / service abstraction
-            services.AddSingleton<IAIProvider, FakeAIProvider>();
-            services.AddSingleton<IAIService, AIService>();
+            // ------------------------------------------------------------
+            // Retry / step execution infrastructure
+            // ------------------------------------------------------------
+            services.AddSingleton<IAiRetryExceptionClassifier, DefaultAiRetryExceptionClassifier>();
+            services.AddScoped<IAiStepExecutor, AiStepExecutor>();
 
+            // ------------------------------------------------------------
+            // Provider / service abstraction
+            // ------------------------------------------------------------
+            services.AddScoped<IAiProvider, FakeAIProvider>();
+            services.AddScoped<IAiService, AiService>();
+
+            // ------------------------------------------------------------
             // Pipeline runtime
+            // ------------------------------------------------------------
             services.AddScoped<AiStepRunner>();
             services.AddScoped<AiPipelineService>();
 
+            // ------------------------------------------------------------
             // Execution runtime
-            services.AddScoped<AiExecutionEngine>();
+            // ------------------------------------------------------------
+            services.AddScoped<IAiExecutionEngine, AiExecutionEngine>();
 
+            // ------------------------------------------------------------
             // Steps
+            // ------------------------------------------------------------
             services.AddScoped<IAiStep, SummaryStep>();
 
+            // ------------------------------------------------------------
             // Stores
+            // ------------------------------------------------------------
             services.AddSingleton<MemoryAiExecutionStore>();
             services.AddSingleton<RedisAiExecutionStore>();
             services.AddSingleton<IAiExecutionStore, AiExecutionStore>();
+
+            // ------------------------------------------------------------
+            // Logger
+            // ------------------------------------------------------------
+            services.AddScoped<IAiExecutionEngineLogger, AiExecutionEngineLogger>();
+            services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
+            services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>();
+            services.AddScoped<IAiStepExecutorLogger, AiStepExecutorLogger>();
+
+            services.AddScoped<IAiRuntimeLogger, AiRuntimeLogger>();
 
             return services;
         }

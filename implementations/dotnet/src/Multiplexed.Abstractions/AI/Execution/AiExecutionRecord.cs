@@ -4,154 +4,120 @@ namespace Multiplexed.Abstractions.AI.Execution
 {
     /// <summary>
     /// Represents the persisted orchestration record of an AI execution.
-    ///
-    /// This object is the durable source of truth for workflow progression and lifecycle state.
-    /// It intentionally does not contain the mutable execution payload exchanged between steps.
-    ///
-    /// Responsibilities:
-    /// - identify the execution
-    /// - track the current step and execution progression
-    /// - store durable orchestration metadata
-    /// - support optimistic concurrency during step transitions
-    ///
-    /// Important:
-    /// - Mutable execution data is stored separately in <see cref="AiExecutionState"/>.
-    /// - This record should remain focused on orchestration concerns only.
     /// </summary>
     public sealed class AiExecutionRecord
     {
         /// <summary>
-        /// Gets or sets the unique identifier of the execution.
-        /// Used for correlation, retrieval, logging, and association with execution state.
+        /// Gets or sets the unique execution identifier.
         /// </summary>
         public string ExecutionId { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
         /// Gets or sets the current RBAC context key used to resolve the live execution context.
-        ///
-        /// Important:
-        /// - This key may rotate after each successful step.
-        /// - This is the active runtime key used by the RBAC context store.
         /// </summary>
         public string ContextKey { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the zero-based index of the current step in the execution pipeline.
+        /// Gets or sets the zero-based index of the current step.
         /// </summary>
         public int CurrentStepIndex { get; set; }
 
         /// <summary>
-        /// Gets or sets the ordered list of pipeline step identifiers.
-        ///
-        /// Recommended:
-        /// - Use stable logical step names or type identifiers.
-        /// - Avoid volatile names that may break replay or resumption behavior.
+        /// Gets or sets the ordered list of configured step names.
         /// </summary>
         public List<string> Steps { get; set; } = new();
 
         /// <summary>
-        /// Gets or sets the ordered list of successfully completed step names.
-        /// This list reflects historical progression and may be used for recovery or diagnostics.
+        /// Gets or sets the ordered list of completed step names.
         /// </summary>
         public List<string> CompletedSteps { get; set; } = new();
 
         /// <summary>
-        /// Gets or sets the RBAC execution context snapshot captured when the AI pipeline was created.
-        ///
-        /// Important:
-        /// - This snapshot is not the live execution context.
-        /// - It is retained for traceability, auditing, and recovery scenarios.
+        /// Gets or sets the RBAC execution context snapshot captured at creation time.
         /// </summary>
         public ExecutionContextSnapshot? ExecutionContextSnapshot { get; set; }
 
         /// <summary>
         /// Gets or sets the current execution lifecycle status.
-        ///
-        /// Typical values:
-        /// - Pending
-        /// - Running
-        /// - Completed
-        /// - Failed
-        ///
-        /// Note:
-        /// A dedicated enum can be introduced later if stronger typing is required.
         /// </summary>
-        public string Status { get; set; } = "Pending";
+        public AiExecutionStatus Status { get; set; } = AiExecutionStatus.Pending;
 
         /// <summary>
         /// Gets or sets the optimistic concurrency version.
-        /// Incremented on each successful orchestration transition.
         /// </summary>
         public int Version { get; set; }
 
         /// <summary>
-        /// Gets or sets the name of the current step being executed.
-        /// This is typically aligned with one of the entries in <see cref="Steps"/>.
+        /// Gets or sets the current step name.
         /// </summary>
         public string CurrentStep { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the execution-level step transition key used for optimistic concurrency.
-        ///
-        /// Important:
-        /// - This is separate from <see cref="ContextKey"/>.
-        /// - <see cref="ContextKey"/> protects RBAC execution context access.
-        /// - <see cref="ExecutionStepKey"/> protects AI execution progression updates.
+        /// Gets or sets the execution-level step transition key.
         /// </summary>
         public string ExecutionStepKey { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
-        /// Gets or sets the UTC timestamp when the execution record was created.
+        /// Gets or sets the UTC creation timestamp.
         /// </summary>
         public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
         /// <summary>
-        /// Gets or sets the UTC timestamp when the execution record was last updated.
+        /// Gets or sets the UTC last update timestamp.
         /// </summary>
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
         /// <summary>
-        /// Returns true when the execution has reached a terminal state.
+        /// Returns true when the execution is in a terminal state.
         /// </summary>
         public bool IsTerminal =>
-            string.Equals(Status, "Completed", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(Status, "Failed", StringComparison.OrdinalIgnoreCase);
+            Status is AiExecutionStatus.Completed
+                or AiExecutionStatus.Failed
+                or AiExecutionStatus.Cancelled;
 
         /// <summary>
-        /// Returns true when the execution is currently in progress.
+        /// Returns true when the execution is currently running.
         /// </summary>
-        public bool IsRunning =>
-            string.Equals(Status, "Running", StringComparison.OrdinalIgnoreCase);
+        public bool IsRunning => Status == AiExecutionStatus.Running;
 
         /// <summary>
-        /// Marks the execution as running and updates the last modification timestamp.
+        /// Marks the execution as running.
         /// </summary>
         public void MarkRunning()
         {
-            Status = "Running";
+            Status = AiExecutionStatus.Running;
             UpdatedAtUtc = DateTime.UtcNow;
         }
 
         /// <summary>
-        /// Marks the execution as completed and updates the last modification timestamp.
+        /// Marks the execution as completed.
         /// </summary>
         public void MarkCompleted()
         {
-            Status = "Completed";
+            Status = AiExecutionStatus.Completed;
             UpdatedAtUtc = DateTime.UtcNow;
         }
 
         /// <summary>
-        /// Marks the execution as failed and updates the last modification timestamp.
+        /// Marks the execution as failed.
         /// </summary>
         public void MarkFailed()
         {
-            Status = "Failed";
+            Status = AiExecutionStatus.Failed;
             UpdatedAtUtc = DateTime.UtcNow;
         }
 
         /// <summary>
-        /// Advances the optimistic concurrency version and updates the last modification timestamp.
+        /// Marks the execution as cancelled.
+        /// </summary>
+        public void MarkCancelled()
+        {
+            Status = AiExecutionStatus.Cancelled;
+            UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Increments the orchestration version.
         /// </summary>
         public void TouchVersion()
         {
@@ -160,7 +126,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Replaces the current execution step transition key and updates the last modification timestamp.
+        /// Replaces the execution step key.
         /// </summary>
         public void RenewExecutionStepKey()
         {

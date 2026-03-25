@@ -1,8 +1,10 @@
-﻿using System.Reflection;
+﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
+using Multiplexed.AI.Runtime.Logging;
+using System.Reflection;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Retry
 {
@@ -22,22 +24,26 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     /// </summary>
     public sealed class AiStepExecutor : IAiStepExecutor
     {
-        private const string StepExecutionMetadataKey = "ai.steps.execution";
 
         private readonly IAiRetryExceptionClassifier _exceptionClassifier;
-        private readonly IRuntimeEventContext _realtime;
+        private readonly IAiRuntimeLogger _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
         /// </summary>
         /// <param name="exceptionClassifier">The retry classifier used to evaluate transient exceptions.</param>
         /// <param name="realtime">The runtime event sink used for observability.</param>
+        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
-            IRuntimeEventContext realtime)
+            IAiRuntimeLogger logger)
         {
-            _exceptionClassifier = exceptionClassifier ?? throw new ArgumentNullException(nameof(exceptionClassifier));
-            _realtime = realtime ?? throw new ArgumentNullException(nameof(realtime));
+
+            ArgumentNullException.ThrowIfNull(_exceptionClassifier);
+            ArgumentNullException.ThrowIfNull(logger);
+
+            _exceptionClassifier = exceptionClassifier;
+            _logger = logger;
         }
 
         /// <summary>
@@ -64,7 +70,8 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             // if the step has already completed successfully, do not execute it again.
             if (metadata.IsCompleted)
             {
-                LogStepSkipped(context.ExecutionId, stepName);
+
+                _logger.StepExecutor.Skipped(context.ExecutionId, stepName);
 
                 return AiStepResult.Ok(
                     output: $"Step '{stepName}' was skipped because it had already completed successfully.");
@@ -78,10 +85,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                 {
                     BeginAttempt(metadata);
 
-                    LogStepAttemptStarted(
-                        executionId: context.ExecutionId,
-                        stepName: stepName,
-                        attemptCount: metadata.AttemptCount);
+                    _logger.StepExecutor.AttemptStarted(context.ExecutionId, stepName, metadata.AttemptCount);
 
                     var result = await step.ExecuteAsync(context, cancellationToken);
 
@@ -91,21 +95,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                         metadata.LastError = result.Error;
                         metadata.LastExceptionType = null;
 
-                        LogStepReturnedFailure(
-                            executionId: context.ExecutionId,
-                            stepName: stepName,
-                            attemptCount: metadata.AttemptCount,
-                            error: result.Error);
+                        _logger.StepExecutor.AttemptFailed(context.ExecutionId, stepName, metadata.AttemptCount, result.Error);
 
                         return result;
                     }
 
                     MarkSucceeded(metadata);
 
-                    LogStepAttemptSucceeded(
-                        executionId: context.ExecutionId,
-                        stepName: stepName,
-                        attemptCount: metadata.AttemptCount);
+                    _logger.StepExecutor.AttemptSucceeded(context.ExecutionId, stepName, metadata.AttemptCount);
 
                     return result;
                 }
@@ -115,11 +112,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     metadata.LastError = ex.Message;
                     metadata.LastExceptionType = ex.GetType().FullName;
 
-                    LogStepAttemptException(
-                        executionId: context.ExecutionId,
-                        stepName: stepName,
-                        attemptCount: metadata.AttemptCount,
-                        exception: ex);
+                    _logger.StepExecutor.AttemptException(context.ExecutionId, stepName, metadata.AttemptCount, ex);
 
                     if (!ShouldRetry(ex, retryPolicy, metadata.AttemptCount))
                     {
@@ -129,11 +122,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     var delay = ComputeDelay(retryPolicy!, metadata.AttemptCount);
                     if (delay > TimeSpan.Zero)
                     {
-                        LogStepRetryScheduled(
-                            executionId: context.ExecutionId,
-                            stepName: stepName,
-                            attemptCount: metadata.AttemptCount,
-                            delay: delay);
+                        _logger.StepExecutor.RetryScheduled(context.ExecutionId, stepName, metadata.AttemptCount, delay);
 
                         await Task.Delay(delay, cancellationToken);
                     }
@@ -213,11 +202,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             AiExecutionState state,
             string stepName)
         {
-            if (!state.Metadata.TryGetValue(StepExecutionMetadataKey, out var existing) ||
+            if (!state.Metadata.TryGetValue(AiExecutionKeys.StepExecutionMetadata, out var existing) ||
                 existing is not Dictionary<string, AiStepExecutionMetadata> stepMap)
             {
                 stepMap = new Dictionary<string, AiStepExecutionMetadata>(StringComparer.Ordinal);
-                state.Metadata[StepExecutionMetadataKey] = stepMap;
+                state.Metadata[AiExecutionKeys.StepExecutionMetadata] = stepMap;
             }
 
             if (!stepMap.TryGetValue(stepName, out var metadata))
@@ -233,105 +222,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             state.UpdatedAtUtc = DateTime.UtcNow;
 
             return metadata;
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step attempt starts.
-        /// </summary>
-        private void LogStepAttemptStarted(string executionId, string stepName, int attemptCount)
-        {
-            _realtime.LogInfo(
-                message: $"Step '{stepName}' attempt {attemptCount} started.",
-                category: "ai.step.attempt.start",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Attempt = attemptCount
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step attempt succeeds.
-        /// </summary>
-        private void LogStepAttemptSucceeded(string executionId, string stepName, int attemptCount)
-        {
-            _realtime.LogInfo(
-                message: $"Step '{stepName}' attempt {attemptCount} succeeded.",
-                category: "ai.step.attempt.succeeded",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Attempt = attemptCount
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step returns a failed result.
-        /// </summary>
-        private void LogStepReturnedFailure(string executionId, string stepName, int attemptCount, string? error)
-        {
-            _realtime.LogError(
-                message: $"Step '{stepName}' attempt {attemptCount} returned a failed result.",
-                category: "ai.step.attempt.failed",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Attempt = attemptCount,
-                    Error = error
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step throws an exception.
-        /// </summary>
-        private void LogStepAttemptException(string executionId, string stepName, int attemptCount, Exception exception)
-        {
-            _realtime.LogError(
-                message: $"Step '{stepName}' attempt {attemptCount} threw an exception.",
-                category: "ai.step.attempt.exception",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Attempt = attemptCount,
-                    Exception = exception.Message,
-                    ExceptionType = exception.GetType().FullName
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a retry is scheduled.
-        /// </summary>
-        private void LogStepRetryScheduled(string executionId, string stepName, int attemptCount, TimeSpan delay)
-        {
-            _realtime.LogInfo(
-                message: $"Step '{stepName}' retry scheduled after attempt {attemptCount}.",
-                category: "ai.step.retry.scheduled",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Attempt = attemptCount,
-                    DelayMs = delay.TotalMilliseconds
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a completed step is skipped.
-        /// </summary>
-        private void LogStepSkipped(string executionId, string stepName)
-        {
-            _realtime.LogInfo(
-                message: $"Step '{stepName}' was skipped because it had already completed successfully.",
-                category: "ai.step.skipped",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName
-                });
         }
     }
 }

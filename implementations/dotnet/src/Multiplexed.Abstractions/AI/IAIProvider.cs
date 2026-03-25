@@ -1,9 +1,9 @@
 ﻿namespace Multiplexed.Abstractions.AI
 {
-    public interface IAIProvider
+    public interface IAiProvider
     {
-        Task<AIResponse> CompleteAsync(
-            AIRequest request,
+        Task<AiResponse> CompleteAsync(
+            AiRequest request,
             CancellationToken cancellationToken = default);
     }
 }

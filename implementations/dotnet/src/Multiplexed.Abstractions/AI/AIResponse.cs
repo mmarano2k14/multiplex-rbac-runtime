@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Multiplexed.Abstractions.AI
 {
-    public sealed class AIResponse
+    public sealed class AiResponse
     {
         public string Content { get; init; } = string.Empty;
 

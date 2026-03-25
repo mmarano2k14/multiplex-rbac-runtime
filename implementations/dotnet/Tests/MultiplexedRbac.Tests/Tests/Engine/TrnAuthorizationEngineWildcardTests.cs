@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Authorization.Engine;
 using Multiplexed.Rbac.Core.Authorization.Scope;
 using Multiplexed.Rbac.Core.Authorization.Trn;

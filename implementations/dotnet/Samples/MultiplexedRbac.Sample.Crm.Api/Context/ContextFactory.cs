@@ -1,4 +1,5 @@
-﻿using Multiplexed.Rbac.Core.ExecutionContext;
+﻿using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.Rbac.Core.ExecutionContext;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace MultiplexedRbac.Sample.Crm.Api.Context

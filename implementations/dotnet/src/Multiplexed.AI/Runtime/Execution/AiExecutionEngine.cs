@@ -1,6 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
+using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
@@ -23,17 +24,16 @@ namespace Multiplexed.AI.Runtime.Execution
     /// </summary>
     public sealed class AiExecutionEngine : IAiExecutionEngine
     {
-        private const string InputKey = "input";
         private static readonly TimeSpan ContextRotationOverlap = TimeSpan.FromSeconds(30);
 
         private readonly IReadOnlyList<IAiStep> _steps;
         private readonly IAiExecutionStore _store;
         private readonly IContextStore _contextStore;
-        private readonly IRuntimeEventContext _realtime;
         private readonly IExecutionContextAccessor _accessor;
         private readonly IExecutionContextFactory _contextFactory;
         private readonly IServiceProvider _services;
         private readonly IAiStepExecutor _stepExecutor;
+        private readonly IAiRuntimeLogger _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiExecutionEngine"/> class.
@@ -41,38 +41,38 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <param name="steps">The ordered AI steps used by the execution pipeline.</param>
         /// <param name="store">The durable AI execution store.</param>
         /// <param name="contextStore">The RBAC execution context store.</param>
-        /// <param name="realtime">The runtime event sink used for observability.</param>
         /// <param name="accessor">The accessor for the live RBAC execution context.</param>
         /// <param name="contextFactory">The factory used to copy and snapshot RBAC contexts.</param>
         /// <param name="services">The root runtime service provider.</param>
         /// <param name="stepExecutor">The executor responsible for resilient single-step execution.</param>
+        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
         public AiExecutionEngine(
             IEnumerable<IAiStep> steps,
             IAiExecutionStore store,
             IContextStore contextStore,
-            IRuntimeEventContext realtime,
             IExecutionContextAccessor accessor,
             IExecutionContextFactory contextFactory,
             IServiceProvider services,
-            IAiStepExecutor stepExecutor)
+            IAiStepExecutor stepExecutor,
+            IAiRuntimeLogger logger)
         {
             ArgumentNullException.ThrowIfNull(steps);
             ArgumentNullException.ThrowIfNull(store);
             ArgumentNullException.ThrowIfNull(contextStore);
-            ArgumentNullException.ThrowIfNull(realtime);
             ArgumentNullException.ThrowIfNull(accessor);
             ArgumentNullException.ThrowIfNull(contextFactory);
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(stepExecutor);
+            ArgumentNullException.ThrowIfNull(logger);
 
             _steps = steps.ToList();
             _store = store;
             _contextStore = contextStore;
-            _realtime = realtime;
             _accessor = accessor;
             _contextFactory = contextFactory;
             _services = services;
             _stepExecutor = stepExecutor;
+            _logger = logger;
         }
 
         /// <summary>
@@ -103,7 +103,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 ContextKey = newContextKey,
                 CurrentStep = firstStep.Name,
                 CurrentStepIndex = 0,
-                Status = "Pending",
+                Status = AiExecutionStatus.Pending,
                 ExecutionContextSnapshot = _contextFactory.CreateSnapshot(current),
                 Steps = _steps.Select(x => x.Name).ToList()
             };
@@ -113,11 +113,11 @@ namespace Multiplexed.AI.Runtime.Execution
                 ExecutionId = record.ExecutionId
             };
 
-            state.Set(InputKey, input);
+            state.Set(AiExecutionKeys.Input, input);
 
             await _store.CreateAsync(record, state, ct);
 
-            LogExecutionCreated(record);
+            _logger.Engine.ExecutionCreated(record);
 
             return record;
         }
@@ -165,10 +165,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 {
                     record.MarkFailed();
 
-                    LogStepFailed(
-                        executionId: record.ExecutionId,
-                        stepName: step.Name,
-                        error: result.Error);
+                    _logger.Engine.StepFailed(record.ExecutionId, step.Name, result.Error);
 
                     await _store.TryUpdateAsync(
                         record.ExecutionId,
@@ -198,7 +195,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 if (!updated)
                     throw new InvalidOperationException("Concurrency conflict on execution update.");
 
-                LogStepCompleted(record, step);
+                _logger.Engine.StepCompleted(record, step);
 
                 return record;
             }
@@ -206,10 +203,7 @@ namespace Multiplexed.AI.Runtime.Execution
             {
                 record.MarkFailed();
 
-                LogStepException(
-                    executionId: record.ExecutionId,
-                    stepName: step.Name,
-                    exception: ex);
+                _logger.Engine.StepException(record.ExecutionId, step.Name, ex);
 
                 await _store.TryUpdateAsync(
                     record.ExecutionId,
@@ -362,70 +356,6 @@ namespace Multiplexed.AI.Runtime.Execution
             }
 
             record.CurrentStepIndex = nextIndex;
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a new execution is created.
-        /// </summary>
-        private void LogExecutionCreated(AiExecutionRecord record)
-        {
-            _realtime.LogInfo(
-                message: "AI execution created.",
-                category: "ai.execution.created",
-                data: new
-                {
-                    record.ExecutionId,
-                    record.ContextKey,
-                    record.CurrentStep
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step throws an exception.
-        /// </summary>
-        private void LogStepException(string executionId, string stepName, Exception exception)
-        {
-            _realtime.LogError(
-                message: $"Step '{stepName}' threw an exception.",
-                category: "ai.step.exception",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Exception = exception.Message
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step returns a failed result.
-        /// </summary>
-        private void LogStepFailed(string executionId, string stepName, string? error)
-        {
-            _realtime.LogError(
-                message: $"Step '{stepName}' failed.",
-                category: "ai.step.failed",
-                data: new
-                {
-                    ExecutionId = executionId,
-                    Step = stepName,
-                    Error = error
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured runtime event when a step completes successfully.
-        /// </summary>
-        private void LogStepCompleted(AiExecutionRecord record, IAiStep step)
-        {
-            _realtime.LogInfo(
-                message: $"Step '{step.Name}' completed.",
-                category: "ai.step.completed",
-                data: new
-                {
-                    record.ExecutionId,
-                    record.CurrentStep,
-                    record.Status
-                });
         }
     }
 }

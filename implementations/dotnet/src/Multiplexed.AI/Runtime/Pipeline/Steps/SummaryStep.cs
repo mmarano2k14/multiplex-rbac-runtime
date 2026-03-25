@@ -13,11 +13,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
     /// </summary>
     public sealed class SummaryStep : IAiStep
     {
-        private readonly IAIService _aiService;
+        private readonly IAiService _aiService;
 
-        public SummaryStep(IAIService aiService)
+        public SummaryStep(IAiService aiService)
         {
-            _aiService = aiService;
+            _aiService = aiService ?? throw new ArgumentNullException(nameof(aiService));
         }
 
         public string Name => "summary";
@@ -27,14 +27,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
             CancellationToken cancellationToken = default)
         {
             // Retrieve input from context
-            var input = context.Get<string>("input");
+            var input = context.Get<string>(AiExecutionKeys.Input);
 
             if (string.IsNullOrWhiteSpace(input))
                 return AiStepResult.Fail("Missing required input: 'input'.");
 
             // Call AI service
             var response = await _aiService.CompleteAsync(
-                new AIRequest
+                new AiRequest
                 {
                     Prompt = $"Summarize the following content:\n\n{input}"
                 },
@@ -45,7 +45,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
                 output: response.Content,
                 data: new Dictionary<string, object?>
                 {
-                    ["summary"] = response.Content
+                    [AiExecutionKeys.Input] = response.Content
                 });
         }
     }

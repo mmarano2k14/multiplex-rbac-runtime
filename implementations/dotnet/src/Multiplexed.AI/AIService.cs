@@ -3,17 +3,17 @@ using Multiplexed.AI.Abstractions;
 
 namespace Multiplexed.AI
 {
-    public sealed class AIService : IAIService
+    public sealed class AiService : IAiService
     {
-        private readonly IAIProvider _provider;
+        private readonly IAiProvider _provider;
 
-        public AIService(IAIProvider provider)
+        public AiService(IAiProvider provider)
         {
             _provider = provider;
         }
 
-        public Task<AIResponse> CompleteAsync(
-            AIRequest request,
+        public Task<AiResponse> CompleteAsync(
+            AiRequest request,
             CancellationToken cancellationToken = default)
         {
             return _provider.CompleteAsync(request, cancellationToken);

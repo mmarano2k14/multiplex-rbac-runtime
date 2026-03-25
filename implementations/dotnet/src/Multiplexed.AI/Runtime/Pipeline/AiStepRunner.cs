@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
+using Multiplexed.AI.Runtime.Logging;
 
 namespace Multiplexed.AI.Runtime.Pipeline
 {
@@ -17,20 +18,20 @@ namespace Multiplexed.AI.Runtime.Pipeline
     public sealed class AiStepRunner
     {
         private readonly IReadOnlyList<IAiStep> _steps;
-        private readonly IRuntimeEventContext _realtime;
+        private readonly IAiRuntimeLogger _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepRunner"/> class.
         /// </summary>
         /// <param name="steps">The ordered list of steps to execute.</param>
-        /// <param name="realtime">The runtime event sink used for observability.</param>
-        public AiStepRunner(IEnumerable<IAiStep> steps, IRuntimeEventContext realtime)
+        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
+        public AiStepRunner(IEnumerable<IAiStep> steps, IAiRuntimeLogger logger)
         {
             ArgumentNullException.ThrowIfNull(steps);
-            ArgumentNullException.ThrowIfNull(realtime);
+            ArgumentNullException.ThrowIfNull(logger);
 
             _steps = steps.ToList();
-            _realtime = realtime;
+            _logger = logger;
         }
 
         /// <summary>
@@ -45,14 +46,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            _realtime.LogInfo(
-                message: "AI pipeline execution started.",
-                category: "ai.pipeline.start",
-                data: new
-                {
-                    context.ExecutionId,
-                    StepCount = _steps.Count
-                });
+            _logger.Pipeline.ExecutionStarted(context.ExecutionId, _steps.Count);
 
             foreach (var step in _steps)
             {
@@ -60,7 +54,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
                 var stopwatch = Stopwatch.StartNew();
 
-                LogStepStarted(context, step);
+                _logger.Pipeline.StepStarted(context, step);
 
                 AiStepResult result;
 
@@ -71,8 +65,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 catch (Exception ex)
                 {
                     stopwatch.Stop();
-
-                    LogStepException(context, step, stopwatch.ElapsedMilliseconds, ex);
+                    _logger.Pipeline.StepException(context, step, stopwatch.ElapsedMilliseconds, ex);
                     throw;
                 }
 
@@ -80,25 +73,18 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
                 if (!result.Success)
                 {
-                    LogStepFailure(context, step, stopwatch.ElapsedMilliseconds, result);
-
+                    _logger.Pipeline.StepFailed(context, step, stopwatch.ElapsedMilliseconds, result);
                     throw new InvalidOperationException(
                         $"Step '{step.Name}' failed: {result.Error ?? "Unknown error"}");
                 }
 
                 MergeResult(context, result);
 
-                LogStepCompleted(context, step, stopwatch.ElapsedMilliseconds, result);
+                _logger.Pipeline.StepCompleted(context, step, stopwatch.ElapsedMilliseconds, result);
+
             }
 
-            _realtime.LogInfo(
-                message: "AI pipeline execution completed.",
-                category: "ai.pipeline.completed",
-                data: new
-                {
-                    context.ExecutionId,
-                    StepCount = _steps.Count
-                });
+            _logger.Pipeline.ExecutionCompleted(context.ExecutionId, _steps.Count);
 
             return context;
         }
@@ -117,84 +103,6 @@ namespace Multiplexed.AI.Runtime.Pipeline
             {
                 context.Set(entry.Key, entry.Value);
             }
-        }
-
-        /// <summary>
-        /// Emits a structured log event when a step starts.
-        /// </summary>
-        private void LogStepStarted(AiExecutionContext context, IAiStep step)
-        {
-            _realtime.LogInfo(
-                message: $"AI step '{step.Name}' started.",
-                category: "ai.step.start",
-                data: new
-                {
-                    context.ExecutionId,
-                    Step = step.Name
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured log event when a step throws an exception.
-        /// </summary>
-        private void LogStepException(
-            AiExecutionContext context,
-            IAiStep step,
-            long durationMs,
-            Exception exception)
-        {
-            _realtime.LogError(
-                message: $"AI step '{step.Name}' threw an exception.",
-                category: "ai.step.exception",
-                data: new
-                {
-                    context.ExecutionId,
-                    Step = step.Name,
-                    DurationMs = durationMs,
-                    Exception = exception.Message
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured log event when a step returns a failed result.
-        /// </summary>
-        private void LogStepFailure(
-            AiExecutionContext context,
-            IAiStep step,
-            long durationMs,
-            AiStepResult result)
-        {
-            _realtime.LogError(
-                message: $"AI step '{step.Name}' failed.",
-                category: "ai.step.failed",
-                data: new
-                {
-                    context.ExecutionId,
-                    Step = step.Name,
-                    DurationMs = durationMs,
-                    result.Error
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured log event when a step completes successfully.
-        /// </summary>
-        private void LogStepCompleted(
-            AiExecutionContext context,
-            IAiStep step,
-            long durationMs,
-            AiStepResult result)
-        {
-            _realtime.LogInfo(
-                message: $"AI step '{step.Name}' completed.",
-                category: "ai.step.completed",
-                data: new
-                {
-                    context.ExecutionId,
-                    Step = step.Name,
-                    DurationMs = durationMs,
-                    result.Output
-                });
         }
     }
 }

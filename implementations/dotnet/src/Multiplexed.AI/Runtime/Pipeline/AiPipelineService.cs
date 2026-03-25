@@ -1,5 +1,7 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Microsoft.Extensions.Logging;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Runtime;
+using Multiplexed.AI.Runtime.Logging;
 
 namespace Multiplexed.AI.Runtime.Pipeline
 {
@@ -16,31 +18,29 @@ namespace Multiplexed.AI.Runtime.Pipeline
     /// </summary>
     public sealed class AiPipelineService
     {
-        private const string InputKey = "input";
-        private const string SummaryKey = "summary";
 
         private readonly AiStepRunner _runner;
-        private readonly IRuntimeEventContext _realtime;
         private readonly IServiceProvider _services;
+        private readonly IAiRuntimeLogger _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiPipelineService"/> class.
         /// </summary>
         /// <param name="runner">The step runner responsible for sequential execution.</param>
-        /// <param name="realtime">The runtime event sink used for observability.</param>
         /// <param name="services">The service provider used by the execution context.</param>
+        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
         public AiPipelineService(
             AiStepRunner runner,
-            IRuntimeEventContext realtime,
-            IServiceProvider services)
+            IServiceProvider services,
+            IAiRuntimeLogger logger)
         {
             ArgumentNullException.ThrowIfNull(runner);
-            ArgumentNullException.ThrowIfNull(realtime);
             ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(logger);
 
             _runner = runner;
-            _realtime = realtime;
             _services = services;
+            _logger = logger;
         }
 
         /// <summary>
@@ -57,15 +57,15 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 throw new ArgumentException("Input cannot be null or empty.", nameof(input));
 
             var context = CreateExecutionContext(cancellationToken);
-            context.Set(InputKey, input);
+            context.Set(AiExecutionKeys.Input, input);
 
-            LogPipelineRequested(context);
+            _logger.PipelineService.ExecutionRequested(context);
 
             await _runner.RunAsync(context, cancellationToken);
 
-            var result = context.Get<string>(SummaryKey);
+            var result = context.Get<string>(AiExecutionKeys.Summary);
 
-            LogPipelineCompleted(context, result);
+            _logger.PipelineService.ExecutionCompleted(context, result);
 
             return result ?? string.Empty;
         }
@@ -79,7 +79,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
         {
             var record = new AiExecutionRecord
             {
-                Status = "Running",
+                Status = AiExecutionStatus.Running,
                 CurrentStep = string.Empty
             };
 
@@ -93,38 +93,6 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 state,
                 _services,
                 cancellationToken);
-        }
-
-        /// <summary>
-        /// Emits a structured event when pipeline execution is requested.
-        /// </summary>
-        /// <param name="context">The current execution context.</param>
-        private void LogPipelineRequested(AiExecutionContext context)
-        {
-            _realtime.LogInfo(
-                message: "AI pipeline service execution requested.",
-                category: "ai.pipeline.request",
-                data: new
-                {
-                    context.ExecutionId
-                });
-        }
-
-        /// <summary>
-        /// Emits a structured event when pipeline execution completes.
-        /// </summary>
-        /// <param name="context">The current execution context.</param>
-        /// <param name="result">The final pipeline result.</param>
-        private void LogPipelineCompleted(AiExecutionContext context, string? result)
-        {
-            _realtime.LogInfo(
-                message: "AI pipeline service execution completed.",
-                category: "ai.pipeline.result",
-                data: new
-                {
-                    context.ExecutionId,
-                    Result = result
-                });
         }
     }
 }
