@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 
-namespace Multiplexed.AI.Runtime.Pipeline
+namespace Multiplexed.AI.Runtime.Pipeline.Registry
 {
     /// <summary>
     /// Resolves AI runtime step instances from an in-memory step registry.
