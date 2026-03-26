@@ -26,11 +26,19 @@ namespace Multiplexed.Abstractions.AI.Execution
         public string ExecutionId { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
+        /// Gets or sets the optional pipeline name associated with this execution state.
+        /// This value identifies the workflow definition used to resolve
+        /// the executable runtime pipeline.
+        /// </summary>
+        public string? PipelineName { get; set; }
+
+        /// <summary>
         /// Shared execution data exchanged between steps.
         ///
         /// This is the primary data bag used by the pipeline.
         /// Keys should remain stable across steps.
         /// </summary>
+
         public Dictionary<string, object?> Data { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>

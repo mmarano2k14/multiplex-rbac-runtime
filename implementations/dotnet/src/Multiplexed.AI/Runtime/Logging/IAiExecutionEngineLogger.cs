@@ -24,6 +24,24 @@ namespace Multiplexed.AI.Runtime.Logging
         void ExecutionCreated(AiExecutionRecord record);
 
         /// <summary>
+        /// Emits a structured event when a new execution is loaded.
+        /// </summary>
+        /// <param name="record">The created execution record.</param>
+        void ExecutionLoaded(AiExecutionRecord record);
+
+        /// <summary>
+        /// Emits a structured event when a new execution is completed.
+        /// </summary>
+        /// <param name="record">The created execution record.</param>
+        void ExecutionCompleted(AiExecutionRecord record);
+
+        /// <summary>
+        /// Emits a structured event when a new execution is already completed.
+        /// </summary>
+        /// <param name="record">The created execution record.</param>
+        void ExecutionAlreadyCompleted(AiExecutionRecord record);
+
+        /// <summary>
         /// Emits a structured event when a step throws an exception.
         /// </summary>
         /// <param name="executionId">The current execution identifier.</param>
@@ -44,6 +62,9 @@ namespace Multiplexed.AI.Runtime.Logging
         /// </summary>
         /// <param name="record">The updated execution record.</param>
         /// <param name="step">The completed step.</param>
-        void StepCompleted(AiExecutionRecord record, IAiStep step);
+        void StepCompleted(AiExecutionRecord record, string stepName);
+
+
+        
     }
 }

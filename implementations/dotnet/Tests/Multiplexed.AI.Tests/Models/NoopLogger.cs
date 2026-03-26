@@ -20,7 +20,13 @@ public sealed class NoopLogger : IAiRuntimeLogger
 
         public void StepFailed(string executionId, string stepName, string? error) { }
 
-        public void StepCompleted(AiExecutionRecord record, IAiStep step) { }
+        public void StepCompleted(AiExecutionRecord record, string stepName) { }
+
+        public void ExecutionLoaded(AiExecutionRecord record) { }
+
+        public void ExecutionCompleted(AiExecutionRecord record) { }
+
+        public void ExecutionAlreadyCompleted(AiExecutionRecord record) { }
     }
 
     private sealed class NoopPipelineLogger : IAiPipelineLogger

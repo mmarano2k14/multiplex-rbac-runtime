@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Rbac.Core.ExecutionContext;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
-public class InMemoryContextAccessor : IExecutionContextAccessor
+public class FakeInMemoryContextAccessor : IExecutionContextAccessor
 {
     public ExecutionContext? Current { get; private set; }
 

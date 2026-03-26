@@ -2,7 +2,7 @@
 using Multiplexed.AI.Stores;
 using System.Collections.Concurrent;
 
-public class InMemoryExecutionStore : IAiExecutionStore
+public class FakeInMemoryExecutionStore : IAiExecutionStore
 {
     private readonly ConcurrentDictionary<string, AiExecutionRecord> _records = new();
     private readonly ConcurrentDictionary<string, AiExecutionState> _states = new();

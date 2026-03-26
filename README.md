@@ -58,7 +58,7 @@ forming a unified model for building **reliable, observable, and scalable runtim
 
 This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.1.5-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.1.6-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ![Status](https://img.shields.io/badge/Status-active%20development-orange)
@@ -205,31 +205,92 @@ Bringing reliability to AI workflows.
 ## AI Execution Flow
 
 ```text
-Client Request
-      │
-      ▼
-AI Orchestrator
-      │
-      ▼
-Load / Create Execution Record
-      │
-      ▼
-Resolve Execution Context
-      │
-      ▼
-Execute Step (IAiStep)
-      │
-      ├──► Update Execution State
-      │
-      ├──► Persist (Redis / Memory)
-      │
-      └──► Emit Realtime Events
-      │
-      ▼
-Next Step Decision
-      │
-      ├──► Continue
-      └──► Complete
+┌──────────────────────────────────────────────────────────────┐
+│                         CLIENT                               │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  AI EXECUTION ENGINE                         │
+│--------------------------------------------------------------│
+│ - Orchestration                                              │
+│ - Persistence                                                │
+│ - RBAC Context Management                                    │
+└──────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+┌──────────────┐     ┌────────────────┐    ┌──────────────────┐
+│ExecutionStore│     │ Context Store  │    │ Context Accessor │
+│ (Record/State)│     │ (RBAC Redis)   │    │ (Thread Scope)   │
+└──────────────┘     └────────────────┘    └──────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  PIPELINE EXECUTOR                           │
+│--------------------------------------------------------------│
+│ - PrepareAsync (Resolve once)                                │
+│ - ExecuteNextAsync (Step selection)                          │
+└──────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┴─────────────────────┐
+        ▼                                           ▼
+┌────────────────────┐                  ┌────────────────────────┐
+│ Pipeline Definition │                  │  Resolved Pipeline      │
+│ (Declarative)       │                  │ (Runtime Executable)    │
+└────────────────────┘                  └────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     STEP EXECUTOR                            │
+│--------------------------------------------------------------│
+│ - ExecuteAsync                                               │
+│ - Retry Policy                                               │
+│ - Error Classification                                       │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                       AI STEP                                │
+│--------------------------------------------------------------│
+│ - Business Logic                                             │
+│ - RAG / LLM / External calls                                 │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   STEP RESULT                                │
+│--------------------------------------------------------------│
+│ - Output                                                     │
+│ - Data (State Merge)                                         │
+│ - Success / Failure                                          │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│               EXECUTION STATE UPDATE                         │
+│--------------------------------------------------------------│
+│ - Merge result                                               │
+│ - Update step index                                          │
+│ - Mark completed / failed                                    │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│               RBAC CONTEXT ROTATION                          │
+│--------------------------------------------------------------│
+│ - Generate new context key                                   │
+│ - Overlap window                                             │
+│ - Prevent stale context reuse                                │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  PERSIST (ATOMIC)                            │
+│--------------------------------------------------------------│
+│ - TryUpdateAsync                                             │
+│ - Optimistic Concurrency (ExecutionStepKey)                  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---

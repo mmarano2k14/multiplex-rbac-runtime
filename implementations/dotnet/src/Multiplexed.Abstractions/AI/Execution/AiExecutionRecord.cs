@@ -13,6 +13,13 @@ namespace Multiplexed.Abstractions.AI.Execution
         public string ExecutionId { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
+        /// Gets or sets the optional pipeline name associated with this execution.
+        /// This value identifies which declarative workflow definition should be used
+        /// when continuing or replaying the execution.
+        /// </summary>
+        public string? PipelineName { get; set; }
+
+        /// <summary>
         /// Gets or sets the current RBAC context key used to resolve the live execution context.
         /// </summary>
         public string ContextKey { get; set; } = string.Empty;

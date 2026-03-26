@@ -75,19 +75,63 @@ namespace Multiplexed.AI.Runtime.Logging
         }
 
         /// <inheritdoc />
-        public void StepCompleted(AiExecutionRecord record, IAiStep step)
+        public void StepCompleted(AiExecutionRecord record, string stepName)
         {
             ArgumentNullException.ThrowIfNull(record);
-            ArgumentNullException.ThrowIfNull(step);
 
             _realtime.LogInfo(
-                message: $"Step '{step.Name}' completed.",
+                message: $"Step '{stepName}' completed.",
                 category: "ai.step.completed",
                 data: new
                 {
                     record.ExecutionId,
                     record.CurrentStep,
                     record.Status
+                });
+        }
+
+        public void ExecutionLoaded(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution loaded.",
+                category: "ai.execution.loaded",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep
+                });
+        }
+
+        public void ExecutionCompleted(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution completed.",
+                category: "ai.execution.completed",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep
+                });
+        }
+
+        public void ExecutionAlreadyCompleted(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution already completed.",
+                category: "ai.execution.already.completed",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep
                 });
         }
     }

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace Multiplexed.AI.Runtime.Pipeline
+namespace Multiplexed.AI.Runtime.Pipeline.Steps
 {
     /// <summary>
     /// Shared context passed across all steps in the pipeline.

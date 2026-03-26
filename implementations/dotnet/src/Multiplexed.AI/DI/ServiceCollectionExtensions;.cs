@@ -42,11 +42,6 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiProvider, FakeAIProvider>();
             services.AddScoped<IAiService, AiService>();
 
-            // ------------------------------------------------------------
-            // Pipeline runtime
-            // ------------------------------------------------------------
-            services.AddScoped<AiStepRunner>();
-            services.AddScoped<AiPipelineService>();
 
             // ------------------------------------------------------------
             // Execution runtime

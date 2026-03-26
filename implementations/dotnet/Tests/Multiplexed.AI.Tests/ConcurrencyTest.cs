@@ -1,12 +1,12 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution;
-using Multiplexed.AI.Runtime.Logging;
-using Multiplexed.AI.Stores;
+using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.Rbac.Core.ExecutionContext;
-using System.Collections.Concurrent;
+using Multiplexed.AI.Tests.Models;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -27,22 +27,54 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         [Fact]
         public async Task ExecuteNextAsync_Should_Allow_Only_One_Concurrent_Step_Transition()
         {
+            // -----------------------------
             // Arrange
+            // -----------------------------
+
             var step = new DelayedStep("step-1", delayMs: 100);
 
-            var steps = new List<IAiStep> { step };
-
-            var store = new ConcurrencyAwareExecutionStore();
-            var contextStore = new InMemoryContextStore();
-            var accessor = new InMemoryContextAccessor();
+            var store = new FakeInMemoryExecutionStore();
+            var contextStore = new FakeInMemoryContextStore();
+            var accessor = new FakeInMemoryContextAccessor();
             var factory = new FakeExecutionContextFactory();
             var services = new ServiceCollection().BuildServiceProvider();
-            var executor = new PassThroughStepExecutor();
+            var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
+
+            var definitionProvider = new FakeInMemoryAiPipelineDefinitionProvider(
+                new[]
+                {
+                    new AiPipelineDefinition
+                    {
+                        Name = "test-pipeline",
+                        Steps = new[]
+                        {
+                            new AiPipelineStepDefinition
+                            {
+                                Name = "step-1",
+                                StepKey = "step-1",
+                                Order = 0
+                            }
+                        }
+                    }
+                });
+
+            var stepRegistry = new FakeInMemoryAiStepRegistry(
+                new[]
+                {
+                    new KeyValuePair<string, IAiStep>("step-1", step)
+                });
+
+            var resolver = new AiPipelineResolver(stepRegistry);
+
+            var pipelineExecutor = new AiPipelineExecutor(
+                definitionProvider,
+                resolver,
+                executor);
 
             var initialContext = new ExecutionContext
             {
-                ContextKey = "",
+                ContextKey = string.Empty,
                 Project = "Project",
                 TenantId = "tenant-id-xxxx",
                 TenantGroupId = "tenant-group-id-xxx",
@@ -66,26 +98,29 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             accessor.Set(initialContext);
 
             var engine = new AiExecutionEngine(
-                steps,
                 store,
                 contextStore,
                 accessor,
                 factory,
                 services,
-                executor,
+                pipelineExecutor,
                 logger);
 
-            var record = await engine.CreateAsync("hello");
+            var record = await engine.CreateAsync("test-pipeline", "hello");
 
+            // -----------------------------
             // Act
+            // -----------------------------
+
             var task1 = ExecuteAndCaptureAsync(engine, record.ExecutionId);
             var task2 = ExecuteAndCaptureAsync(engine, record.ExecutionId);
 
-            await Task.WhenAll(task1, task2);
+            var outcomes = await Task.WhenAll(task1, task2);
 
-            ExecutionAttemptOutcome[] outcomes = await Task.WhenAll(task1, task2);
-
+            // -----------------------------
             // Assert
+            // -----------------------------
+
             var successCount = outcomes.Count(x => x.Exception is null);
             var failureCount = outcomes.Count(x => x.Exception is InvalidOperationException);
 
@@ -98,14 +133,10 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.NotNull(finalRecord);
             Assert.NotNull(finalState);
 
-            // Step must be completed only once
             Assert.Single(finalRecord!.CompletedSteps);
             Assert.Contains("step-1", finalRecord.CompletedSteps);
 
-            // State must be merged only once
             Assert.Equal("processed", finalState!.Get<string>("result"));
-
-            // Final execution must be terminal
             Assert.True(finalRecord.IsTerminal);
         }
 
@@ -154,213 +185,6 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                     });
             }
         }
-
-        /// <summary>
-        /// Pass-through executor that delegates directly to the step.
-        /// This keeps the test focused on engine-level concurrency behavior.
-        /// </summary>
-        private sealed class PassThroughStepExecutor : IAiStepExecutor
-        {
-            public Task<AiStepResult> ExecuteAsync(
-                IAiStep step,
-                AiExecutionContext context,
-                CancellationToken cancellationToken = default)
-            {
-                return step.ExecuteAsync(context, cancellationToken);
-            }
-        }
-
-        /// <summary>
-        /// In-memory execution store that enforces optimistic concurrency
-        /// by validating the expected execution step key.
-        /// </summary>
-        private sealed class ConcurrencyAwareExecutionStore : IAiExecutionStore
-        {
-            private readonly ConcurrentDictionary<string, AiExecutionRecord> _records = new(StringComparer.Ordinal);
-            private readonly ConcurrentDictionary<string, AiExecutionState> _states = new(StringComparer.Ordinal);
-            private readonly object _gate = new();
-
-            public Task CreateAsync(
-                AiExecutionRecord record,
-                AiExecutionState state,
-                CancellationToken cancellationToken = default)
-            {
-                _records[record.ExecutionId] = record;
-                _states[state.ExecutionId] = state;
-                return Task.CompletedTask;
-            }
-
-            public Task<AiExecutionRecord?> GetRecordAsync(
-                string executionId,
-                CancellationToken cancellationToken = default)
-            {
-                _records.TryGetValue(executionId, out var record);
-                return Task.FromResult(record is null ? null : CloneRecord(record));
-            }
-
-            public Task<AiExecutionState?> GetStateAsync(
-                string executionId,
-                CancellationToken cancellationToken = default)
-            {
-                _states.TryGetValue(executionId, out var state);
-                return Task.FromResult(state is null ? null : CloneState(state));
-            }
-
-            public Task<bool> TryUpdateAsync(
-                string executionId,
-                string expectedStepKey,
-                AiExecutionRecord record,
-                AiExecutionState state,
-                CancellationToken cancellationToken = default)
-            {
-                lock (_gate)
-                {
-                    if (!_records.TryGetValue(executionId, out var current))
-                        return Task.FromResult(false);
-
-                    if (!string.Equals(current.ExecutionStepKey, expectedStepKey, StringComparison.Ordinal))
-                        return Task.FromResult(false);
-
-                    _records[executionId] = CloneRecord(record);
-                    _states[executionId] = CloneState(state);
-
-                    return Task.FromResult(true);
-                }
-            }
-
-            private static AiExecutionRecord CloneRecord(AiExecutionRecord source)
-            {
-                return new AiExecutionRecord
-                {
-                    ExecutionId = source.ExecutionId,
-                    ContextKey = source.ContextKey,
-                    CurrentStepIndex = source.CurrentStepIndex,
-                    Steps = new List<string>(source.Steps),
-                    CompletedSteps = new List<string>(source.CompletedSteps),
-                    ExecutionContextSnapshot = source.ExecutionContextSnapshot,
-                    Status = source.Status,
-                    Version = source.Version,
-                    CurrentStep = source.CurrentStep,
-                    ExecutionStepKey = source.ExecutionStepKey,
-                    CreatedAtUtc = source.CreatedAtUtc,
-                    UpdatedAtUtc = source.UpdatedAtUtc
-                };
-            }
-
-            private static AiExecutionState CloneState(AiExecutionState source)
-            {
-                return new AiExecutionState
-                {
-                    ExecutionId = source.ExecutionId,
-                    Data = new Dictionary<string, object?>(source.Data, StringComparer.Ordinal),
-                    Metadata = new Dictionary<string, object?>(source.Metadata, StringComparer.Ordinal),
-                    CreatedAtUtc = source.CreatedAtUtc,
-                    UpdatedAtUtc = source.UpdatedAtUtc
-                };
-            }
-        }
-
-        private sealed class InMemoryContextStore : IContextStore
-        {
-            private readonly ConcurrentDictionary<string, ExecutionContext> _store = new(StringComparer.Ordinal);
-
-            public Task<string> StoreAsync(ExecutionContext context)
-            {
-                var key = Guid.NewGuid().ToString("N");
-                context.ContextKey = key;
-                _store[key] = context;
-                return Task.FromResult(key);
-            }
-
-            public Task<ExecutionContext?> GetAsync(string key)
-            {
-                _store.TryGetValue(key, out var context);
-                return Task.FromResult(context);
-            }
-
-            public Task<bool> TryAcquireInFlightAsync(string key, int maxInFlight) => Task.FromResult(true);
-
-            public Task ReleaseInFlightAsync(string key) => Task.CompletedTask;
-
-            public Task<(string newKey, ExecutionContext context)> RotateAsync(string key, TimeSpan overlapWindow)
-            {
-                if (!_store.TryGetValue(key, out var existing) || existing is null)
-                    throw new InvalidOperationException("Context not found.");
-
-                var rotated = CloneContext(existing);
-                var newKey = Guid.NewGuid().ToString("N");
-                rotated.ContextKey = newKey;
-
-                _store[newKey] = rotated;
-
-                return Task.FromResult((newKey, rotated));
-            }
-
-            public Task<string> SeedAsync(ExecutionContext context)
-            {
-                var key = Guid.NewGuid().ToString("N");
-                context.ContextKey = key;
-                _store[key] = context;
-                return Task.FromResult(key);
-            }
-
-            private static ExecutionContext CloneContext(ExecutionContext source)
-            {
-                return new ExecutionContext
-                {
-                    ContextKey = source.ContextKey,
-                    Project = source.Project,
-                    TenantId = source.TenantId,
-                    TenantGroupId = source.TenantGroupId,
-                    CurrentNamespace = source.CurrentNamespace,
-                    UserId = source.UserId,
-                    Namespaces = source.Namespaces,
-                    TtlSeconds = source.TtlSeconds
-                };
-            }
-        }
-
-        private sealed class InMemoryContextAccessor : IExecutionContextAccessor
-        {
-            public ExecutionContext? Current { get; private set; }
-
-            public void Set(ExecutionContext context) => Current = context;
-
-            public void Clear() => Current = null;
-        }
-
-        private sealed class FakeExecutionContextFactory : IExecutionContextFactory
-        {
-            public ExecutionContext CreateCopy(ExecutionContext context, string contextKey = "")
-            {
-                return new ExecutionContext
-                {
-                    ContextKey = contextKey,
-                    Project = context.Project,
-                    TenantId = context.TenantId,
-                    TenantGroupId = context.TenantGroupId,
-                    CurrentNamespace = context.CurrentNamespace,
-                    UserId = context.UserId,
-                    Namespaces = context.Namespaces,
-                    TtlSeconds = context.TtlSeconds
-                };
-            }
-
-            public ExecutionContextSnapshot CreateSnapshot(ExecutionContext context)
-            {
-                return new ExecutionContextSnapshot
-                {
-                    ContextKey = context.ContextKey,
-                    Project = context.Project,
-                    TenantId = context.TenantId,
-                    TenantGroupId = context.TenantGroupId,
-                    CurrentNamespace = context.CurrentNamespace,
-                    UserId = context.UserId,
-                    Namespaces = context.Namespaces
-                };
-            }
-        }
-
 
         private sealed record ExecutionAttemptOutcome(
             AiExecutionRecord? Record,

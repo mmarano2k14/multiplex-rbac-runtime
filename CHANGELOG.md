@@ -6,6 +6,79 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.6] - 2026-03-26
+
+### Fixed
+
+#### Pipeline Execution Model
+
+- Fixed inconsistent pipeline execution flow caused by double resolution of pipeline definitions
+- Removed redundant pipeline resolution during step execution
+- Enforced single resolution model:
+  - `PrepareAsync` now resolves the pipeline once
+  - `ExecuteNextAsync` consumes the resolved pipeline without re-resolving
+- Eliminated ambiguity between declarative and runtime pipeline models
+
+#### Execution Contracts Alignment
+
+- Corrected `IAiPipelineExecutor` contract to return `ResolvedAiPipeline` instead of `AiPipelineDefinition`
+- Updated execution flow to pass resolved pipeline explicitly into step execution
+- Fixed mismatched method signatures across engine and pipeline layers
+- Ensured strong typing between definition, resolution, and execution phases
+
+---
+
+### Changed
+
+#### Pipeline Architecture
+
+- Introduced clear separation between:
+  - `AiPipelineDefinition` (declarative model)
+  - `ResolvedAiPipeline` (runtime executable model)
+  - `ResolvedAiPipelineStep` (resolved step instance)
+- Refactored pipeline resolution flow to produce runtime-ready structures
+- Standardized step ordering and execution using resolved pipeline steps
+
+#### Execution Engine Integration
+
+- Updated `AiExecutionEngine` to:
+  - Resolve pipelines via `IAiPipelineExecutor.PrepareAsync`
+  - Execute steps using resolved pipeline instances
+- Removed implicit pipeline assumptions during execution
+- Improved determinism by ensuring execution is based on a stable resolved snapshot
+
+#### Test Suite Refactoring
+
+- Refactored all tests to align with the new pipeline-driven architecture
+- Removed duplicated fake implementations from test files
+- Standardized usage of shared fake components (`Fake*`):
+  - Execution store
+  - Context store
+  - Step executor
+  - Pipeline definition provider
+  - Step registry
+- Updated tests to use explicit pipeline definitions instead of direct step injection
+
+#### Concurrency & Stability
+
+- Verified compatibility of the new pipeline model with optimistic concurrency control
+- Ensured `ExecutionStepKey` behavior remains correct under concurrent execution
+- Confirmed deterministic behavior through updated concurrency tests
+
+---
+
+### Notes
+
+- This version fixes a critical architectural inconsistency in pipeline execution
+- Establishes a strict boundary between declarative configuration and runtime execution
+- Reinforces deterministic behavior by removing hidden resolution side effects
+- Prepares the runtime for future enhancements such as:
+  - pipeline caching
+  - distributed execution
+  - advanced execution policies
+
+---
+
 ## [1.0.1.5] - 2026-03-25
 
 ### Added

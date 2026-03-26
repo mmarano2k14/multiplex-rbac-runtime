@@ -1,10 +1,10 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution;
-using Multiplexed.AI.Stores;
+using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.Rbac.Core.ExecutionContext;
-using System.Collections.Concurrent;
+using Multiplexed.AI.Tests.Models;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -16,6 +16,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
     /// This test suite validates the full orchestration flow:
     /// - Execution creation (CreateAsync)
     /// - RBAC execution context seeding
+    /// - Pipeline resolution through the pipeline executor
     /// - Step execution via IAiStepExecutor
     /// - Execution state persistence
     /// - Result merging into execution state
@@ -25,15 +26,15 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
     /// The goal is to ensure that the engine behaves deterministically
     /// and maintains consistency across orchestration, state, and context layers.
     /// </summary>
-    public class AiExecutionEngineTests
+    public sealed class AiExecutionEngineTests
     {
         /// <summary>
         /// Validates the complete happy path of the AI execution engine:
         /// - A new execution is created with an initial RBAC context
-        /// - The first step is executed successfully
+        /// - The configured pipeline step is executed successfully
         /// - The result is merged into the execution state
         /// - The context key is rotated
-        /// - The execution reaches a terminal (Completed) state
+        /// - The execution reaches a terminal completed state
         /// </summary>
         [Fact]
         public async Task Create_And_ExecuteNext_Should_Run_Full_Flow()
@@ -44,26 +45,56 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
 
             var step = new FakeStep("step-1");
 
-            var steps = new List<IAiStep> { step };
-
-            var store = new InMemoryExecutionStore();
-            var contextStore = new InMemoryContextStore();
-            var accessor = new InMemoryContextAccessor();
+            var store = new FakeInMemoryExecutionStore();
+            var contextStore = new FakeInMemoryContextStore();
+            var accessor = new FakeInMemoryContextAccessor();
             var factory = new FakeExecutionContextFactory();
             var services = new ServiceCollection().BuildServiceProvider();
             var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
 
+            var definitionProvider = new FakeInMemoryAiPipelineDefinitionProvider(
+                new[]
+                {
+                    new AiPipelineDefinition
+                    {
+                        Name = "test-pipeline",
+                        Steps = new[]
+                        {
+                            new AiPipelineStepDefinition
+                            {
+                                Name = "step-1",
+                                StepKey = "step-1",
+                                Order = 0
+                            }
+                        }
+                    }
+                });
+
+            var stepRegistry = new FakeInMemoryAiStepRegistry(
+                new[]
+                {
+                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>(
+                        "step-1",
+                        step)
+                });
+
+            var resolver = new AiPipelineResolver(stepRegistry);
+
+            var pipelineExecutor = new AiPipelineExecutor(
+                definitionProvider,
+                resolver,
+                executor);
+
             // Create a realistic RBAC execution context
             var context = new ExecutionContext
             {
-                ContextKey = "",
+                ContextKey = string.Empty,
                 Project = "Project",
                 TenantId = "tenant-id-xxxx",
                 TenantGroupId = "tenant-group-id-xxx",
                 CurrentNamespace = "Namespace",
                 UserId = "userId",
-
                 Namespaces = new List<NamespaceEntry>
                 {
                     new NamespaceEntry
@@ -76,7 +107,6 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                         }
                     }
                 },
-
                 TtlSeconds = 300
             };
 
@@ -84,21 +114,19 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             accessor.Set(context);
 
             var engine = new AiExecutionEngine(
-                steps,
                 store,
                 contextStore,
                 accessor,
                 factory,
                 services,
-                executor,
-                logger
-            );
+                pipelineExecutor,
+                logger);
 
             // -----------------------------
             // Act
             // -----------------------------
 
-            var record = await engine.CreateAsync("hello");
+            var record = await engine.CreateAsync("test-pipeline", "hello");
 
             record = await engine.ExecuteNextAsync(record.ExecutionId);
 

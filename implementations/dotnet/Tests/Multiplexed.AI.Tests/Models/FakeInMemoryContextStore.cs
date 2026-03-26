@@ -2,7 +2,7 @@
 using System.Collections.Concurrent;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
-public class InMemoryContextStore : IContextStore
+public class FakeInMemoryContextStore : IContextStore
 {
     private readonly ConcurrentDictionary<string, ExecutionContext> _store = new();
 
