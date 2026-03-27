@@ -9,42 +9,49 @@ namespace Multiplexed.AI.Runtime.Pipeline
     ///
     /// Architecture summary:
     /// AiExecutionEngine
-    ///     -> AiPipelineExecutor
-    ///         -> IAiPipelineDefinitionProvider
-    ///         -> IAiPipelineResolver
-    ///         -> IAiStepExecutor
+    ///     -> IAiPipelineExecutor
+    ///         -> PrepareAsync(...)
+    ///             -> IAiPipelineDefinitionSourceSelector
+    ///             -> IAiPipelineDefinitionProvider
+    ///             -> IAiPipelineResolver
+    ///         -> ExecuteNextAsync(...)
+    ///             -> IAiStepExecutor
     ///
     /// Responsibilities:
-    /// - Resolve the configured pipeline once
+    /// - Select the appropriate pipeline definition provider during preparation
+    /// - Resolve the configured pipeline into a runtime executable pipeline
     /// - Determine the current step from the orchestration record
     /// - Execute exactly one resolved step
-    /// - Return structured progression data to the engine
+    /// - Return structured progression data to the execution engine
     ///
-    /// This class does not own RBAC context loading, rotation,
-    /// or persistence orchestration.
+    /// This class does not own:
+    /// - RBAC context loading
+    /// - RBAC context rotation
+    /// - optimistic concurrency
+    /// - persistence orchestration
     /// </summary>
     public sealed class AiPipelineExecutor : IAiPipelineExecutor
     {
-        private readonly IAiPipelineDefinitionProvider _definitionProvider;
+        private readonly IAiPipelineDefinitionSourceSelector _sourceSelector;
         private readonly IAiPipelineResolver _pipelineResolver;
         private readonly IAiStepExecutor _stepExecutor;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiPipelineExecutor"/> class.
         /// </summary>
-        /// <param name="definitionProvider">The provider used to load declarative pipeline definitions.</param>
+        /// <param name="sourceSelector">The selector used to choose the pipeline definition provider.</param>
         /// <param name="pipelineResolver">The resolver used to convert definitions into executable runtime pipelines.</param>
         /// <param name="stepExecutor">The executor used to execute a single runtime step.</param>
         public AiPipelineExecutor(
-            IAiPipelineDefinitionProvider definitionProvider,
+            IAiPipelineDefinitionSourceSelector sourceSelector,
             IAiPipelineResolver pipelineResolver,
             IAiStepExecutor stepExecutor)
         {
-            ArgumentNullException.ThrowIfNull(definitionProvider);
+            ArgumentNullException.ThrowIfNull(sourceSelector);
             ArgumentNullException.ThrowIfNull(pipelineResolver);
             ArgumentNullException.ThrowIfNull(stepExecutor);
 
-            _definitionProvider = definitionProvider;
+            _sourceSelector = sourceSelector;
             _pipelineResolver = pipelineResolver;
             _stepExecutor = stepExecutor;
         }
@@ -61,7 +68,9 @@ namespace Multiplexed.AI.Runtime.Pipeline
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
 
-            var definition = await _definitionProvider.GetDefinitionAsync(
+            var provider = _sourceSelector.Select(pipelineName);
+
+            var definition = await provider.GetDefinitionAsync(
                 pipelineName,
                 cancellationToken);
 
@@ -124,7 +133,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
             var resolvedStep = orderedSteps[record.CurrentStepIndex];
 
             var stepResult = await _stepExecutor.ExecuteAsync(
-                resolvedStep.Step,
+                resolvedStep,
                 context,
                 cancellationToken);
 

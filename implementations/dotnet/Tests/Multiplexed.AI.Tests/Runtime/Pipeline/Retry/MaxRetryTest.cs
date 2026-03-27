@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Logging;
@@ -40,9 +41,16 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
 
             var step = new AlwaysTimeoutStep();
 
+            var resolvedStep = new ResolvedAiPipelineStep
+            {
+                Name = step.Name,
+                StepKey = step.Name,
+                Step = step
+            };
+
             // Act
             var exception = await Assert.ThrowsAsync<TimeoutException>(
-                () => executor.ExecuteAsync(step, context));
+                () => executor.ExecuteAsync(resolvedStep, context));
 
             // Assert
             Assert.Equal("Always failing timeout.", exception.Message);

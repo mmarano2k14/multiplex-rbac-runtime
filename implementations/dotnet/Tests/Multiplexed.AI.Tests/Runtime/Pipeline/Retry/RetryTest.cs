@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Logging;
@@ -47,8 +48,15 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
 
             var step = new RetryThenSucceedStep(failuresBeforeSuccess: 2);
 
+            var resolvedStep = new ResolvedAiPipelineStep
+            {
+                Name = step.Name,
+                StepKey = step.Name,
+                Step = step
+            };
+
             // Act
-            var result = await executor.ExecuteAsync(step, context);
+            var result = await executor.ExecuteAsync(resolvedStep, context);
 
             // Assert
             Assert.True(result.Success);

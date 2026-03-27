@@ -1,18 +1,19 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions;
+using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Providers;
+using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Registry;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
-using Multiplexed.AI.Runtime.Pipeline.Steps;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -28,10 +29,20 @@ namespace Multiplexed.AI.DI
         /// Adds the AI runtime module to the service collection.
         /// </summary>
         /// <param name="services">Target service collection.</param>
+        /// <param name="configuration">Application configuration.</param>
         /// <returns>The same service collection instance.</returns>
-        public static IServiceCollection AddMultiplexAI(this IServiceCollection services)
+        public static IServiceCollection AddMultiplexAI(
+            this IServiceCollection services,
+            IConfiguration configuration)
         {
             ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(configuration);
+
+            // ------------------------------------------------------------
+            // Options
+            // ------------------------------------------------------------
+            services.Configure<AiEngineOptions>(
+                configuration.GetSection("AiEngine"));
 
             // ------------------------------------------------------------
             // Retry / step execution infrastructure
@@ -46,10 +57,32 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiService, AiService>();
 
             // ------------------------------------------------------------
+            // Step discovery / registry
+            // ------------------------------------------------------------
+            services.AddAiStepsFromAssemblies(
+                typeof(AiRuntimeAssemblyMarker).Assembly);
+
+            // ------------------------------------------------------------
             // Pipeline definition / resolution / execution
             // ------------------------------------------------------------
-            services.AddScoped<IAiPipelineDefinitionProvider, InMemoryAiPipelineDefinitionProvider>();
-            services.AddScoped<IAiStepRegistry, InMemoryAiStepRegistry>();
+            services.AddScoped<InMemoryAiPipelineDefinitionProvider>();
+            services.AddScoped<JsonAiPipelineDefinitionProvider>(sp =>
+            {
+                var options = sp.GetRequiredService<
+                    Microsoft.Extensions.Options.IOptions<AiEngineOptions>>().Value;
+
+                if (string.IsNullOrWhiteSpace(options.JsonPipelineDefinitionFilePath))
+                {
+                    throw new InvalidOperationException(
+                        "AiEngine:JsonPipelineDefinitionFilePath must be configured when using the Json pipeline definition source.");
+                }
+
+                return new JsonAiPipelineDefinitionProvider(
+                    options.JsonPipelineDefinitionFilePath);
+            });
+
+
+            services.AddScoped<IAiPipelineDefinitionSourceSelector, DefaultAiPipelineDefinitionSourceSelector>();
             services.AddScoped<IAiPipelineResolver, AiPipelineResolver>();
             services.AddScoped<IAiPipelineExecutor, AiPipelineExecutor>();
 
@@ -57,12 +90,6 @@ namespace Multiplexed.AI.DI
             // Execution runtime
             // ------------------------------------------------------------
             services.AddScoped<IAiExecutionEngine, AiExecutionEngine>();
-
-            // ------------------------------------------------------------
-            // Steps
-            // ------------------------------------------------------------
-            services.AddScoped<SummaryStep>();
-            services.AddScoped<IAiStep>(sp => sp.GetRequiredService<SummaryStep>());
 
             // ------------------------------------------------------------
             // Stores
@@ -77,7 +104,7 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiExecutionEngineLogger, AiExecutionEngineLogger>();
             services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
             services.AddScoped<IAiStepExecutorLogger, AiStepExecutorLogger>();
-            services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>(); // TO REMOVE
+            services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
             services.AddScoped<IAiRuntimeLogger, AiRuntimeLogger>();
 
             return services;

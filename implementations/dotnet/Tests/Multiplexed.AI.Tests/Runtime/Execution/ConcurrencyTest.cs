@@ -59,6 +59,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                     }
                 });
 
+            var sourceSelector = new FakeAiPipelineDefinitionSourceSelector(definitionProvider);
+
             var stepRegistry = new FakeInMemoryAiStepRegistry(
                 new[]
                 {
@@ -68,7 +70,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var resolver = new AiPipelineResolver(stepRegistry);
 
             var pipelineExecutor = new AiPipelineExecutor(
-                definitionProvider,
+                sourceSelector,
                 resolver,
                 executor);
 

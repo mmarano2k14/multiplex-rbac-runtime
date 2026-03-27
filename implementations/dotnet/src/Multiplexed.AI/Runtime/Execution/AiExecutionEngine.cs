@@ -130,8 +130,10 @@ namespace Multiplexed.AI.Runtime.Execution
                     $"Pipeline '{pipelineName}' does not contain any resolved steps.");
             }
 
-            var aiOwnedContext = _contextFactory.CreateCopy(current, string.Empty);
-            var newContextKey = await _contextStore.SeedAsync(aiOwnedContext);
+
+            var newContextKey = Guid.NewGuid().ToString("N");
+            var aiOwnedContext = _contextFactory.CreateCopy(current, newContextKey);
+            newContextKey = await _contextStore.SeedAsync(aiOwnedContext);
 
             var record = new AiExecutionRecord
             {
@@ -246,7 +248,12 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 await RotateContextAsync(record, cancellationToken);
                 MoveNext(record, pipelineResult);
+
+                // Important:
+                // renew the execution transition key before persisting
+                // so concurrent callers cannot commit the same transition twice.
                 record.TouchVersion();
+                record.RenewExecutionStepKey();
 
                 var updated = await _store.TryUpdateAsync(
                     record.ExecutionId,

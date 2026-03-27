@@ -11,6 +11,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
     /// <summary>
     /// Example step that summarizes input text using the AI service.
     /// </summary>
+    [AiStep(stepKey:"summary")]
     public sealed class SummaryStep : IAiStep
     {
         private readonly IAiService _aiService;

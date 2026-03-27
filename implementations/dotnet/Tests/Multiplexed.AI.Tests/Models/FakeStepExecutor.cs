@@ -1,13 +1,14 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 
 public class FakeStepExecutor : IAiStepExecutor
 {
     public Task<AiStepResult> ExecuteAsync(
-        IAiStep step,
+        ResolvedAiPipelineStep resolvedStep,
         AiExecutionContext context,
         CancellationToken ct)
     {
-        return step.ExecuteAsync(context, ct);
+        return resolvedStep.Step.ExecuteAsync(context, ct);
     }
 }

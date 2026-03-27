@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
@@ -49,20 +50,21 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// <summary>
         /// Executes the specified step using retry behavior declared by attribute.
         /// </summary>
-        /// <param name="step">The step to execute.</param>
+        /// <param name="resolvedStep">The resolved to execute.</param>
         /// <param name="context">The current shared execution context.</param>
         /// <param name="cancellationToken">The cancellation token for the active execution.</param>
         /// <returns>The final step result.</returns>
         public async Task<AiStepResult> ExecuteAsync(
-            IAiStep step,
+            ResolvedAiPipelineStep resolvedStep,
             AiExecutionContext context,
             CancellationToken cancellationToken = default)
         {
-            ArgumentNullException.ThrowIfNull(step);
+            ArgumentNullException.ThrowIfNull(resolvedStep);
+            ArgumentNullException.ThrowIfNull(resolvedStep.Step);
             ArgumentNullException.ThrowIfNull(context);
 
-            var stepType = step.GetType();
-            var stepName = step.Name;
+            var stepType = resolvedStep.Step.GetType();
+            var stepName = resolvedStep.Step.Name;
             var retryPolicy = stepType.GetCustomAttribute<AiRetryPolicyAttribute>(inherit: true);
             var metadata = GetOrCreateStepMetadata(context.State, stepName);
 
@@ -87,7 +89,9 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
 
                     _logger.StepExecutor.AttemptStarted(context.ExecutionId, stepName, metadata.AttemptCount);
 
-                    var result = await step.ExecuteAsync(context, cancellationToken);
+                    SetResolvedStepMetadata(context.State, resolvedStep);
+
+                    var result = await resolvedStep.Step.ExecuteAsync(context, cancellationToken);
 
                     if (!result.Success)
                     {
@@ -222,6 +226,22 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             state.UpdatedAtUtc = DateTime.UtcNow;
 
             return metadata;
+        }
+
+        /// <summary>
+        /// Injects the current resolved step metadata into the execution state.
+        /// This allows the concrete step implementation to access its declarative
+        /// input and configuration without changing the IAiStep contract.
+        /// </summary>
+        private static void SetResolvedStepMetadata(
+            AiExecutionState state,
+            ResolvedAiPipelineStep resolvedStep)
+        {
+            state.Metadata[AiExecutionKeys.CurrentStepName] = resolvedStep.Name;
+            state.Metadata[AiExecutionKeys.CurrentStepKey] = resolvedStep.StepKey;
+            state.Metadata[AiExecutionKeys.CurrentStepInput] = resolvedStep.Input;
+            state.Metadata[AiExecutionKeys.CurrentStepConfig] = resolvedStep.Config;
+            state.UpdatedAtUtc = DateTime.UtcNow;
         }
     }
 }

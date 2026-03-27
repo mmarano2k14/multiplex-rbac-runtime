@@ -1,50 +1,59 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Pipeline;
-using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
+using Multiplexed.AI.Tests.Models;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Runtime.Execution
 {
     /// <summary>
-    /// Integration tests for <see cref="AiExecutionEngine.ExecuteAllAsync"/>.
+    /// Integration tests for <see cref="AiExecutionEngine"/>.
     ///
-    /// This test suite validates full multi-step orchestration, including:
-    /// - execution creation
-    /// - sequential step progression
-    /// - state merging across multiple steps
-    /// - terminal completion state
+    /// This test suite validates the full orchestration flow:
+    /// - Execution creation (CreateAsync)
+    /// - RBAC execution context seeding
+    /// - Pipeline resolution through the pipeline executor
+    /// - Step execution via IAiStepExecutor
+    /// - Execution state persistence
+    /// - Result merging into execution state
+    /// - RBAC context key rotation
+    /// - Step progression and completion
+    ///
+    /// The goal is to ensure that the engine behaves deterministically
+    /// and maintains consistency across orchestration, state, and context layers.
     /// </summary>
-    public sealed class AiExecutionEngineExecuteAllTests
+    public sealed class AiExecutionEngineTests
     {
         /// <summary>
-        /// Validates that <see cref="AiExecutionEngine.ExecuteAllAsync"/> executes
-        /// all remaining steps until the workflow reaches a terminal completed state.
+        /// Validates the complete happy path of the AI execution engine:
+        /// - A new execution is created with an initial RBAC context
+        /// - The configured pipeline step is executed successfully
+        /// - The result is merged into the execution state
+        /// - The context key is rotated
+        /// - The execution reaches a terminal completed state
         /// </summary>
         [Fact]
-        public async Task ExecuteAllAsync_Should_Run_All_Remaining_Steps_And_Complete_Workflow()
+        public async Task Create_And_ExecuteNext_Should_Run_Full_Flow()
         {
             // -----------------------------
             // Arrange
             // -----------------------------
 
-            var step1 = new FakeStep("step-1");
-            var step2 = new FakeStep("step-2");
+            var step = new FakeStep("step-1");
 
             var store = new FakeInMemoryExecutionStore();
             var contextStore = new FakeInMemoryContextStore();
             var accessor = new FakeInMemoryContextAccessor();
             var factory = new FakeExecutionContextFactory();
+            var services = new ServiceCollection().BuildServiceProvider();
             var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
 
-            var definitionProvider = new InMemoryAiPipelineDefinitionProvider(
+            var definitionProvider = new FakeInMemoryAiPipelineDefinitionProvider(
                 new[]
                 {
                     new AiPipelineDefinition
@@ -57,33 +66,30 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                                 Name = "step-1",
                                 StepKey = "step-1",
                                 Order = 0
-                            },
-                            new AiPipelineStepDefinition
-                            {
-                                Name = "step-2",
-                                StepKey = "step-2",
-                                Order = 1
                             }
                         }
                     }
                 });
 
-            var stepRegistry = new InMemoryAiStepRegistry(
+            var sourceSelector = new FakeAiPipelineDefinitionSourceSelector(definitionProvider);
+
+            var stepRegistry = new FakeInMemoryAiStepRegistry(
                 new[]
                 {
-                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>("step-1", step1),
-                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>("step-2", step2)
+                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>(
+                        "step-1",
+                        step)
                 });
 
             var resolver = new AiPipelineResolver(stepRegistry);
+
             var pipelineExecutor = new AiPipelineExecutor(
-                definitionProvider,
+                sourceSelector,
                 resolver,
                 executor);
 
-            var services = new ServiceCollection().BuildServiceProvider();
-
-            var initialContext = new ExecutionContext
+            // Create a realistic RBAC execution context
+            var context = new ExecutionContext
             {
                 ContextKey = string.Empty,
                 Project = "Project",
@@ -106,7 +112,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 TtlSeconds = 300
             };
 
-            accessor.Set(initialContext);
+            // Seed the runtime context (simulates authenticated request scope)
+            accessor.Set(context);
 
             var engine = new AiExecutionEngine(
                 store,
@@ -117,32 +124,32 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 pipelineExecutor,
                 logger);
 
-            var record = await engine.CreateAsync("test-pipeline", "hello");
-
             // -----------------------------
             // Act
             // -----------------------------
 
-            var finalRecord = await engine.ExecuteAllAsync(record.ExecutionId);
-            var finalState = await store.GetStateAsync(record.ExecutionId);
+            var record = await engine.CreateAsync("test-pipeline", "hello");
+
+            record = await engine.ExecuteNextAsync(record.ExecutionId);
 
             // -----------------------------
             // Assert
             // -----------------------------
 
-            Assert.NotNull(finalState);
+            // Step execution completed
+            Assert.Contains("step-1", record.CompletedSteps);
 
-            Assert.True(finalRecord.IsTerminal);
-            Assert.Equal(AiExecutionStatus.Completed, finalRecord.Status);
+            // Execution reached terminal state
+            Assert.True(record.IsTerminal);
 
-            Assert.Equal(2, finalRecord.CompletedSteps.Count);
-            Assert.Contains("step-1", finalRecord.CompletedSteps);
-            Assert.Contains("step-2", finalRecord.CompletedSteps);
+            // Context key has been rotated and is not empty
+            Assert.NotEmpty(record.ContextKey);
 
-            Assert.Equal("processed", finalState!.Get<string>("result"));
+            // Validate execution state persistence and result merging
+            var state = await store.GetStateAsync(record.ExecutionId);
 
-            Assert.Equal(string.Empty, finalRecord.CurrentStep);
-            Assert.Equal(2, finalRecord.CurrentStepIndex);
+            Assert.NotNull(state);
+            Assert.Equal("processed", state!.Get<string>("result"));
         }
     }
 }

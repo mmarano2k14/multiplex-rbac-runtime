@@ -22,5 +22,17 @@
         /// Gets or sets the execution order of the step.
         /// </summary>
         public int Order { get; init; }
+
+        /// <summary>
+        /// Gets or sets the optional declarative input for this step.
+        /// </summary>
+        public IReadOnlyDictionary<string, object?> Input { get; init; }
+            = new Dictionary<string, object?>();
+
+        /// <summary>
+        /// Gets or sets the optional declarative configuration for this step.
+        /// </summary>
+        public IReadOnlyDictionary<string, object?> Config { get; init; }
+            = new Dictionary<string, object?>();
     }
 }

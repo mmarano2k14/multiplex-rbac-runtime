@@ -1,0 +1,29 @@
+{
+  "pipelines": [
+    {
+      "name": "test-pipeline",
+      "version": 1,
+      "steps": [
+        {
+          "name": "hello",
+          "stepKey": "hello-world",
+          "order": 1,
+          "input": {
+            "text": "Marco"
+          },
+          "config": {
+            "model": "gpt-4.1",
+            "delayMs": 500,
+            "maxTokens": 200,
+            "temperature": 0.7
+          }
+        },
+        {
+          "name": "summary",
+          "stepKey": "summary",
+          "order": 2
+        }
+      ]
+    }
+  ]
+}

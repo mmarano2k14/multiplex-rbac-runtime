@@ -6,6 +6,250 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.7] - 2026-03-27
+
+### Added
+
+#### JSON Pipeline Definition Provider
+
+- Introduced support for loading pipeline definitions from JSON files
+- Added provider-based pipeline resolution for declarative runtime configuration
+- Enabled external pipeline registration through configuration:
+  - `AiEngine:DefaultPipelineDefinitionSource`
+  - `AiEngine:JsonPipelineDefinitionFilePath`
+- Established a portable configuration model for runtime pipeline execution
+- Prepared the runtime for future dynamic and environment-specific pipeline loading
+
+#### Step Input Mapping in JSON Definitions
+
+- Added support for declarative `input` sections on pipeline steps in JSON definitions
+- Enabled runtime binding of step inputs through named input mappings
+- Standardized input resolution via execution context bindings
+- Supports scenarios such as:
+  - binding shared execution state into a step
+  - resolving aliases such as `"text": "input"`
+  - passing state values forward across multiple steps
+
+#### Step Configuration in JSON Definitions
+
+- Added support for declarative `config` sections on pipeline steps in JSON definitions
+- Enabled strongly-typed step configuration access at runtime through execution context helpers
+- Supported configuration-driven step behavior without changing runtime code
+- Example use cases now supported:
+  - `delayMs`
+  - `model`
+  - `maxTokens`
+  - `temperature`
+- Established a clean separation between:
+  - step input bindings
+  - step execution configuration
+  - shared execution state
+
+#### Redis Atomic Execution Update
+
+- Introduced atomic compare-and-swap persistence for AI execution updates using Redis Lua
+- Added Redis-side validation of `ExecutionStepKey` before applying record/state updates
+- Ensured record and state are updated atomically in a single Redis operation
+- Prevented duplicate step transitions under concurrent execution
+- Established lock-free optimistic concurrency for distributed execution scenarios
+
+#### Redis Lua SHA Script Optimization
+
+- Added `LuaScript.Prepare` + `LoadedLuaScript` support for Redis execution updates
+- Moved atomic update script execution to SHA-based evaluation for improved performance
+- Reduced repeated raw Lua payload transmission over the network
+- Improved Redis-side efficiency under repeated execution update calls
+- Added automatic script reload on `NOSCRIPT` Redis errors
+- Ensured performance gains are preserved after Redis restart or failover
+
+#### Execution Context JSON Compatibility
+
+- Added `JsonElement` support for values restored from JSON-based persistence and configuration
+- Updated typed value resolution for:
+  - `AiExecutionState`
+  - `AiExecutionContext` step input values
+  - `AiExecutionContext` step config values
+  - execution metadata helpers
+- Ensured JSON-backed dictionaries using `object?` remain strongly usable at runtime
+- Fixed interoperability between:
+  - JSON pipeline definitions
+  - Redis persistence
+  - strongly-typed runtime step access
+
+#### Expanded Runtime Test Coverage
+
+- Expanded the test suite to 61+ tests covering runtime, integration, concurrency, JSON definitions, retry paths, and Redis behavior
+- Added end-to-end coverage for:
+  - JSON pipeline definitions with real DI
+  - step input and step config resolution
+  - full pipeline execution
+  - `ExecuteNextAsync`
+  - `ExecuteAllAsync`
+  - failure and exception flows
+  - Redis-backed atomic execution updates
+- Added concurrency tests validating that only one concurrent step transition succeeds
+- Added Redis integration tests validating real persistence behavior and round-trip correctness
+- Added integration coverage for fake and real context-store scenarios
+
+---
+
+### Fixed
+
+#### Pipeline Execution Model
+
+- Fixed inconsistent pipeline execution flow caused by double resolution of pipeline definitions
+- Removed redundant pipeline resolution during step execution
+- Enforced single resolution model:
+  - `PrepareAsync` now resolves the pipeline once
+  - `ExecuteNextAsync` consumes the resolved pipeline without re-resolving
+- Eliminated ambiguity between declarative and runtime pipeline models
+
+#### Execution Contracts Alignment
+
+- Corrected `IAiPipelineExecutor` contract to return `ResolvedAiPipeline` instead of `AiPipelineDefinition`
+- Updated execution flow to pass resolved pipeline explicitly into step execution
+- Fixed mismatched method signatures across engine and pipeline layers
+- Ensured strong typing between definition, resolution, and execution phases
+
+#### Execution Step Rotation on Successful Transition
+
+- Fixed missing `ExecutionStepKey` renewal on successful step progression
+- Ensured the execution transition key is rotated on both:
+  - successful step completion
+  - failed / exception paths
+- Restored correctness of optimistic concurrency enforcement on happy-path execution
+- Fixed a concurrency issue where multiple callers could otherwise commit the same transition
+
+#### Real Context Store Seeding Contract
+
+- Fixed execution engine behavior to ensure AI-owned RBAC contexts are created with a valid context key before seeding
+- Aligned engine behavior with strict requirements of the real Redis-backed context store
+- Eliminated invalid context seeding behavior hidden by looser fake-store implementations
+
+#### JSON Step Value Casting
+
+- Fixed invalid cast failures when step `input` and `config` values were loaded from JSON and materialized as `JsonElement`
+- Restored proper typed access for step input/config helpers and runtime step execution
+- Fixed real DI + JSON-definition execution flow for runtime steps such as `HelloWorldStep`
+
+#### HelloWorld Step Input Resolution
+
+- Updated `HelloWorldStep` to support both:
+  - declarative step input binding
+  - fallback to shared execution state input
+- Improved runtime tolerance across multiple pipeline composition styles
+- Eliminated false negatives in integration scenarios caused by differing input sources
+
+---
+
+### Changed
+
+#### Pipeline Architecture
+
+- Introduced clear separation between:
+  - `AiPipelineDefinition` (declarative model)
+  - `ResolvedAiPipeline` (runtime executable model)
+  - `ResolvedAiPipelineStep` (resolved step instance)
+- Refactored pipeline resolution flow to produce runtime-ready structures
+- Standardized step ordering and execution using resolved pipeline steps
+- Reinforced the boundary between pipeline configuration and runtime execution
+
+#### Execution Engine Integration
+
+- Updated `AiExecutionEngine` to:
+  - resolve pipelines via `IAiPipelineExecutor.PrepareAsync`
+  - execute steps using resolved pipeline instances
+  - persist execution state after each step transition
+  - rotate execution transition keys correctly between steps
+- Removed implicit pipeline assumptions during execution
+- Improved determinism by ensuring execution is based on a stable resolved snapshot
+
+#### JSON-Driven Step Runtime Behavior
+
+- Standardized how steps consume declarative JSON metadata through execution context helpers
+- Clarified distinction between:
+  - `input` as binding metadata
+  - `config` as step runtime options
+  - execution state as shared mutable data
+- Improved readability and runtime consistency of step behavior under JSON-defined pipelines
+
+#### Redis Store Implementation
+
+- Migrated atomic Redis update flow from raw script execution to prepared + loaded Lua scripts
+- Added internal script reload path to preserve SHA-based performance after Redis script cache loss
+- Improved resilience without sacrificing atomicity or correctness
+- Standardized Redis serialization / deserialization behavior with runtime-safe JSON handling
+
+#### Test Suite Refactoring
+
+- Refactored tests to align with the resolved-pipeline execution architecture
+- Added dedicated JSON integration and JSON concurrency test scenarios
+- Standardized usage of reusable fake components where appropriate:
+  - execution store
+  - context store
+  - execution context factory
+  - runtime logger
+- Added focused real-store integration tests where runtime correctness required real infrastructure
+- Improved test isolation and cleanup of Redis-backed artifacts
+
+---
+
+### Performance
+
+#### Redis Atomic Update Efficiency
+
+- Reduced overhead of repeated Lua execution by switching to SHA-based loaded scripts
+- Lowered repeated network payload size for Redis script evaluation
+- Improved throughput for execution transition persistence under repeated step progression
+- Preserved atomic compare-and-swap behavior while increasing runtime efficiency
+
+#### Concurrency Stability
+
+- Validated correct behavior of optimistic concurrency control under real concurrent execution
+- Confirmed that only one caller can commit a given execution transition
+- Reinforced deterministic behavior for both:
+  - `ExecuteNextAsync`
+  - `ExecuteAllAsync`
+
+---
+
+### Test Coverage Summary
+
+This version includes broad runtime validation across unit and integration boundaries, including:
+
+- execution engine flow
+- JSON pipeline definition loading
+- declarative step input resolution
+- declarative step config resolution
+- state persistence and round-trip safety
+- Redis atomic CAS behavior
+- SHA-based Redis script execution
+- concurrent step progression protection
+- terminal execution behavior
+- failure and exception handling
+- real DI + JSON execution scenarios
+- fake and real context-store integration coverage
+
+Total validated test coverage: **61+ tests**
+
+---
+
+### Notes
+
+- This version significantly strengthens the runtime foundation established in previous versions
+- JSON-defined pipelines are now first-class runtime inputs
+- Step-level `input` and `config` metadata are now fully supported in real execution scenarios
+- Redis execution persistence is now both:
+  - atomic
+  - performance-optimized via SHA-loaded Lua scripts
+- The execution engine now enforces transition-key rotation consistently across all execution paths
+- The runtime is now in a strong state for the next phase:
+  - provider integration
+  - prompt orchestration
+  - structured outputs
+  - retrieval-augmented execution
+---
+
 ## [1.0.1.6] - 2026-03-26
 
 ### Fixed

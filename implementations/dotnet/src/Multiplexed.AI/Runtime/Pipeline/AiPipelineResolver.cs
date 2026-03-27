@@ -78,7 +78,9 @@ namespace Multiplexed.AI.Runtime.Pipeline
                     Name = stepDefinition.Name,
                     StepKey = stepDefinition.StepKey,
                     Step = step,
-                    Order = stepDefinition.Order
+                    Order = stepDefinition.Order,
+                    Input = stepDefinition.Input,
+                    Config = stepDefinition.Config,
                 });
             }
 
