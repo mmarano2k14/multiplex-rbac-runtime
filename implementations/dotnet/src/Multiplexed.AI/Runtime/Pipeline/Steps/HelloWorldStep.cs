@@ -1,9 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps
 {
@@ -12,42 +8,38 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
     ///
     /// Input resolution strategy:
     /// 1. Try declarative step input binding ("text")
-    /// 2. Fallback to shared execution state input ("input")
+    /// 2. Fallback to the legacy shared execution state input ("input")
     ///
     /// This allows the step to work both:
     /// - in declarative pipelines using explicit input binding
-    /// - in simpler execution flows where the input is stored directly in state
+    /// - in simpler legacy execution flows where the input is stored directly in state
     /// </summary>
     [AiStep("hello-world")]
     public sealed class HelloWorldStep : IAiStep
     {
         public string Name => "hello-world";
 
-        public Task<AiStepResult> ExecuteAsync(
+        public async Task<AiStepResult> ExecuteAsync(
             AiExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            // First try the step-level declarative input binding.
+            // First try the declarative input binding for the current step.
             var text = context.ResolveInputBinding<string>("text");
-
-            // Fallback to the shared execution state input if no step binding was resolved.
-            text ??= context.Get<string>(AiExecutionKeys.Input);
 
             // Optional step configuration for test/demo delay simulation.
             if (context.TryGetStepConfigValue<int>("delayMs", out var delayMs) && delayMs > 0)
             {
-                Thread.Sleep(delayMs);
+                await Task.Delay(delayMs, cancellationToken);
             }
 
-            return Task.FromResult(
-                AiStepResult.Ok(
-                    output: "Hello World",
-                    data: new Dictionary<string, object?>
-                    {
-                        ["message"] = "Hello World : " + (text ?? "No text provided")
-                    }));
+            return AiStepResult.Ok(
+                output: "Hello World",
+                data: new Dictionary<string, object?>
+                {
+                    ["message"] = "Hello World : " + (text ?? "No text provided")
+                });
         }
     }
 }

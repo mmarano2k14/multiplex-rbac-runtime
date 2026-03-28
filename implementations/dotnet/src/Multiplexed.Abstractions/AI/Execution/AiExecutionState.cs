@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Steps;
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 
@@ -17,6 +19,10 @@ namespace Multiplexed.Abstractions.AI.Execution
     /// - Safe persistence (e.g. Redis, database)
     /// - Replay and recovery scenarios
     /// - Distributed execution models
+    ///
+    /// Migration note:
+    /// - Legacy shared bag access is still available for compatibility
+    /// - New step-scoped state is exposed through <see cref="Steps"/>
     /// </summary>
     public sealed class AiExecutionState
     {
@@ -36,10 +42,16 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Shared execution data exchanged between steps.
         ///
-        /// This is the primary data bag used by the pipeline.
+        /// This is the legacy primary data bag used by the pipeline.
         /// Keys should remain stable across steps.
         /// </summary>
         public Dictionary<string, object?> Data { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets or sets the structured state of pipeline steps.
+        /// Each step keeps its own resolved inputs and produced outputs.
+        /// </summary>
+        public Dictionary<string, AiStepState> Steps { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Additional execution metadata used for diagnostics, tracing,
@@ -60,11 +72,11 @@ namespace Multiplexed.Abstractions.AI.Execution
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
         // ------------------------------------------------------------------
-        // DATA ACCESS API
+        // LEGACY DATA ACCESS API
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Retrieves a strongly-typed value from the execution data.
+        /// Retrieves a strongly-typed value from the legacy shared execution data bag.
         ///
         /// Returns <c>default</c> if the key does not exist or the value is null.
         /// Throws if the stored value cannot be cast to the requested type.
@@ -78,7 +90,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Stores or replaces a value in the execution data.
+        /// Stores or replaces a value in the legacy shared execution data bag.
         ///
         /// Updates the <see cref="UpdatedAtUtc"/> timestamp.
         /// </summary>
@@ -89,7 +101,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a strongly-typed value from the execution data.
+        /// Attempts to retrieve a strongly-typed value from the legacy shared execution data bag.
         ///
         /// Returns true if the key exists and the value matches the expected type.
         /// Also supports values restored from JSON persistence layers
@@ -101,12 +113,12 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Determines whether a key exists in the execution data.
+        /// Determines whether a key exists in the legacy shared execution data bag.
         /// </summary>
         public bool Contains(string key) => Data.ContainsKey(key);
 
         /// <summary>
-        /// Removes a value from the execution data if it exists.
+        /// Removes a value from the legacy shared execution data bag if it exists.
         ///
         /// Updates the <see cref="UpdatedAtUtc"/> timestamp if removal succeeds.
         /// </summary>
@@ -114,6 +126,192 @@ namespace Multiplexed.Abstractions.AI.Execution
         {
             if (Data.Remove(key))
                 UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+
+        /// <summary>
+        /// Applies the step definition to the execution state by initializing
+        /// or updating the corresponding <see cref="AiStepState"/>.
+        ///
+        /// This method:
+        /// - Ensures the step state exists
+        /// - Sets or replaces Inputs and Config from the definition
+        /// - Updates timestamps for traceability
+        ///
+        /// Notes:
+        /// - This does NOT execute the step
+        /// - This does NOT set the Result
+        /// - Inputs/Config are considered runtime-ready copies of the definition
+        /// </summary>
+        /// <param name="stepDefinition">The pipeline step definition.</param>
+        private void ApplyStepDefinition(ResolvedAiPipelineStep stepDefinition)
+        {
+            ArgumentNullException.ThrowIfNull(stepDefinition);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepDefinition.Name);
+
+            // Ensure step state exists
+            if (!Steps.TryGetValue(stepDefinition.Name, out var stepState))
+            {
+                stepState = new AiStepState
+                {
+                    StepName = stepDefinition.Name
+                };
+
+                Steps[stepDefinition.Name] = stepState;
+            }
+
+            // Clone Inputs (avoid shared references)
+            stepState.Inputs = stepDefinition.Input is null
+                ? new Dictionary<string, object?>(StringComparer.Ordinal)
+                : new Dictionary<string, object?>(stepDefinition.Input, StringComparer.Ordinal);
+
+            // Clone Config (avoid shared references)
+            stepState.Config = stepDefinition.Config is null
+                ? new Dictionary<string, object?>(StringComparer.Ordinal)
+                : new Dictionary<string, object?>(stepDefinition.Config, StringComparer.Ordinal);
+
+            // Update timestamps
+            stepState.UpdatedAtUtc = DateTime.UtcNow;
+            UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Ensures that a step is initialized in the execution state.
+        ///
+        /// This method:
+        /// - Checks whether a step state already exists for the given definition
+        /// - Creates and initializes it using <see cref="ApplyStepDefinition"/> if missing
+        ///
+        /// Notes:
+        /// - This method is idempotent: calling it multiple times will not override existing state
+        /// - Existing step data (including Result, Inputs, Config) is preserved
+        /// - Use this during pipeline initialization or DAG preparation phases
+        /// </summary>
+        /// <param name="stepDefinition">The pipeline step definition.</param>
+        public void EnsureStepInitialized(ResolvedAiPipelineStep stepDefinition)
+        {
+            ArgumentNullException.ThrowIfNull(stepDefinition);
+
+            if (Steps.ContainsKey(stepDefinition.Name))
+                return;
+
+            ApplyStepDefinition(stepDefinition);
+        }
+
+        /// <summary>
+        /// Gets the existing step state or creates a new one when missing.
+        /// </summary>
+        public AiStepState GetOrCreateStep(string stepName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+
+            if (!Steps.TryGetValue(stepName, out var stepState))
+            {
+                stepState = new AiStepState
+                {
+                    StepName = stepName
+                };
+
+                Steps[stepName] = stepState;
+                UpdatedAtUtc = DateTime.UtcNow;
+            }
+
+            return stepState;
+        }
+
+        /// <summary>
+        /// Stores or replaces a resolved input value for the specified step.
+        /// </summary>
+        public void SetStepInput<T>(string stepName, string key, T value)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            var step = GetOrCreateStep(stepName);
+            step.Inputs[key] = value;
+            step.UpdatedAtUtc = DateTime.UtcNow;
+            UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Retrieves a strongly-typed resolved input value for the specified step.
+        /// Returns default if the step or key does not exist.
+        /// </summary>
+        public T? GetStepInput<T>(string stepName, string key)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (!Steps.TryGetValue(stepName, out var step))
+                return default;
+
+            return GetValue<T>(step.Inputs, key, $"StepInputs[{stepName}]");
+        }
+
+        /// <summary>
+        /// Attempts to retrieve a strongly-typed resolved input value
+        /// for the specified step.
+        /// </summary>
+        public bool TryGetStepInput<T>(string stepName, string key, out T? value)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (!Steps.TryGetValue(stepName, out var step))
+            {
+                value = default;
+                return false;
+            }
+
+            return TryGetValue(step.Inputs, key, $"StepInputs[{stepName}]", out value);
+        }
+
+        // ------------------------------------------------------------------
+        // STEP CONFIG ACCESS API
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Retrieves a strongly-typed configuration value for the specified step.
+        /// Returns default if the step or key does not exist.
+        /// </summary>
+        public T? GetStepConfig<T>(string stepName, string key)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (!Steps.TryGetValue(stepName, out var step))
+                return default;
+
+            return GetValue<T>(
+                step.Config as IDictionary<string, object?> ?? new Dictionary<string, object?>(),
+                key,
+                $"StepConfig[{stepName}]");
+        }
+
+        /// <summary>
+        /// Attempts to retrieve a strongly-typed configuration value
+        /// for the specified step.
+        /// </summary>
+        public bool TryGetStepConfig<T>(string stepName, string key, out T? value)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (!Steps.TryGetValue(stepName, out var step))
+            {
+                value = default;
+                return false;
+            }
+
+            var config = step.Config as IDictionary<string, object?>;
+
+            if (config is null)
+            {
+                value = default;
+                return false;
+            }
+
+            return TryGetValue(config, key, $"StepConfig[{stepName}]", out value);
         }
 
         // ------------------------------------------------------------------
@@ -172,6 +370,31 @@ namespace Multiplexed.Abstractions.AI.Execution
             if (Metadata.Remove(key))
                 UpdatedAtUtc = DateTime.UtcNow;
         }
+
+        /// <summary>
+        /// Sets or replaces the execution result for the specified step.
+        /// Throws if the step is not initialized in the dictionary.
+        /// </summary>
+        /// <param name="stepName">The unique step name.</param>
+        /// <param name="result">The execution result produced by the step.</param>
+        public void SetStepResult(string stepName, AiStepResult result)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentNullException.ThrowIfNull(result);
+
+            if (!Steps.TryGetValue(stepName, out var stepState))
+                throw new InvalidOperationException($"Step '{stepName}' is not initialized.");
+
+            var now = DateTime.UtcNow;
+
+            stepState.Result = result;
+            stepState.UpdatedAtUtc = now;
+            UpdatedAtUtc = now;
+        }
+
+        // ------------------------------------------------------------------
+        // INTERNAL HELPERS
+        // ------------------------------------------------------------------
 
         /// <summary>
         /// Retrieves a strongly-typed value from the specified bag.
@@ -261,7 +484,6 @@ namespace Multiplexed.Abstractions.AI.Execution
         {
             try
             {
-                // Fast-path for string values to avoid unnecessary generic deserialization.
                 if (typeof(T) == typeof(string) && jsonElement.ValueKind == JsonValueKind.String)
                 {
                     object? value = jsonElement.GetString();

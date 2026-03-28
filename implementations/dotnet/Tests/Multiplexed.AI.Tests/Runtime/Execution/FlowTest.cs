@@ -1,10 +1,11 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Pipeline;
-using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.AI.Tests.Models;
+using Multiplexed.Rbac.Core.ExecutionContext;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -131,6 +132,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var record = await engine.CreateAsync("test-pipeline", "hello");
 
             record = await engine.ExecuteNextAsync(record.ExecutionId);
+            var finalState = await store.GetStateAsync(record.ExecutionId);
 
             // -----------------------------
             // Assert
@@ -149,7 +151,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var state = await store.GetStateAsync(record.ExecutionId);
 
             Assert.NotNull(state);
-            Assert.Equal("processed", state!.Get<string>("result"));
+            AiStepResult? result = finalState!.Steps["step-1"].Result;
+            Assert.Equal("processed", result?.Output);
         }
     }
 }

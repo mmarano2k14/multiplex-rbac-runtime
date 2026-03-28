@@ -213,7 +213,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     Name: "hello",
                     StepKey: "hello-world",
                     Order: 1,
-                    Input: new Dictionary<string, object?> { ["text"] = AiExecutionKeys.Input }),
+                    Input: new Dictionary<string, object?> { ["text"] = "Bangkok 2" }),
                 new TestStepDefinition(
                     Name: "summary",
                     StepKey: "summary",
@@ -235,7 +235,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var finalState = await GetStore().GetStateAsync(execution.ExecutionId, CancellationToken.None);
                 Assert.NotNull(finalState);
-                Assert.Equal("Hello World : Bangkok", finalState!.Get<string>("message"));
+                AiStepResult? result = finalState!.Steps["hello"].Result;
+                Assert.Equal("Hello World : Bangkok 2", result?.Output);
             }
             finally
             {
@@ -732,7 +733,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
 
                 var currentStep = orderedSteps[currentIndex];
+                SetResolvedStepMetadata(context.State, currentStep);
+
+                context.State.EnsureStepInitialized(currentStep);
+
                 var result = await currentStep.Step.ExecuteAsync(context, cancellationToken);
+
+                context.State.SetStepResult(currentStep.Name, result);
+
+                
+
 
                 var nextStepIndex = currentIndex + 1;
                 var isCompleted = nextStepIndex >= orderedSteps.Length;
@@ -810,6 +820,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             {
                 throw new InvalidOperationException("Forced exception.");
             }
+        }
+
+        /// <summary>
+        /// Injects the current resolved step metadata into the execution state.
+        /// This allows the concrete step implementation to access its declarative
+        /// input and configuration without changing the IAiStep contract.
+        /// </summary>
+        private static void SetResolvedStepMetadata(
+            AiExecutionState state,
+            ResolvedAiPipelineStep resolvedStep)
+        {
+            state.Metadata[AiExecutionKeys.CurrentStepName] = resolvedStep.Name;
+            state.Metadata[AiExecutionKeys.CurrentStepKey] = resolvedStep.StepKey;
+            state.UpdatedAtUtc = DateTime.UtcNow;
         }
     }
 }

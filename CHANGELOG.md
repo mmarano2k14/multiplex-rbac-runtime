@@ -6,6 +6,81 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.1.8] - 2026-03-29
+
+### Added
+
+#### Step-Scoped Execution State
+
+- Introduced `AiStepState` collection inside `AiExecutionState` to persist per-step runtime data
+- Added `Inputs` and `Config` to `AiStepState` for storing resolved inputs and declarative configuration
+- Enabled full isolation of step-level data from global execution state
+
+#### Step Result Model
+
+- Introduced `AiStepResult` within `AiStepState` as the canonical output of step execution
+- Added support for structured `Data` payload (dictionary-based)
+- Extended result model with typed output support for flexible result handling
+
+#### Path-Based Resolution Engine
+
+- Introduced unified path-based resolver for accessing:
+  - Step inputs
+  - Step configuration
+  - Step results (value and data)
+- Supports structured paths such as:
+  - `steps.{step}.inputs.{path}`
+  - `steps.{step}.config.{path}`
+  - `steps.{step}.result.value`
+  - `steps.{step}.result.data.{path}`
+
+#### JSON-Compatible Nested Resolution
+
+- Added support for resolving nested values from:
+  - `Dictionary<string, object?>`
+  - `IReadOnlyDictionary<string, object?>`
+  - `JsonElement` (System.Text.Json)
+- Enables safe traversal of complex object graphs using dot-separated paths
+
+---
+
+### Changed
+
+#### Execution Context
+
+- Refactored `AiExecutionContext` to use a unified resolution model
+- Introduced:
+  - `ResolvePath<T>()`
+  - `ResolveInputBinding<T>()`
+  - `ResolveConfigBinding<T>()`
+  - `ResolveCurrentStepInput<T>()`
+  - `ResolveCurrentStepConfig<T>()`
+- Standardized access patterns for step-scoped data
+
+#### Runtime Model Evolution
+
+- Shifted from global state (`State.Data`) toward step-scoped execution model
+- Maintained backward compatibility for legacy shared state usage
+
+---
+
+### Improved
+
+#### Determinism & Observability
+
+- Improved traceability of execution by isolating step inputs, config, and results
+- Strengthened deterministic behavior for replay and debugging scenarios
+- Prepared foundation for DAG execution and advanced orchestration strategies
+
+---
+
+### Notes
+
+- `ExecutionContextSnapshot` remains shallow-copied (to be revisited if mutation is introduced)
+- Legacy global state is still available but progressively deprecated in favor of step-scoped state
+
+---
+
 ## [1.0.1.7] - 2026-03-27
 
 ### Added

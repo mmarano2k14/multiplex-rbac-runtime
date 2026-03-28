@@ -90,8 +90,13 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     _logger.StepExecutor.AttemptStarted(context.ExecutionId, stepName, metadata.AttemptCount);
 
                     SetResolvedStepMetadata(context.State, resolvedStep);
+                    context.State.EnsureStepInitialized(resolvedStep);
 
                     var result = await resolvedStep.Step.ExecuteAsync(context, cancellationToken);
+
+                    context.State.SetStepResult(resolvedStep.Name, result);
+
+                    
 
                     if (!result.Success)
                     {
@@ -239,8 +244,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         {
             state.Metadata[AiExecutionKeys.CurrentStepName] = resolvedStep.Name;
             state.Metadata[AiExecutionKeys.CurrentStepKey] = resolvedStep.StepKey;
-            state.Metadata[AiExecutionKeys.CurrentStepInput] = resolvedStep.Input;
-            state.Metadata[AiExecutionKeys.CurrentStepConfig] = resolvedStep.Config;
             state.UpdatedAtUtc = DateTime.UtcNow;
         }
     }

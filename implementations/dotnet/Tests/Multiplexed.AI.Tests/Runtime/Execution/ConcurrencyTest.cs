@@ -138,7 +138,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.Single(finalRecord!.CompletedSteps);
             Assert.Contains("step-1", finalRecord.CompletedSteps);
 
-            Assert.Equal("processed", finalState!.Get<string>("result"));
+            AiStepResult? result = finalState!.Steps["step-1"].Result;
+            Assert.Equal("processed", result?.Output);
             Assert.True(finalRecord.IsTerminal);
         }
 

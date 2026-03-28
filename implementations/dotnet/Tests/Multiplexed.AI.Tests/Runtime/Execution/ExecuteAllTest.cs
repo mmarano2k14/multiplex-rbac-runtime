@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -142,7 +143,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.Contains("step-1", finalRecord.CompletedSteps);
             Assert.Contains("step-2", finalRecord.CompletedSteps);
 
-            Assert.Equal("processed", finalState!.Get<string>("result"));
+            AiStepResult? result = finalState!.Steps["step-1"].Result;
+            Assert.Equal("processed", result?.Output);
 
             Assert.Equal(string.Empty, finalRecord.CurrentStep);
             Assert.Equal(2, finalRecord.CurrentStepIndex);

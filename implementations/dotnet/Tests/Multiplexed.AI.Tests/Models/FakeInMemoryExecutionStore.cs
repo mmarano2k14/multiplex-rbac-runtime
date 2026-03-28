@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Stores;
 using System.Collections.Concurrent;
 
@@ -107,9 +108,53 @@ public sealed class FakeInMemoryExecutionStore : IAiExecutionStore
             ExecutionId = source.ExecutionId,
             PipelineName = source.PipelineName,
             Data = new Dictionary<string, object?>(source.Data, StringComparer.Ordinal),
+            Steps = CloneSteps(source.Steps),
             Metadata = new Dictionary<string, object?>(source.Metadata, StringComparer.Ordinal),
             CreatedAtUtc = source.CreatedAtUtc,
             UpdatedAtUtc = source.UpdatedAtUtc
+        };
+    }
+
+    private static Dictionary<string, AiStepState> CloneSteps(
+        Dictionary<string, AiStepState> source)
+    {
+        var result = new Dictionary<string, AiStepState>(StringComparer.Ordinal);
+
+        foreach (var entry in source)
+        {
+            result[entry.Key] = CloneStepState(entry.Value);
+        }
+
+        return result;
+    }
+
+    private static AiStepState CloneStepState(AiStepState source)
+    {
+        return new AiStepState
+        {
+            StepName = source.StepName,
+            Inputs = new Dictionary<string, object?>(source.Inputs, StringComparer.Ordinal),
+            Config = source.Config is null
+                ? new Dictionary<string, object?>()
+                : new Dictionary<string, object?>(source.Config, StringComparer.Ordinal),
+            Result = CloneStepResult(source.Result),
+            CreatedAtUtc = source.CreatedAtUtc,
+            UpdatedAtUtc = source.UpdatedAtUtc
+        };
+    }
+
+    private static AiStepResult? CloneStepResult(AiStepResult? source)
+    {
+        if (source is null)
+            return null;
+
+        return new AiStepResult
+        {
+            Success = source.Success,
+            Value = source.Value,
+            Output = source.Output,
+            Error = source.Error,
+            Data = new Dictionary<string, object?>(source.Data, StringComparer.Ordinal)
         };
     }
 }

@@ -1,7 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -237,7 +235,6 @@ namespace Multiplexed.AI.Runtime.Execution
                     return record;
                 }
 
-                MergeResult(state, pipelineResult.StepResult);
 
                 if (!string.IsNullOrWhiteSpace(pipelineResult.ExecutedStepName))
                 {
@@ -348,24 +345,6 @@ namespace Multiplexed.AI.Runtime.Execution
                 state,
                 _services,
                 cancellationToken);
-        }
-
-        /// <summary>
-        /// Merges a successful step result into the persisted execution state.
-        /// </summary>
-        private static void MergeResult(
-            AiExecutionState state,
-            AiStepResult result)
-        {
-            if (result.Data.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var entry in result.Data)
-            {
-                state.Set(entry.Key, entry.Value);
-            }
         }
 
         /// <summary>
