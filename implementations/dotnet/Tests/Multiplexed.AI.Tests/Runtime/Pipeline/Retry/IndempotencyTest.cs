@@ -44,7 +44,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                     [stepName] = new AiStepExecutionMetadata
                     {
                         StepName = stepName,
-                        Status = AiStepExecutionStatus.Succeeded,
+                        Status = AiStepExecutionStatus.Completed,
                         AttemptCount = 1,
                         FirstStartedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-10),
                         LastStartedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-9),
@@ -66,8 +66,12 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 Step = step
             };
 
+            var stepContext = new AiStepExecutionContext(
+                context,
+                resolvedStep);
+
             // Act
-            var result = await executor.ExecuteAsync(resolvedStep, context);
+            var result = await executor.ExecuteAsync(resolvedStep, stepContext);
 
             // Assert
             Assert.True(result.Success);
@@ -80,7 +84,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
 
             // Metadata should remain unchanged for an idempotent skip
             Assert.Equal(1, metadata.AttemptCount);
-            Assert.Equal(AiStepExecutionStatus.Succeeded, metadata.Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, metadata.Status);
             Assert.NotNull(metadata.CompletedAtUtc);
         }
 
@@ -98,7 +102,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             public string Name { get; }
 
             public Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 throw new InvalidOperationException("This step should have been skipped and never executed.");

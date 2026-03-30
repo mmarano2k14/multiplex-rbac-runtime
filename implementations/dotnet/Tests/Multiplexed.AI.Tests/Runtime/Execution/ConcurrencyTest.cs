@@ -13,7 +13,7 @@ using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
 namespace Multiplexed.AI.Tests.Runtime.Execution
 {
     /// <summary>
-    /// Integration tests for concurrent execution behavior in <see cref="AiExecutionEngine"/>.
+    /// Integration tests for concurrent execution behavior in <see cref="AiSequentialExecutionEngine"/>.
     ///
     /// This test suite validates that optimistic concurrency prevents double progression
     /// when multiple callers attempt to execute the same workflow step at the same time.
@@ -69,7 +69,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
 
             var resolver = new AiPipelineResolver(stepRegistry);
 
-            var pipelineExecutor = new AiPipelineExecutor(
+            var pipelineExecutor = new AiSequentialPipelineExecutor(
                 sourceSelector,
                 resolver,
                 executor);
@@ -99,7 +99,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
 
             accessor.Set(initialContext);
 
-            var engine = new AiExecutionEngine(
+            var engine = new AiSequentialExecutionEngine(
                 store,
                 contextStore,
                 accessor,
@@ -144,7 +144,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         }
 
         private static async Task<ExecutionAttemptOutcome> ExecuteAndCaptureAsync(
-            AiExecutionEngine engine,
+            AiSequentialExecutionEngine engine,
             string executionId)
         {
             try
@@ -175,7 +175,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             public string Name { get; }
 
             public async Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 await Task.Delay(_delayMs, cancellationToken);

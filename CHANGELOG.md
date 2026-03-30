@@ -2,7 +2,76 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows a deterministic runtime and observability model designed for high-concurrency testing, focusing on consistency, isolation, and analysis under load.
+This project follows a deterministic AI runtime and observability model designed for high-concurrency testing, focusing on consistency, isolation, and analysis under load.
+
+---
+
+## [1.0.1.9] - 2026-03-30
+
+### Added
+
+#### DAG Runtime Validation & Stress Testing
+
+- Added large-scale DAG integration stress coverage using generated 100-step pipelines
+- Added randomized DAG test scenarios with deterministic seeds for reproducible validation
+- Added parallel-heavy DAG scenario validation to test wide dependency fan-out
+- Added linear DAG scenario validation to verify strict chained execution behavior
+- Added fan-in DAG scenario validation to verify convergence of multiple branches into a final step
+- Added config-based JSON pipeline generation for integration tests to validate the runtime against real file-backed pipeline loading
+
+#### Pipeline Definition Validation
+
+- Added DAG dependency validation for JSON pipeline definitions
+- Added validation for duplicate step names
+- Added validation for empty dependency names
+- Added validation for duplicate dependencies inside a single step
+- Added validation for self-referencing dependencies
+- Added validation for unknown dependency references
+- Added cycle detection to ensure JSON DAG definitions remain acyclic before execution
+
+#### RAG Runtime Integration
+
+- Added initial RAG engine with Redis Lua-backed coordination and state handling
+- Introduced foundation for retrieval-augmented execution within the deterministic AI runtime
+- Enabled integration of external knowledge retrieval within pipeline-based execution flows
+
+### Changed
+
+#### Execution Engine Naming & Architecture Clarity
+
+- Renamed `AiExecutionEngine` to `AiSequentialExecutionEngine` to clearly distinguish sequential execution from DAG/distributed execution engines
+- Improved architectural clarity between sequential and DAG execution models
+- Updated references across runtime, tests, and DI registrations to reflect the new naming
+
+#### Distributed DAG Execution Stability
+
+- Fixed distributed DAG execution status progression so successful step completion keeps execution active when additional steps may now be schedulable
+- Updated distributed DAG completion logic to avoid incorrectly returning `Waiting` while the pipeline can still make progress
+- Improved final DAG execution state recomputation after distributed step completion or failure
+
+#### Redis DAG Store Robustness
+
+- Hardened Redis DAG step serialization and deserialization for `DependsOn`
+- Added runtime repair logic for legacy or corrupted Redis step payloads where empty dependency arrays could be re-encoded as JSON objects
+- Normalized Lua step persistence so empty dependency lists remain valid JSON arrays across claim, complete, fail, and recovery flows
+- Improved Redis script loading safety by selecting a connected primary endpoint for Lua loading
+
+#### JSON Serialization Compatibility
+
+- Updated DateTime converters to support both Unix numeric timestamps and string-based date values during deserialization
+- Improved compatibility for execution records containing mixed snapshot date formats
+- Preserved Unix timestamp output semantics while making reads more tolerant for integration and backward compatibility scenarios
+
+### Fixed
+
+#### DAG Execution & Redis Integration
+
+- Fixed Redis Lua claim script incompatibility caused by unsupported control flow syntax
+- Fixed distributed DAG state reload failures caused by invalid `DependsOn` payload shapes
+- Fixed execution record deserialization failures for snapshot date values read from persisted JSON
+- Fixed false `Waiting` terminal outcomes in distributed DAG execution loops
+- Fixed Redis-backed DAG execution flow so `ExecuteAllAsync` now completes correctly for valid multi-step DAGs
+- Fixed integration behavior across generated DAG stress scenarios using real Redis-backed orchestration
 
 ---
 

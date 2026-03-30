@@ -1,6 +1,7 @@
-﻿using System.Collections.Concurrent;
-using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution;
+using System.Collections.Concurrent;
 
 namespace Multiplexed.AI.Stores.Memory
 {
@@ -101,6 +102,8 @@ namespace Multiplexed.AI.Stores.Memory
             return new AiExecutionRecord
             {
                 ExecutionId = source.ExecutionId,
+                PipelineName = source.PipelineName,
+                ExecutionMode = source.ExecutionMode,
                 ContextKey = source.ContextKey,
                 CurrentStepIndex = source.CurrentStepIndex,
                 Steps = new List<string>(source.Steps),
@@ -123,10 +126,65 @@ namespace Multiplexed.AI.Stores.Memory
             return new AiExecutionState
             {
                 ExecutionId = source.ExecutionId,
-                Data = new Dictionary<string, object?>(source.Data, StringComparer.Ordinal),
-                Metadata = new Dictionary<string, object?>(source.Metadata, StringComparer.Ordinal),
+                PipelineName = source.PipelineName,
+
+                Data = new Dictionary<string, object?>(
+                    source.Data,
+                    StringComparer.Ordinal),
+
+                Metadata = new Dictionary<string, object?>(
+                    source.Metadata,
+                    StringComparer.Ordinal),
+
+                Steps = source.Steps.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => CloneStepState(kvp.Value),
+                    StringComparer.Ordinal),
+
                 CreatedAtUtc = source.CreatedAtUtc,
                 UpdatedAtUtc = source.UpdatedAtUtc
+            };
+        }
+
+        /// <summary>
+        /// Creates a defensive copy of a step state.
+        /// </summary>
+        private static AiStepState CloneStepState(AiStepState source)
+        {
+            return new AiStepState
+            {
+                StepName = source.StepName,
+                Status = source.Status,
+                Error = source.Error,
+                Inputs = new Dictionary<string, object?>(
+                            source.Inputs ?? new Dictionary<string, object?>(),
+                            StringComparer.Ordinal),
+
+                Config = new Dictionary<string, object?>(
+                            source.Config ?? new Dictionary<string, object?>(),
+                            StringComparer.Ordinal),
+                Result = CloneStepResult(source.Result),
+                StartedAtUtc = source.StartedAtUtc,
+                CompletedAtUtc = source.CompletedAtUtc
+            };
+        }
+
+        /// <summary>
+        /// Creates a defensive copy of a step result.
+        /// </summary>
+        private static AiStepResult? CloneStepResult(AiStepResult? source)
+        {
+            if (source is null)
+                return null;
+
+            return new AiStepResult
+            {
+                Success = source.Success,
+                Error = source.Error,
+                Output = source.Output,
+                Data = new Dictionary<string, object?>(
+                        source.Data ?? new Dictionary<string, object?>(),
+                        StringComparer.Ordinal)
             };
         }
     }

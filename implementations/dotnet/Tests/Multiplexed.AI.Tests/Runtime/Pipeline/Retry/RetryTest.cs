@@ -55,8 +55,12 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 Step = step
             };
 
+            var stepContext = new AiStepExecutionContext(
+                context,
+                resolvedStep);
+
             // Act
-            var result = await executor.ExecuteAsync(resolvedStep, context);
+            var result = await executor.ExecuteAsync(resolvedStep, stepContext);
 
             // Assert
             Assert.True(result.Success);
@@ -69,7 +73,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             var metadata = metadataMap[step.Name];
 
             Assert.Equal(3, metadata.AttemptCount);
-            Assert.Equal(AiStepExecutionStatus.Succeeded, metadata.Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, metadata.Status);
             Assert.NotNull(metadata.FirstStartedAtUtc);
             Assert.NotNull(metadata.LastStartedAtUtc);
             Assert.NotNull(metadata.CompletedAtUtc);
@@ -94,7 +98,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             public string Name => "retry-step";
 
             public Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 if (_remainingFailures > 0)

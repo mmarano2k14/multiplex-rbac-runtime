@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.AI.Runtime.Pipeline.Retry
+﻿using Multiplexed.Abstractions.AI.Execution;
+
+namespace Multiplexed.AI.Runtime.Pipeline.Retry
 {
     /// <summary>
     /// Stores execution metadata for a single step.
@@ -51,6 +53,6 @@
         /// <summary>
         /// Returns true when the step has already completed successfully.
         /// </summary>
-        public bool IsCompleted => Status == AiStepExecutionStatus.Succeeded;
+        public bool IsCompleted => Status == AiStepExecutionStatus.Completed;
     }
 }

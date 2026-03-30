@@ -84,18 +84,19 @@ namespace Multiplexed.AI.DI
 
             services.AddScoped<IAiPipelineDefinitionSourceSelector, DefaultAiPipelineDefinitionSourceSelector>();
             services.AddScoped<IAiPipelineResolver, AiPipelineResolver>();
-            services.AddScoped<IAiPipelineExecutor, AiPipelineExecutor>();
+            services.AddScoped<IAiSequentialPipelineExecutor, AiSequentialPipelineExecutor>();
 
             // ------------------------------------------------------------
             // Execution runtime
             // ------------------------------------------------------------
-            services.AddScoped<IAiExecutionEngine, AiExecutionEngine>();
+            services.AddScoped<IAiExecutionEngine, AiSequentialExecutionEngine>();
 
             // ------------------------------------------------------------
             // Stores
             // ------------------------------------------------------------
             services.AddSingleton<MemoryAiExecutionStore>();
             services.AddSingleton<RedisAiExecutionStore>();
+            services.AddSingleton<IAiDagExecutionStore, RedisAiDagExecutionStore>();
             services.AddSingleton<IAiExecutionStore, AiExecutionStore>();
 
             // ------------------------------------------------------------

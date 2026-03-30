@@ -22,7 +22,7 @@ public class FakeStep : IAiStep
     }
 
     public Task<AiStepResult> ExecuteAsync(
-        AiExecutionContext context,
+        AiStepExecutionContext context,
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(

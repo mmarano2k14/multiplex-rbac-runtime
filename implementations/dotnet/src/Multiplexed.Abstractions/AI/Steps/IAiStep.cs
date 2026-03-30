@@ -24,7 +24,7 @@ namespace Multiplexed.Abstractions.AI.Steps
         /// <param name="cancellationToken">The cancellation token for the active execution.</param>
         /// <returns>The structured result of the step execution.</returns>
         Task<AiStepResult> ExecuteAsync(
-            AiExecutionContext context,
+            AiStepExecutionContext context,
             CancellationToken cancellationToken = default);
     }
 }

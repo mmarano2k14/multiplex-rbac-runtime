@@ -8,56 +8,33 @@ using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
 namespace Multiplexed.AI.Runtime.Execution
 {
     /// <summary>
-    /// Coordinates persisted execution of AI pipelines using the RBAC context store.
-    ///
-    /// Architecture summary:
-    /// AiExecutionEngine
-    ///     -> IAiExecutionStore
-    ///     -> IContextStore
-    ///     -> IExecutionContextAccessor
-    ///     -> IExecutionContextFactory
-    ///     -> IAiPipelineExecutor
+    /// Base class for AI execution engines.
     ///
     /// Responsibilities:
-    /// - Create a new durable AI execution
-    /// - Seed an AI-owned RBAC execution context
-    /// - Execute one step at a time safely
-    /// - Delegate pipeline step execution to the pipeline executor
-    /// - Rotate the RBAC context key between successful steps
-    /// - Persist execution record and execution state transitions
+    /// - provide shared runtime dependencies
+    /// - load persisted execution record and state
+    /// - load the live RBAC execution context
+    /// - create the global AI execution context
     ///
-    /// This engine owns orchestration and persistence.
-    /// It does not own pipeline resolution details or step business logic.
+    /// Derived classes are responsible for:
+    /// - execution mode validation
+    /// - step scheduling
+    /// - step execution strategy
+    /// - context rotation policy
+    /// - execution progression semantics
     /// </summary>
-    public sealed class AiExecutionEngine : IAiExecutionEngine
+    public abstract class AiExecutionEngine : IAiExecutionEngine
     {
-        private static readonly TimeSpan ContextRotationOverlap = TimeSpan.FromSeconds(30);
-
-        private readonly IAiExecutionStore _store;
-        private readonly IContextStore _contextStore;
-        private readonly IExecutionContextAccessor _accessor;
-        private readonly IExecutionContextFactory _contextFactory;
-        private readonly IServiceProvider _services;
-        private readonly IAiPipelineExecutor _pipelineExecutor;
-        private readonly IAiRuntimeLogger _logger;
-
         /// <summary>
         /// Initializes a new instance of the <see cref="AiExecutionEngine"/> class.
         /// </summary>
-        /// <param name="store">The durable AI execution store.</param>
-        /// <param name="contextStore">The RBAC execution context store.</param>
-        /// <param name="accessor">The accessor for the live RBAC execution context.</param>
-        /// <param name="contextFactory">The factory used to copy and snapshot RBAC contexts.</param>
-        /// <param name="services">The root runtime service provider.</param>
-        /// <param name="pipelineExecutor">The pipeline executor responsible for pipeline-specific step execution.</param>
-        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
-        public AiExecutionEngine(
+        protected AiExecutionEngine(
             IAiExecutionStore store,
             IContextStore contextStore,
             IExecutionContextAccessor accessor,
             IExecutionContextFactory contextFactory,
             IServiceProvider services,
-            IAiPipelineExecutor pipelineExecutor,
+            IAiSequentialPipelineExecutor pipelineExecutor,
             IAiRuntimeLogger logger)
         {
             ArgumentNullException.ThrowIfNull(store);
@@ -68,22 +45,55 @@ namespace Multiplexed.AI.Runtime.Execution
             ArgumentNullException.ThrowIfNull(pipelineExecutor);
             ArgumentNullException.ThrowIfNull(logger);
 
-            _store = store;
-            _contextStore = contextStore;
-            _accessor = accessor;
-            _contextFactory = contextFactory;
-            _services = services;
-            _pipelineExecutor = pipelineExecutor;
-            _logger = logger;
+            Store = store;
+            ContextStore = contextStore;
+            Accessor = accessor;
+            ContextFactory = contextFactory;
+            Services = services;
+            PipelineExecutor = pipelineExecutor;
+            Logger = logger;
         }
 
         /// <summary>
-        /// Creates a new AI execution together with a separate persisted execution state.
+        /// Gets the durable AI execution store.
         /// </summary>
-        /// <param name="input">The initial input passed to the AI workflow.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The newly created execution record.</returns>
-        public Task<AiExecutionRecord> CreateAsync(
+        protected IAiExecutionStore Store { get; }
+
+        /// <summary>
+        /// Gets the RBAC execution context store.
+        /// </summary>
+        protected IContextStore ContextStore { get; }
+
+        /// <summary>
+        /// Gets the live RBAC execution context accessor.
+        /// </summary>
+        protected IExecutionContextAccessor Accessor { get; }
+
+        /// <summary>
+        /// Gets the RBAC execution context factory.
+        /// </summary>
+        protected IExecutionContextFactory ContextFactory { get; }
+
+        /// <summary>
+        /// Gets the root runtime service provider.
+        /// </summary>
+        protected IServiceProvider Services { get; }
+
+        /// <summary>
+        /// Gets the pipeline executor.
+        /// </summary>
+        protected IAiSequentialPipelineExecutor PipelineExecutor { get; }
+
+        /// <summary>
+        /// Gets the centralized runtime logger.
+        /// </summary>
+        protected IAiRuntimeLogger Logger { get; }
+
+        /// <summary>
+        /// Creates a new execution without an explicit pipeline name.
+        /// This overload is intentionally unsupported.
+        /// </summary>
+        public virtual Task<AiExecutionRecord> CreateAsync(
             string input,
             CancellationToken cancellationToken = default)
         {
@@ -92,237 +102,63 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Creates a new AI execution together with a separate persisted execution state
-        /// for the specified pipeline.
+        /// Creates a new execution for the specified pipeline.
+        /// Must be implemented by the derived engine.
         /// </summary>
-        /// <param name="pipelineName">The unique pipeline name associated with the execution.</param>
-        /// <param name="input">The initial input passed to the AI workflow.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The newly created execution record.</returns>
-        public async Task<AiExecutionRecord> CreateAsync(
+        public abstract Task<AiExecutionRecord> CreateAsync(
             string pipelineName,
             string input,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
-
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                throw new ArgumentException("Input cannot be null or empty.", nameof(input));
-            }
-
-            var current = _accessor.Current
-                ?? throw new InvalidOperationException("No active RBAC context is available.");
-
-            var preparedPipeline = await _pipelineExecutor.PrepareAsync(
-                pipelineName,
-                cancellationToken);
-
-            var orderedSteps = preparedPipeline.Steps
-                .OrderBy(x => x.Order)
-                .ToArray();
-
-            if (orderedSteps.Length == 0)
-            {
-                throw new InvalidOperationException(
-                    $"Pipeline '{pipelineName}' does not contain any resolved steps.");
-            }
-
-
-            var newContextKey = Guid.NewGuid().ToString("N");
-            var aiOwnedContext = _contextFactory.CreateCopy(current, newContextKey);
-            newContextKey = await _contextStore.SeedAsync(aiOwnedContext);
-
-            var record = new AiExecutionRecord
-            {
-                PipelineName = pipelineName,
-                ContextKey = newContextKey,
-                CurrentStep = orderedSteps[0].Name,
-                CurrentStepIndex = 0,
-                Status = AiExecutionStatus.Pending,
-                ExecutionContextSnapshot = _contextFactory.CreateSnapshot(current),
-                Steps = orderedSteps.Select(x => x.Name).ToList()
-            };
-
-            var state = new AiExecutionState
-            {
-                ExecutionId = record.ExecutionId,
-                PipelineName = pipelineName
-            };
-
-            state.Set(AiExecutionKeys.Input, input);
-
-            await _store.CreateAsync(record, state, cancellationToken);
-
-            _logger.Engine.ExecutionCreated(record);
-
-            return record;
-        }
+            CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Executes the next step of the specified AI execution.
-        ///
-        /// Important:
-        /// - The live RBAC execution context is always loaded from the RBAC store using ContextKey.
-        /// - Execution state is loaded independently from the AI execution store.
-        /// - The RBAC ContextKey is rotated after each successful step.
+        /// Executes the next unit of work for the specified execution.
+        /// Must be implemented by the derived engine.
         /// </summary>
-        /// <param name="executionId">The unique execution identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The updated execution record.</returns>
-        public async Task<AiExecutionRecord> ExecuteNextAsync(
+        public abstract Task<AiExecutionRecord> ExecuteNextAsync(
             string executionId,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Executes the remaining work until a terminal state is reached.
+        /// Must be implemented by the derived engine.
+        /// </summary>
+        public abstract Task<AiExecutionRecord> ExecuteAllAsync(
+            string executionId,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Validates the supplied execution identifier.
+        /// </summary>
+        protected static void ValidateExecutionId(string executionId)
         {
             if (string.IsNullOrWhiteSpace(executionId))
             {
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
             }
-
-            var record = await _store.GetRecordAsync(executionId, cancellationToken)
-                ?? throw new InvalidOperationException("Execution not found.");
-
-            var state = await _store.GetStateAsync(executionId, cancellationToken)
-                ?? throw new InvalidOperationException("Execution state not found.");
-
-            if (record.IsTerminal)
-            {
-                return record;
-            }
-
-            if (string.IsNullOrWhiteSpace(record.PipelineName))
-            {
-                throw new InvalidOperationException(
-                    $"Execution '{executionId}' does not define a pipeline name.");
-            }
-
-            var expectedStepKey = record.ExecutionStepKey;
-            var rbacContext = await LoadContextAsync(record.ContextKey);
-            var executionContext = BuildExecutionContext(record, state, cancellationToken);
-
-            var resolvedPipeline = await _pipelineExecutor.PrepareAsync(
-                record.PipelineName,
-                cancellationToken);
-
-            _accessor.Set(rbacContext);
-
-            try
-            {
-                var pipelineResult = await _pipelineExecutor.ExecuteNextAsync(
-                    resolvedPipeline,
-                    executionContext,
-                    cancellationToken);
-
-                if (!pipelineResult.StepResult.Success)
-                {
-                    record.MarkFailed();
-
-                    _logger.Engine.StepFailed(
-                        record.ExecutionId,
-                        record.CurrentStep,
-                        pipelineResult.StepResult.Error);
-
-                    record.TouchVersion();
-                    record.RenewExecutionStepKey();
-
-                    await _store.TryUpdateAsync(
-                        record.ExecutionId,
-                        expectedStepKey,
-                        record,
-                        state,
-                        cancellationToken);
-
-                    return record;
-                }
-
-
-                if (!string.IsNullOrWhiteSpace(pipelineResult.ExecutedStepName))
-                {
-                    record.CompletedSteps.Add(pipelineResult.ExecutedStepName);
-                }
-
-                record.Steps = pipelineResult.Steps.ToList();
-
-                await RotateContextAsync(record, cancellationToken);
-                MoveNext(record, pipelineResult);
-
-                // Important:
-                // renew the execution transition key before persisting
-                // so concurrent callers cannot commit the same transition twice.
-                record.TouchVersion();
-                record.RenewExecutionStepKey();
-
-                var updated = await _store.TryUpdateAsync(
-                    record.ExecutionId,
-                    expectedStepKey,
-                    record,
-                    state,
-                    cancellationToken);
-
-                if (!updated)
-                {
-                    throw new InvalidOperationException("Concurrency conflict on execution update.");
-                }
-
-                _logger.Engine.StepCompleted(
-                    record,
-                    pipelineResult.ExecutedStepName);
-
-                return record;
-            }
-            catch (Exception ex)
-            {
-                record.MarkFailed();
-                record.TouchVersion();
-                record.RenewExecutionStepKey();
-
-                _logger.Engine.StepException(
-                    record.ExecutionId,
-                    record.CurrentStep,
-                    ex);
-
-                await _store.TryUpdateAsync(
-                    record.ExecutionId,
-                    expectedStepKey,
-                    record,
-                    state,
-                    cancellationToken);
-
-                throw;
-            }
-            finally
-            {
-                _accessor.Clear();
-            }
         }
 
         /// <summary>
-        /// Executes the remaining pipeline until a terminal state is reached.
+        /// Loads the persisted execution record and mutable execution state.
         /// </summary>
-        /// <param name="executionId">The unique execution identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The final execution record.</returns>
-        public async Task<AiExecutionRecord> ExecuteAllAsync(
+        protected async Task<(AiExecutionRecord Record, AiExecutionState State)> LoadExecutionAsync(
             string executionId,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken)
         {
-            AiExecutionRecord record;
+            var record = await Store.GetRecordAsync(executionId, cancellationToken)
+                ?? throw new InvalidOperationException("Execution not found.");
 
-            do
-            {
-                record = await ExecuteNextAsync(executionId, cancellationToken);
-            }
-            while (!record.IsTerminal);
+            var state = await Store.GetStateAsync(executionId, cancellationToken)
+                ?? throw new InvalidOperationException("Execution state not found.");
 
-            return record;
+            return (record, state);
         }
 
         /// <summary>
         /// Loads the live RBAC execution context associated with the supplied context key.
         /// </summary>
-        private async Task<ExecutionContext> LoadContextAsync(string contextKey)
+        protected async Task<ExecutionContext> LoadContextAsync(string contextKey)
         {
-            var context = await _contextStore.GetAsync(contextKey);
+            var context = await ContextStore.GetAsync(contextKey);
 
             if (context is null)
             {
@@ -333,9 +169,9 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
-        /// Builds the shared AI execution context used by the current step.
+        /// Builds the global AI execution context used during orchestration.
         /// </summary>
-        private AiExecutionContext BuildExecutionContext(
+        protected AiExecutionContext BuildExecutionContext(
             AiExecutionRecord record,
             AiExecutionState state,
             CancellationToken cancellationToken)
@@ -343,44 +179,41 @@ namespace Multiplexed.AI.Runtime.Execution
             return new AiExecutionContext(
                 record,
                 state,
-                _services,
+                Services,
                 cancellationToken);
         }
 
         /// <summary>
-        /// Rotates the RBAC context key after a successful step execution.
+        /// Ensures the execution defines a pipeline name.
         /// </summary>
-        private async Task RotateContextAsync(
-            AiExecutionRecord record,
-            CancellationToken cancellationToken)
+        protected static void EnsurePipelineName(AiExecutionRecord record)
         {
-            var (newKey, _) = await _contextStore.RotateAsync(
-                record.ContextKey,
-                ContextRotationOverlap);
-
-            record.ContextKey = newKey;
-            record.RenewExecutionStepKey();
+            if (string.IsNullOrWhiteSpace(record.PipelineName))
+            {
+                throw new InvalidOperationException(
+                    $"Execution '{record.ExecutionId}' does not define a pipeline name.");
+            }
         }
 
         /// <summary>
-        /// Advances the orchestration record using the pipeline execution result,
-        /// or marks the execution as completed.
+        /// Persists an updated execution record and state using optimistic concurrency.
         /// </summary>
-        private static void MoveNext(
+        protected async Task PersistAsync(
             AiExecutionRecord record,
-            PipelineExecutionResult pipelineResult)
+            string expectedStepKey,
+            AiExecutionState state,
+            CancellationToken cancellationToken)
         {
-            record.CurrentStepIndex = pipelineResult.NextStepIndex;
+            var updated = await Store.TryUpdateAsync(
+                record.ExecutionId,
+                expectedStepKey,
+                record,
+                state,
+                cancellationToken);
 
-            if (pipelineResult.IsCompleted)
+            if (!updated)
             {
-                record.MarkCompleted();
-                record.CurrentStep = string.Empty;
-            }
-            else
-            {
-                record.MarkRunning();
-                record.CurrentStep = pipelineResult.NextStepName ?? string.Empty;
+                throw new InvalidOperationException("Concurrency conflict on execution update.");
             }
         }
     }

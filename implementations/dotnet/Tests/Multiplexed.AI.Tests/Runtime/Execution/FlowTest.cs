@@ -12,7 +12,7 @@ using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
 namespace Multiplexed.AI.Tests.Runtime.Execution
 {
     /// <summary>
-    /// Integration tests for <see cref="AiExecutionEngine"/>.
+    /// Integration tests for <see cref="AiSequentialExecutionEngine"/>.
     ///
     /// This test suite validates the full orchestration flow:
     /// - Execution creation (CreateAsync)
@@ -84,7 +84,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
 
             var resolver = new AiPipelineResolver(stepRegistry);
 
-            var pipelineExecutor = new AiPipelineExecutor(
+            var pipelineExecutor = new AiSequentialPipelineExecutor(
                 sourceSelector,
                 resolver,
                 executor);
@@ -116,7 +116,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             // Seed the runtime context (simulates authenticated request scope)
             accessor.Set(context);
 
-            var engine = new AiExecutionEngine(
+            var engine = new AiSequentialExecutionEngine(
                 store,
                 contextStore,
                 accessor,

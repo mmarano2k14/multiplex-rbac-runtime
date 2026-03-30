@@ -1,5 +1,6 @@
-﻿using System.Text.Json;
-using Multiplexed.Abstractions.AI.Pipeline;
+﻿using Multiplexed.Abstractions.AI.Pipeline;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Definition
 {
@@ -15,26 +16,37 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
     /// - Keep the definition layer provider-neutral
     /// - Cache validated definitions in memory after first load
     ///
-    /// Expected JSON format:
+    /// Supported JSON formats:
+    ///
+    /// 1. Root array:
     /// [
     ///   {
     ///     "name": "pipeline-name",
     ///     "version": "1.0",
-    ///     "steps": [
-    ///       {
-    ///         "name": "step-name",
-    ///         "stepKey": "step-key",
-    ///         "order": 0
-    ///       }
-    ///     ]
+    ///     "steps": [ ... ]
     ///   }
     /// ]
+    ///
+    /// 2. Root object wrapper:
+    /// {
+    ///   "pipelines": [
+    ///     {
+    ///       "name": "pipeline-name",
+    ///       "version": "1.0",
+    ///       "steps": [ ... ]
+    ///     }
+    ///   ]
+    /// }
     /// </summary>
     public sealed class JsonAiPipelineDefinitionProvider : IAiPipelineDefinitionProvider
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
+            Converters =
+            {
+                new JsonStringEnumConverter()
+            }
         };
 
         private readonly string _filePath;
@@ -112,15 +124,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
 
                 var json = await File.ReadAllTextAsync(fullPath, cancellationToken);
 
-                var definitions = JsonSerializer.Deserialize<List<AiPipelineDefinition>>(
-                    json,
-                    JsonOptions);
-
-                if (definitions is null)
-                {
-                    throw new InvalidOperationException(
-                        $"Pipeline definition file '{fullPath}' could not be deserialized.");
-                }
+                var definitions = DeserializeDefinitions(json, fullPath);
 
                 var validated = definitions
                     .Select(ValidateDefinition)
@@ -135,6 +139,62 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
             finally
             {
                 _loadLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Deserializes pipeline definitions from supported JSON formats.
+        /// </summary>
+        /// <param name="json">The raw JSON content.</param>
+        /// <param name="fullPath">The resolved file path used for diagnostics.</param>
+        /// <returns>The deserialized list of pipeline definitions.</returns>
+        private static IReadOnlyList<AiPipelineDefinition> DeserializeDefinitions(
+            string json,
+            string fullPath)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+
+                var root = document.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    var definitions = JsonSerializer.Deserialize<List<AiPipelineDefinition>>(
+                        json,
+                        JsonOptions);
+
+                    if (definitions is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline definition file '{fullPath}' could not be deserialized.");
+                    }
+
+                    return definitions;
+                }
+
+                if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("pipelines", out var pipelinesElement))
+                {
+                    var definitions = pipelinesElement.Deserialize<List<AiPipelineDefinition>>(JsonOptions);
+
+                    if (definitions is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline definition file '{fullPath}' contains a 'pipelines' section that could not be deserialized.");
+                    }
+
+                    return definitions;
+                }
+
+                throw new InvalidOperationException(
+                    $"Pipeline definition file '{fullPath}' must contain either a root JSON array or an object with a 'pipelines' property.");
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Pipeline definition file '{fullPath}' contains invalid JSON for pipeline definitions.",
+                    ex);
             }
         }
 
@@ -175,12 +235,20 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
                     $"Pipeline '{definition.Name}' does not contain any steps.");
             }
 
+            var stepNames = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var step in definition.Steps)
             {
                 if (string.IsNullOrWhiteSpace(step.Name))
                 {
                     throw new InvalidOperationException(
                         $"Pipeline '{definition.Name}' contains a step with no name.");
+                }
+
+                if (!stepNames.Add(step.Name))
+                {
+                    throw new InvalidOperationException(
+                        $"Pipeline '{definition.Name}' contains duplicate step name '{step.Name}'.");
                 }
 
                 if (string.IsNullOrWhiteSpace(step.StepKey))
@@ -190,7 +258,103 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
                 }
             }
 
+            foreach (var step in definition.Steps)
+            {
+                var dependsOn = step.DependsOn ?? Array.Empty<string>();
+                var seenDependencies = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var dependency in dependsOn)
+                {
+                    if (string.IsNullOrWhiteSpace(dependency))
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline '{definition.Name}' step '{step.Name}' contains an empty dependency.");
+                    }
+
+                    if (!seenDependencies.Add(dependency))
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline '{definition.Name}' step '{step.Name}' contains duplicate dependency '{dependency}'.");
+                    }
+
+                    if (string.Equals(step.Name, dependency, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline '{definition.Name}' step '{step.Name}' cannot depend on itself.");
+                    }
+
+                    if (!stepNames.Contains(dependency))
+                    {
+                        throw new InvalidOperationException(
+                            $"Pipeline '{definition.Name}' step '{step.Name}' depends on unknown step '{dependency}'.");
+                    }
+                }
+            }
+
+            ValidateNoCycles(definition);
+
             return definition;
+        }
+
+        /// <summary>
+        /// Validates that the pipeline dependency graph does not contain cycles.
+        /// </summary>
+        private static void ValidateNoCycles(AiPipelineDefinition definition)
+        {
+            var stepsByName = definition.Steps.ToDictionary(
+                step => step.Name,
+                StringComparer.Ordinal);
+
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var visiting = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var step in definition.Steps)
+            {
+                VisitForCycleDetection(
+                    step.Name,
+                    stepsByName,
+                    visited,
+                    visiting,
+                    definition.Name);
+            }
+        }
+
+        /// <summary>
+        /// Performs DFS-based cycle detection for the DAG definition.
+        /// </summary>
+        private static void VisitForCycleDetection(
+            string stepName,
+            IReadOnlyDictionary<string, AiPipelineStepDefinition> stepsByName,
+            HashSet<string> visited,
+            HashSet<string> visiting,
+            string pipelineName)
+        {
+            if (visited.Contains(stepName))
+            {
+                return;
+            }
+
+            if (!visiting.Add(stepName))
+            {
+                throw new InvalidOperationException(
+                    $"Pipeline '{pipelineName}' contains a dependency cycle involving step '{stepName}'.");
+            }
+
+            var step = stepsByName[stepName];
+            var dependsOn = step.DependsOn ?? Array.Empty<string>();
+
+            foreach (var dependency in dependsOn)
+            {
+                VisitForCycleDetection(
+                    dependency,
+                    stepsByName,
+                    visited,
+                    visiting,
+                    pipelineName);
+            }
+
+            visiting.Remove(stepName);
+            visited.Add(stepName);
         }
     }
 }

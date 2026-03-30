@@ -130,17 +130,22 @@ public sealed class FakeInMemoryExecutionStore : IAiExecutionStore
 
     private static AiStepState CloneStepState(AiStepState source)
     {
-        return new AiStepState
+        var clone = new AiStepState
         {
             StepName = source.StepName,
-            Inputs = new Dictionary<string, object?>(source.Inputs, StringComparer.Ordinal),
-            Config = source.Config is null
-                ? new Dictionary<string, object?>()
-                : new Dictionary<string, object?>(source.Config, StringComparer.Ordinal),
-            Result = CloneStepResult(source.Result),
-            CreatedAtUtc = source.CreatedAtUtc,
-            UpdatedAtUtc = source.UpdatedAtUtc
+            Status = source.Status,
+            StartedAtUtc = source.StartedAtUtc,
+            CompletedAtUtc = source.CompletedAtUtc,
+            Error = source.Error,
+            RetryCount = source.RetryCount,
+            Result = CloneStepResult(source.Result)
         };
+
+        clone.SetInputs(source.Inputs);
+        clone.SetConfig(source.Config);
+        clone.UpdatedAtUtc = DateTime.UtcNow;
+
+        return clone;
     }
 
     private static AiStepResult? CloneStepResult(AiStepResult? source)

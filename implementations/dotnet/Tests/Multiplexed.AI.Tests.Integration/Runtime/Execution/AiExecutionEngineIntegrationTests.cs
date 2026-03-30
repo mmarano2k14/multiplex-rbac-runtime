@@ -33,7 +33,7 @@ using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 {
     /// <summary>
-    /// End-to-end integration tests for <see cref="AiExecutionEngine"/>.
+    /// End-to-end integration tests for <see cref="AiSequentialExecutionEngine"/>.
     ///
     /// These tests validate the persisted orchestration flow using:
     /// - the real AI execution engine
@@ -103,8 +103,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Contains("hello", afterStep1.CompletedSteps);
 
                 var persistedAfterStep1State = await GetStore().GetStateAsync(execution.ExecutionId, CancellationToken.None);
+                AiStepResult? result = persistedAfterStep1State!.Steps["hello"].Result;
                 Assert.NotNull(persistedAfterStep1State);
-                Assert.Equal("Hello World : Marco", persistedAfterStep1State!.Get<string>("message"));
+                Assert.Equal("Hello World : Marco", result?.Output);
 
                 // Act - execute step 2
                 var finalRecord = await engine.ExecuteNextAsync(execution.ExecutionId, CancellationToken.None);
@@ -119,7 +120,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.NotNull(persistedFinalState);
 
                 // SummaryStep injects its output back into AiExecutionKeys.Input.
-                var summarized = persistedFinalState!.Get<string>(AiExecutionKeys.Input);
+                var summarized = persistedFinalState.Steps["summary"]?.Result?.Output;
                 Assert.False(string.IsNullOrWhiteSpace(summarized));
                 Assert.Contains("Summarize the following content", summarized);
             }
@@ -174,7 +175,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var persistedAfterStep1State = await GetStore().GetStateAsync(execution.ExecutionId, CancellationToken.None);
                 Assert.NotNull(persistedAfterStep1State);
-                Assert.Equal("Hello World : Marco", persistedAfterStep1State!.Get<string>("message"));
+                AiStepResult? result = persistedAfterStep1State!.Steps["hello"].Result;
+                Assert.Equal("Hello World : Marco", result?.Output);
 
                 // Act - execute step 2
                 var finalRecord = await engine.ExecuteNextAsync(execution.ExecutionId, CancellationToken.None);
@@ -188,7 +190,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var persistedFinalState = await GetStore().GetStateAsync(execution.ExecutionId, CancellationToken.None);
                 Assert.NotNull(persistedFinalState);
 
-                var summarized = persistedFinalState!.Get<string>(AiExecutionKeys.Input);
+                var summarized = persistedFinalState.Steps["summary"]?.Result?.Output;
                 Assert.False(string.IsNullOrWhiteSpace(summarized));
                 Assert.Contains("Summarize the following content", summarized);
             }
@@ -199,7 +201,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Verifies that <see cref="AiExecutionEngine.ExecuteAllAsync"/> runs
+        /// Verifies that <see cref="AiSequentialExecutionEngine.ExecuteAllAsync"/> runs
         /// the whole remaining pipeline and ends in a completed terminal state.
         /// </summary>
         [RedisFact]
@@ -260,7 +262,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     Name: "hello",
                     StepKey: "hello-world",
                     Order: 1,
-                    Input: new Dictionary<string, object?> { ["text"] = AiExecutionKeys.Input }),
+                    Input: new Dictionary<string, object?> { ["text"] = "Phuket" }),
                 new TestStepDefinition(
                     Name: "summary",
                     StepKey: "summary",
@@ -288,8 +290,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 Assert.NotNull(finalState);
 
-                var message = finalState!.Get<string>("message");
-                Assert.Equal("Hello World : Phuket", message);
+                AiStepResult? result = finalState!.Steps["hello"].Result;
+                Assert.Equal("Hello World : Phuket", result?.Output);
 
                 var summary = finalState.Get<string>(AiExecutionKeys.Input);
                 Assert.False(string.IsNullOrWhiteSpace(summary));
@@ -461,7 +463,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(storedRecord!.ExecutionId, storedState!.ExecutionId);
                 Assert.Equal(storedRecord.PipelineName, storedState.PipelineName);
                 Assert.Equal(AiExecutionStatus.Completed, storedRecord.Status);
-                Assert.Equal("Hello World : Sage", storedState.Get<string>("message"));
+                AiStepResult? result = storedState!.Steps["hello"].Result;
+                Assert.Equal("Hello World : Sage", result?.Output);
             }
             finally
             {
@@ -473,7 +476,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// Creates a fully wired engine using the real persisted execution store
         /// and controlled fake dependencies for context, pipeline execution, and logging.
         /// </summary>
-        private AiExecutionEngine CreateEngine(
+        private AiSequentialExecutionEngine CreateEngine(
             string pipelineName,
             params TestStepDefinition[] steps)
         {
@@ -487,7 +490,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             accessor.Set(BuildTestExecutionContext()); 
 
-            return new AiExecutionEngine(
+            return new AiSequentialExecutionEngine(
                 store,
                 contextStore,
                 accessor,
@@ -501,7 +504,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// Creates a fully wired engine using the real persisted execution store
         /// and the real composite RBAC context store.
         /// </summary>
-        private AiExecutionEngine CreateEngineWithRealContextStore(
+        private AiSequentialExecutionEngine CreateEngineWithRealContextStore(
             string pipelineName,
             params TestStepDefinition[] steps)
         {
@@ -515,7 +518,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             accessor.Set(BuildTestExecutionContext());
 
-            return new AiExecutionEngine(
+            return new AiSequentialExecutionEngine(
                 store,
                 contextStore,
                 accessor,
@@ -676,7 +679,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// This keeps the tests focused on engine orchestration behavior while still
         /// exercising real step logic.
         /// </summary>
-        private sealed class FakeAiPipelineExecutor : IAiPipelineExecutor
+        private sealed class FakeAiPipelineExecutor : IAiSequentialPipelineExecutor
         {
             private readonly string _pipelineName;
             private readonly IReadOnlyList<TestStepDefinition> _steps;
@@ -733,11 +736,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
 
                 var currentStep = orderedSteps[currentIndex];
-                SetResolvedStepMetadata(context.State, currentStep);
+
+                var stepContext = new AiStepExecutionContext(
+                context,
+                currentStep);
 
                 context.State.EnsureStepInitialized(currentStep);
 
-                var result = await currentStep.Step.ExecuteAsync(context, cancellationToken);
+                var result = await currentStep.Step.ExecuteAsync(stepContext, cancellationToken);
 
                 context.State.SetStepResult(currentStep.Name, result);
 
@@ -799,7 +805,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             public string Name => "always-fail";
 
             public Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 return Task.FromResult(AiStepResult.Fail("Forced failure."));
@@ -815,7 +821,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             public string Name => "throwing-step";
 
             public Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 throw new InvalidOperationException("Forced exception.");

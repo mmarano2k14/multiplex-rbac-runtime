@@ -149,7 +149,6 @@ namespace Multiplexed.Abstractions.AI.Execution
             ArgumentNullException.ThrowIfNull(stepDefinition);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepDefinition.Name);
 
-            // Ensure step state exists
             if (!Steps.TryGetValue(stepDefinition.Name, out var stepState))
             {
                 stepState = new AiStepState
@@ -160,17 +159,9 @@ namespace Multiplexed.Abstractions.AI.Execution
                 Steps[stepDefinition.Name] = stepState;
             }
 
-            // Clone Inputs (avoid shared references)
-            stepState.Inputs = stepDefinition.Input is null
-                ? new Dictionary<string, object?>(StringComparer.Ordinal)
-                : new Dictionary<string, object?>(stepDefinition.Input, StringComparer.Ordinal);
+            stepState.SetInputs(stepDefinition.Input);
+            stepState.SetConfig(stepDefinition.Config);
 
-            // Clone Config (avoid shared references)
-            stepState.Config = stepDefinition.Config is null
-                ? new Dictionary<string, object?>(StringComparer.Ordinal)
-                : new Dictionary<string, object?>(stepDefinition.Config, StringComparer.Ordinal);
-
-            // Update timestamps
             stepState.UpdatedAtUtc = DateTime.UtcNow;
             UpdatedAtUtc = DateTime.UtcNow;
         }
@@ -220,20 +211,6 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Stores or replaces a resolved input value for the specified step.
-        /// </summary>
-        public void SetStepInput<T>(string stepName, string key, T value)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
-            ArgumentException.ThrowIfNullOrWhiteSpace(key);
-
-            var step = GetOrCreateStep(stepName);
-            step.Inputs[key] = value;
-            step.UpdatedAtUtc = DateTime.UtcNow;
-            UpdatedAtUtc = DateTime.UtcNow;
-        }
-
-        /// <summary>
         /// Retrieves a strongly-typed resolved input value for the specified step.
         /// Returns default if the step or key does not exist.
         /// </summary>
@@ -245,7 +222,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             if (!Steps.TryGetValue(stepName, out var step))
                 return default;
 
-            return GetValue<T>(step.Inputs, key, $"StepInputs[{stepName}]");
+            return GetValue<T>(step.Inputs!, key, $"StepInputs[{stepName}]");
         }
 
         /// <summary>
@@ -263,7 +240,7 @@ namespace Multiplexed.Abstractions.AI.Execution
                 return false;
             }
 
-            return TryGetValue(step.Inputs, key, $"StepInputs[{stepName}]", out value);
+            return TryGetValue(step.Inputs!, key, $"StepInputs[{stepName}]", out value);
         }
 
         // ------------------------------------------------------------------

@@ -26,7 +26,7 @@ namespace Multiplexed.Abstractions.AI.Steps
         /// <returns>The final step execution result.</returns>
         Task<AiStepResult> ExecuteAsync(
             ResolvedAiPipelineStep step,
-            AiExecutionContext context,
+            AiStepExecutionContext context,
             CancellationToken cancellationToken = default);
     }
 }

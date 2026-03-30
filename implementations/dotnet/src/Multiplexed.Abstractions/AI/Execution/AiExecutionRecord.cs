@@ -10,6 +10,7 @@ namespace Multiplexed.Abstractions.AI.Execution
     ///
     /// - Execution identity
     /// - Pipeline binding
+    /// - Execution mode
     /// - Current step position
     /// - Global lifecycle status
     /// - Concurrency/versioning information
@@ -32,12 +33,26 @@ namespace Multiplexed.Abstractions.AI.Execution
         public string? PipelineName { get; set; }
 
         /// <summary>
+        /// Gets or sets the execution mode used for this pipeline execution.
+        ///
+        /// This determines how the pipeline is scheduled and executed:
+        /// - Sequential: index-based orchestration using CurrentStepIndex
+        /// - Dag: dependency-driven orchestration using per-step runtime state
+        /// </summary>
+        public AiExecutionMode ExecutionMode { get; set; } = AiExecutionMode.Sequential;
+
+        /// <summary>
         /// Gets or sets the current RBAC context key used to resolve the live execution context.
         /// </summary>
         public string ContextKey { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the zero-based index of the current step.
+        ///
+        /// IMPORTANT:
+        /// This field belongs to the sequential execution model.
+        /// It remains available for compatibility with sequential engines,
+        /// but it is not the source of truth for DAG-based execution.
         /// </summary>
         public int CurrentStepIndex { get; set; }
 
@@ -48,6 +63,10 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the ordered list of completed step names.
+        ///
+        /// In DAG mode, this list is useful for diagnostics and execution history,
+        /// but the authoritative completion state must come from the corresponding
+        /// per-step runtime status stored in <see cref="AiExecutionState"/>.
         /// </summary>
         public List<string> CompletedSteps { get; set; } = new();
 
@@ -69,6 +88,12 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the current step name.
+        ///
+        /// IMPORTANT:
+        /// This field belongs to the sequential execution model.
+        /// It may still be populated for diagnostics or compatibility,
+        /// but it must not be treated as the authoritative active step
+        /// in DAG-based execution.
         /// </summary>
         public string CurrentStep { get; set; } = string.Empty;
 

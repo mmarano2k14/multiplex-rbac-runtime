@@ -57,7 +57,7 @@ namespace Multiplexed.AI.Tests.Runtime.DI
             // Act / Assert
             // -----------------------------
             Assert.NotNull(provider.GetService<IAiExecutionEngine>());
-            Assert.NotNull(provider.GetService<IAiPipelineExecutor>());
+            Assert.NotNull(provider.GetService<IAiSequentialPipelineExecutor>());
             Assert.NotNull(provider.GetService<IAiPipelineDefinitionSourceSelector>());
             Assert.NotNull(provider.GetService<IAiPipelineResolver>());
             Assert.NotNull(provider.GetService<IAiStepRegistry>());

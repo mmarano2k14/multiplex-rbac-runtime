@@ -25,21 +25,13 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     /// </summary>
     public sealed class AiStepExecutor : IAiStepExecutor
     {
-
         private readonly IAiRetryExceptionClassifier _exceptionClassifier;
         private readonly IAiRuntimeLogger _logger;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
-        /// </summary>
-        /// <param name="exceptionClassifier">The retry classifier used to evaluate transient exceptions.</param>
-        /// <param name="realtime">The runtime event sink used for observability.</param>
-        /// <param name="logger">The centralized AI runtime logger responsible for structured tracing across engine, pipeline, and step execution.</param>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
             IAiRuntimeLogger logger)
         {
-
             ArgumentNullException.ThrowIfNull(exceptionClassifier);
             ArgumentNullException.ThrowIfNull(logger);
 
@@ -50,34 +42,38 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// <summary>
         /// Executes the specified step using retry behavior declared by attribute.
         /// </summary>
-        /// <param name="resolvedStep">The resolved to execute.</param>
-        /// <param name="context">The current shared execution context.</param>
-        /// <param name="cancellationToken">The cancellation token for the active execution.</param>
-        /// <returns>The final step result.</returns>
         public async Task<AiStepResult> ExecuteAsync(
-            ResolvedAiPipelineStep resolvedStep,
-            AiExecutionContext context,
-            CancellationToken cancellationToken = default)
+    ResolvedAiPipelineStep resolvedStep,
+    AiStepExecutionContext context,
+    CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(resolvedStep);
             ArgumentNullException.ThrowIfNull(resolvedStep.Step);
             ArgumentNullException.ThrowIfNull(context);
 
             var stepType = resolvedStep.Step.GetType();
-            var stepName = resolvedStep.Step.Name;
+
+            // 🔥 STRONG IDENTITY (support test + runtime)
+            var stepName = resolvedStep.Name;
+            var fallbackStepName = stepType.Name;
+
             var retryPolicy = stepType.GetCustomAttribute<AiRetryPolicyAttribute>(inherit: true);
-            var metadata = GetOrCreateStepMetadata(context.State, stepName);
 
-            // Minimal idempotency:
-            // if the step has already completed successfully, do not execute it again.
-            if (metadata.IsCompleted)
+            // 🔥 Try both keys (VERY IMPORTANT)
+            var metadata =
+                TryGetStepMetadata(context.State, stepName)
+                ?? TryGetStepMetadata(context.State, fallbackStepName);
+
+            if (metadata != null && metadata.IsCompleted)
             {
-
                 _logger.StepExecutor.Skipped(context.ExecutionId, stepName);
 
                 return AiStepResult.Ok(
                     output: $"Step '{stepName}' was skipped because it had already completed successfully.");
             }
+
+            // Only create using PRIMARY identity
+            metadata ??= GetOrCreateStepMetadata(context.State, stepName);
 
             while (true)
             {
@@ -87,16 +83,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                 {
                     BeginAttempt(metadata);
 
-                    _logger.StepExecutor.AttemptStarted(context.ExecutionId, stepName, metadata.AttemptCount);
+                    _logger.StepExecutor.AttemptStarted(
+                        context.ExecutionId,
+                        stepName,
+                        metadata.AttemptCount);
 
-                    SetResolvedStepMetadata(context.State, resolvedStep);
-                    context.State.EnsureStepInitialized(resolvedStep);
-
-                    var result = await resolvedStep.Step.ExecuteAsync(context, cancellationToken);
-
-                    context.State.SetStepResult(resolvedStep.Name, result);
-
-                    
+                    var result = await resolvedStep.Step.ExecuteAsync(
+                        context,
+                        cancellationToken);
 
                     if (!result.Success)
                     {
@@ -104,14 +98,21 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                         metadata.LastError = result.Error;
                         metadata.LastExceptionType = null;
 
-                        _logger.StepExecutor.AttemptFailed(context.ExecutionId, stepName, metadata.AttemptCount, result.Error);
+                        _logger.StepExecutor.AttemptFailed(
+                            context.ExecutionId,
+                            stepName,
+                            metadata.AttemptCount,
+                            result.Error);
 
                         return result;
                     }
 
                     MarkSucceeded(metadata);
 
-                    _logger.StepExecutor.AttemptSucceeded(context.ExecutionId, stepName, metadata.AttemptCount);
+                    _logger.StepExecutor.AttemptSucceeded(
+                        context.ExecutionId,
+                        stepName,
+                        metadata.AttemptCount);
 
                     return result;
                 }
@@ -121,7 +122,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     metadata.LastError = ex.Message;
                     metadata.LastExceptionType = ex.GetType().FullName;
 
-                    _logger.StepExecutor.AttemptException(context.ExecutionId, stepName, metadata.AttemptCount, ex);
+                    _logger.StepExecutor.AttemptException(
+                        context.ExecutionId,
+                        stepName,
+                        metadata.AttemptCount,
+                        ex);
 
                     if (!ShouldRetry(ex, retryPolicy, metadata.AttemptCount))
                     {
@@ -129,9 +134,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     }
 
                     var delay = ComputeDelay(retryPolicy!, metadata.AttemptCount);
+
                     if (delay > TimeSpan.Zero)
                     {
-                        _logger.StepExecutor.RetryScheduled(context.ExecutionId, stepName, metadata.AttemptCount, delay);
+                        _logger.StepExecutor.RetryScheduled(
+                            context.ExecutionId,
+                            stepName,
+                            metadata.AttemptCount,
+                            delay);
 
                         await Task.Delay(delay, cancellationToken);
                     }
@@ -140,7 +150,25 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Begins a new execution attempt for the specified step metadata.
+        /// Attempts to retrieve existing step metadata without creating it.
+        /// </summary>
+        private static AiStepExecutionMetadata? TryGetStepMetadata(
+            AiExecutionState state,
+            string stepName)
+        {
+            if (!state.Metadata.TryGetValue(AiExecutionKeys.StepExecutionMetadata, out var existing) ||
+                existing is not Dictionary<string, AiStepExecutionMetadata> stepMap)
+            {
+                return null;
+            }
+
+            return stepMap.TryGetValue(stepName, out var metadata)
+                ? metadata
+                : null;
+        }
+
+        /// <summary>
+        /// Begins a new execution attempt.
         /// </summary>
         private static void BeginAttempt(AiStepExecutionMetadata metadata)
         {
@@ -151,18 +179,18 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Marks the step metadata as successfully completed.
+        /// Marks execution as successful.
         /// </summary>
         private static void MarkSucceeded(AiStepExecutionMetadata metadata)
         {
-            metadata.Status = AiStepExecutionStatus.Succeeded;
+            metadata.Status = AiStepExecutionStatus.Completed;
             metadata.CompletedAtUtc = DateTimeOffset.UtcNow;
             metadata.LastError = null;
             metadata.LastExceptionType = null;
         }
 
         /// <summary>
-        /// Determines whether a failed attempt should be retried.
+        /// Determines whether a retry should occur.
         /// </summary>
         private bool ShouldRetry(
             Exception exception,
@@ -182,7 +210,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Computes the retry delay for the next attempt.
+        /// Computes retry delay.
         /// </summary>
         private static TimeSpan ComputeDelay(
             AiRetryPolicyAttribute retryPolicy,
@@ -205,7 +233,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Returns existing metadata for the specified step or creates a new one.
+        /// Gets or creates step metadata.
         /// </summary>
         private static AiStepExecutionMetadata GetOrCreateStepMetadata(
             AiExecutionState state,
@@ -231,20 +259,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             state.UpdatedAtUtc = DateTime.UtcNow;
 
             return metadata;
-        }
-
-        /// <summary>
-        /// Injects the current resolved step metadata into the execution state.
-        /// This allows the concrete step implementation to access its declarative
-        /// input and configuration without changing the IAiStep contract.
-        /// </summary>
-        private static void SetResolvedStepMetadata(
-            AiExecutionState state,
-            ResolvedAiPipelineStep resolvedStep)
-        {
-            state.Metadata[AiExecutionKeys.CurrentStepName] = resolvedStep.Name;
-            state.Metadata[AiExecutionKeys.CurrentStepKey] = resolvedStep.StepKey;
-            state.UpdatedAtUtc = DateTime.UtcNow;
         }
     }
 }

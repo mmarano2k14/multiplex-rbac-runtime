@@ -24,11 +24,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
         public string Name => "summary";
 
         public async Task<AiStepResult> ExecuteAsync(
-            AiExecutionContext context,
+            AiStepExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             // Retrieve input from context
-            var input = context.Get<string>(AiExecutionKeys.Input);
+            var input = "context.Get<string>(AiExecutionKeys.Input);";
 
             if (string.IsNullOrWhiteSpace(input))
                 return AiStepResult.Fail("Missing required input: 'input'.");

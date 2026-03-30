@@ -6,7 +6,7 @@ public class FakeStepExecutor : IAiStepExecutor
 {
     public async Task<AiStepResult> ExecuteAsync(
         ResolvedAiPipelineStep resolvedStep,
-        AiExecutionContext context,
+        AiStepExecutionContext context,
         CancellationToken ct)
     {
 

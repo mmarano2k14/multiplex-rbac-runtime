@@ -5,44 +5,29 @@ using Multiplexed.Abstractions.AI.Steps;
 namespace Multiplexed.AI.Runtime.Pipeline
 {
     /// <summary>
-    /// Executes a single step of a provider-neutral AI pipeline.
-    ///
-    /// Architecture summary:
-    /// AiExecutionEngine
-    ///     -> IAiPipelineExecutor
-    ///         -> PrepareAsync(...)
-    ///             -> IAiPipelineDefinitionSourceSelector
-    ///             -> IAiPipelineDefinitionProvider
-    ///             -> IAiPipelineResolver
-    ///         -> ExecuteNextAsync(...)
-    ///             -> IAiStepExecutor
+    /// Executes a resolved AI pipeline using strict sequential orchestration.
     ///
     /// Responsibilities:
     /// - Select the appropriate pipeline definition provider during preparation
     /// - Resolve the configured pipeline into a runtime executable pipeline
-    /// - Determine the current step from the orchestration record
-    /// - Execute exactly one resolved step
+    /// - Determine the current step using sequential index-based progression
+    /// - Create a step-scoped execution context for the selected step
+    /// - Delegate step execution to <see cref="IAiStepExecutor"/>
     /// - Return structured progression data to the execution engine
     ///
-    /// This class does not own:
-    /// - RBAC context loading
-    /// - RBAC context rotation
-    /// - optimistic concurrency
-    /// - persistence orchestration
+    /// This executor is strictly sequential.
+    /// DAG execution is handled separately by <c>AiDagExecutionEngine</c>.
     /// </summary>
-    public sealed class AiPipelineExecutor : IAiPipelineExecutor
+    public sealed class AiSequentialPipelineExecutor : IAiSequentialPipelineExecutor
     {
         private readonly IAiPipelineDefinitionSourceSelector _sourceSelector;
         private readonly IAiPipelineResolver _pipelineResolver;
         private readonly IAiStepExecutor _stepExecutor;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="AiPipelineExecutor"/> class.
+        /// Initializes a new instance of the <see cref="AiSequentialPipelineExecutor"/> class.
         /// </summary>
-        /// <param name="sourceSelector">The selector used to choose the pipeline definition provider.</param>
-        /// <param name="pipelineResolver">The resolver used to convert definitions into executable runtime pipelines.</param>
-        /// <param name="stepExecutor">The executor used to execute a single runtime step.</param>
-        public AiPipelineExecutor(
+        public AiSequentialPipelineExecutor(
             IAiPipelineDefinitionSourceSelector sourceSelector,
             IAiPipelineResolver pipelineResolver,
             IAiStepExecutor stepExecutor)
@@ -56,12 +41,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
             _stepExecutor = stepExecutor;
         }
 
-        /// <summary>
-        /// Resolves the specified pipeline into an executable runtime pipeline.
-        /// </summary>
-        /// <param name="pipelineName">The unique pipeline name.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The resolved executable pipeline.</returns>
+        /// <inheritdoc />
         public async Task<ResolvedAiPipeline> PrepareAsync(
             string pipelineName,
             CancellationToken cancellationToken = default)
@@ -92,18 +72,12 @@ namespace Multiplexed.AI.Runtime.Pipeline
             {
                 Name = pipeline.Name,
                 Version = pipeline.Version,
+                ExecutionMode = pipeline.ExecutionMode,
                 Steps = orderedSteps
             };
         }
 
-        /// <summary>
-        /// Executes the current pipeline step for the supplied execution context
-        /// using the provided resolved pipeline.
-        /// </summary>
-        /// <param name="pipeline">The resolved executable pipeline.</param>
-        /// <param name="context">The shared execution context for the current step.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The pipeline execution result for the executed step.</returns>
+        /// <inheritdoc />
         public async Task<PipelineExecutionResult> ExecuteNextAsync(
             ResolvedAiPipeline pipeline,
             AiExecutionContext context,
@@ -132,10 +106,16 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
             var resolvedStep = orderedSteps[record.CurrentStepIndex];
 
+            var stepContext = new AiStepExecutionContext(
+                context,
+                resolvedStep);
+
             var stepResult = await _stepExecutor.ExecuteAsync(
                 resolvedStep,
-                context,
+                stepContext,
                 cancellationToken);
+
+            context.State.SetStepResult(resolvedStep.Name, stepResult);
 
             var nextStepIndex = record.CurrentStepIndex + 1;
             var isCompleted = nextStepIndex >= orderedSteps.Length;

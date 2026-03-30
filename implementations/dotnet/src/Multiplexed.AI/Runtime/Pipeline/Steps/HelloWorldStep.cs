@@ -20,13 +20,13 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
         public string Name => "hello-world";
 
         public async Task<AiStepResult> ExecuteAsync(
-            AiExecutionContext context,
+            AiStepExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(context);
 
             // First try the declarative input binding for the current step.
-            var text = context.ResolveInputBinding<string>("text");
+            var text = context.ResolveCurrentStepInput<string>("text");
 
             // Optional step configuration for test/demo delay simulation.
             if (context.TryGetStepConfigValue<int>("delayMs", out var delayMs) && delayMs > 0)
@@ -35,7 +35,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
             }
 
             return AiStepResult.Ok(
-                output: "Hello World",
+                output: "Hello World : " + (text ?? "No text provided"),
                 data: new Dictionary<string, object?>
                 {
                     ["message"] = "Hello World : " + (text ?? "No text provided")

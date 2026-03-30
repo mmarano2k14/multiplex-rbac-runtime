@@ -148,7 +148,7 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             Assert.NotNull(finalState);
 
             // Ensure consistency
-            Assert.Equal(1, finalRecord!.CompletedSteps.Count);
+            Assert.Single(finalRecord!.CompletedSteps);
             Assert.Contains("hello", finalRecord.CompletedSteps);
             Assert.Equal(1, finalRecord.CurrentStepIndex);
             Assert.Equal("summary", finalRecord.CurrentStep);

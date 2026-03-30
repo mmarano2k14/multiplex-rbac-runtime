@@ -48,9 +48,13 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 Step = step
             };
 
+            var stepContext = new AiStepExecutionContext(
+                context,
+                resolvedStep);
+
             // Act
             var exception = await Assert.ThrowsAsync<TimeoutException>(
-                () => executor.ExecuteAsync(resolvedStep, context));
+                () => executor.ExecuteAsync(resolvedStep, stepContext));
 
             // Assert
             Assert.Equal("Always failing timeout.", exception.Message);
@@ -79,7 +83,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             public string Name => "always-timeout-step";
 
             public Task<AiStepResult> ExecuteAsync(
-                AiExecutionContext context,
+                AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
                 throw new TimeoutException("Always failing timeout.");
