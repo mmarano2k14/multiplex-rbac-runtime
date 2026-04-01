@@ -2,7 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows a deterministic AI runtime and observability model designed for high-concurrency testing, focusing on consistency, isolation, and analysis under load.
+This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
+
+---
+
+## [1.0.2.0] - 2026-03-31
+
+### ✨ Added
+
+- Introduced `IAiExecutionCleanupService` to centralize execution cleanup logic
+- Added deterministic cleanup flow triggered by execution engines on terminal states (`Completed`, `Failed`)
+- Implemented full execution bundle deletion (record, state, and associated runtime artifacts)
+- Introduced distributed-safe convergence persistence for DAG execution
+- Added atomic finalization mechanism via `IAiDagExecutionStore.TryFinalizeExecutionAsync`
+- Implemented optimistic concurrency control using `ExecutionStepKey` during convergence
+
+---
+
+### 🔄 Changed
+
+- Moved cleanup responsibility directly into execution engines for explicit lifecycle control
+- Replaced standard `PersistAsync` calls with `PersistDistributedConvergedRecordAsync` in distributed DAG execution flow
+- Enforced atomic promotion of terminal states (`Completed`, `Failed`) across multiple workers
+- Improved execution record synchronization by reloading authoritative state after concurrent finalization
+- Ensured monotonic execution lifecycle (no downgrade after terminal state)
+- Improved consistency of `UpdatedAtUtc` during distributed state updates
+
+---
+
+### 🧪 Test Improvements
+
+- Updated test infrastructure to support cleanup service injection
+- Introduced no-op cleanup implementations for unit testing
+- Ensedured deterministic behavior under concurrent DAG execution scenarios
+- Ensured test stability without requiring external infrastructure (e.g. Redis)
+
+---
+
+### 🎯 Result
+
+- Fully deterministic execution lifecycle
+- Atomic and race-condition safe DAG convergence
+- Single-writer guarantee for terminal state transitions
+- Explicit and predictable cleanup behavior
+- Reduced runtime complexity
+- Improved maintainability and testability
 
 ---
 

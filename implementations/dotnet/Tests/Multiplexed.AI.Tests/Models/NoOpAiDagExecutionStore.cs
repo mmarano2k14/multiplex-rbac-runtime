@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Stores;
 
 namespace Multiplexed.AI.Tests.Fakes
@@ -97,6 +98,11 @@ namespace Multiplexed.AI.Tests.Fakes
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(0);
+        }
+
+        public Task<bool> TryFinalizeExecutionAsync(AiDagExecutionFinalizationRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
         }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Stores;
 using StackExchange.Redis;
 using System.Text;
@@ -339,6 +340,30 @@ namespace Multiplexed.AI.Stores.Cache
 
             return recovered
             """);
+
+        private static readonly LuaScript FinalizeScript = LuaScript.Prepare(@"
+            local raw = redis.call('GET', @recordKey)
+            if not raw then return 0 end
+
+            local record = cjson.decode(raw)
+
+            if record.ExecutionStepKey ~= @expectedExecutionStepKey then
+                return 0
+            end
+
+            if record.Status == 'Completed' or record.Status == 'Failed' then
+                return 0
+            end
+
+            record.Status = @status
+            record.CompletedSteps = cjson.decode(@completedStepsJson)
+            record.CurrentStep = ''
+            record.Version = (record.Version or 0) + 1
+            record.ExecutionStepKey = @newExecutionStepKey
+
+            redis.call('SET', @recordKey, cjson.encode(record))
+            return 1
+            ");
 
         // ---------------------------------------------------------------------
         // LOADED SCRIPTS (SHA CACHED)
@@ -764,6 +789,46 @@ namespace Multiplexed.AI.Stores.Cache
                 _recoverLoadedScript = LoadScript(RecoverPreparedScript);
                 return await ExecuteRecoverAsync(stepIndexKey, stepKeyPrefix, nowUnix);
             }
+        }
+
+        /// <summary>
+        /// Attempts to atomically finalize the global execution record using Redis Lua.
+        ///
+        /// This method ensures that:
+        /// - Only one worker can transition the execution into a terminal state
+        /// - The transition is atomic and race-condition free
+        /// - The <see cref="AiExecutionRecord.ExecutionStepKey"/> is validated
+        ///
+        /// BEHAVIOR:
+        /// - If the key does not match, the operation fails
+        /// - If the execution is already terminal, the operation fails
+        /// - Otherwise, the record is updated atomically
+        ///
+        /// RETURNS:
+        /// - <c>true</c> if the execution was successfully finalized
+        /// - <c>false</c> if another worker already finalized or concurrency check failed
+        /// </summary>
+        /// <param name="request">The finalization request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>True if finalization succeeded; otherwise false.</returns>
+        public async Task<bool> TryFinalizeExecutionAsync(
+            AiDagExecutionFinalizationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var key = _keyBuilder.GetExecutionRecordKey(request.ExecutionId);
+
+            var result = await _database.ScriptEvaluateAsync(
+                FinalizeScript,
+                new
+                {
+                    recordKey = (RedisKey)key,
+                    expectedExecutionStepKey = request.ExpectedExecutionStepKey,
+                    status = request.Status.ToString(),
+                    completedStepsJson = JsonSerializer.Serialize(request.CompletedSteps),
+                    newExecutionStepKey = Guid.NewGuid().ToString("N")
+                });
+
+            return (int)result == 1;
         }
 
         // ---------------------------------------------------------------------

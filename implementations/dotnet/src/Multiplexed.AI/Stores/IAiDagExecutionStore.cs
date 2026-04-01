@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution;
 
 namespace Multiplexed.AI.Stores
 {
@@ -100,6 +101,30 @@ namespace Multiplexed.AI.Stores
 
         Task<int> RecoverTimedOutStepsAsync(
             string executionId,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to atomically finalize the global execution record after convergence evaluation.
+        ///
+        /// This operation ensures that only one worker can promote the execution
+        /// into a terminal state (<see cref="AiExecutionStatus.Completed"/> or
+        /// <see cref="AiExecutionStatus.Failed"/>).
+        ///
+        /// RULES:
+        /// - The execution record must exist
+        /// - The <see cref="AiExecutionRecord.ExecutionStepKey"/> must match the expected value
+        /// - Terminal states are monotonic and cannot be downgraded
+        /// - Concurrent finalization attempts are resolved atomically
+        ///
+        /// RETURNS:
+        /// - <c>true</c> if this worker successfully finalized the execution
+        /// - <c>false</c> if another worker already finalized or the state changed
+        /// </summary>
+        /// <param name="request">The finalization request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>True if the finalization succeeded; otherwise false.</returns>
+        Task<bool> TryFinalizeExecutionAsync(
+            AiDagExecutionFinalizationRequest request,
             CancellationToken cancellationToken = default);
     }
 }

@@ -4,6 +4,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
+using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
@@ -247,18 +248,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (nextStep is null)
                 {
-                    if (AiPipelineDagStepSelector.IsCompleted(resolvedPipeline, state))
-                    {
-                        record.MarkCompleted();
-                        record.CurrentStep = string.Empty;
-                    }
-                    else
-                    {
-                        // No step is currently executable and the pipeline is not complete.
-                        // This represents a true waiting / blocked state.
-                        record.MarkWaiting();
-                        record.CurrentStep = string.Empty;
-                    }
+                    ApplyConvergenceToRecord(
+                        record,
+                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                        state);
 
                     record.TouchVersion();
                     record.RenewExecutionStepKey();
@@ -298,7 +291,6 @@ namespace Multiplexed.AI.Runtime.Execution
                 if (!stepResult.Success)
                 {
                     stepState.MarkFailed(stepResult.Error);
-                    record.MarkFailed();
 
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
@@ -309,31 +301,18 @@ namespace Multiplexed.AI.Runtime.Execution
                 {
                     stepState.MarkCompleted(stepResult);
 
-                    if (!record.CompletedSteps.Contains(nextStep.Name, StringComparer.Ordinal))
-                    {
-                        record.CompletedSteps.Add(nextStep.Name);
-                    }
-
                     Logger.Engine.StepCompleted(
                         record,
                         nextStep.Name);
-
-                    if (AiPipelineDagStepSelector.IsCompleted(resolvedPipeline, state))
-                    {
-                        record.MarkCompleted();
-                        record.CurrentStep = string.Empty;
-                    }
-                    else
-                    {
-                        // Progress was made and more work may still be possible.
-                        // Do not switch to Waiting here, otherwise ExecuteAllAsync
-                        // may stop too early.
-                        record.MarkRunning();
-                        record.CurrentStep = string.Empty;
-                    }
                 }
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
+
+                ApplyConvergenceToRecord(
+                    record,
+                    AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                    state);
+
                 record.TouchVersion();
                 record.RenewExecutionStepKey();
 
@@ -458,33 +437,20 @@ namespace Multiplexed.AI.Runtime.Execution
                 // This means either:
                 // - the DAG is completed
                 // - the DAG is waiting on dependencies or retry timing
+                // - the DAG still has in-flight work running on another worker
                 // -------------------------------------------------------------
                 if (claimed is null)
                 {
-                    record.CompletedSteps = state.Steps.Values
-                        .Where(x => x.IsCompleted)
-                        .Select(x => x.StepName)
-                        .OrderBy(x => x, StringComparer.Ordinal)
-                        .ToList();
-
-                    if (AiPipelineDagStepSelector.IsCompleted(resolvedPipeline, state))
-                    {
-                        record.MarkCompleted();
-                    }
-                    else
-                    {
-                        record.MarkWaiting();
-                    }
-
-                    record.CurrentStep = string.Empty;
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
+
+                    ApplyConvergenceToRecord(
+                        record,
+                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                        state);
 
                     var expectedStepKey = record.ExecutionStepKey;
 
-                    record.TouchVersion();
-                    record.RenewExecutionStepKey();
-
-                    await PersistAsync(
+                    await PersistDistributedConvergedRecordAsync(
                         record,
                         expectedStepKey,
                         state,
@@ -531,9 +497,6 @@ namespace Multiplexed.AI.Runtime.Execution
                         ex.Message,
                         cancellationToken);
 
-                    record.MarkFailed();
-                    record.CurrentStep = claimed.StepName;
-
                     Logger.Engine.StepException(
                         record.ExecutionId,
                         claimed.StepName,
@@ -541,18 +504,16 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     var failedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
 
+                    record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
+
+                    ApplyConvergenceToRecord(
+                        record,
+                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, failedState),
+                        failedState);
+
                     var expectedStepKey = record.ExecutionStepKey;
 
-                    record.CompletedSteps = failedState.Steps.Values
-                        .Where(x => x.IsCompleted)
-                        .Select(x => x.StepName)
-                        .OrderBy(x => x, StringComparer.Ordinal)
-                        .ToList();
-
-                    record.TouchVersion();
-                    record.RenewExecutionStepKey();
-
-                    await PersistAsync(
+                    await PersistDistributedConvergedRecordAsync(
                         record,
                         expectedStepKey,
                         failedState,
@@ -571,8 +532,6 @@ namespace Multiplexed.AI.Runtime.Execution
                         claimed.ClaimToken,
                         stepResult.Error,
                         cancellationToken);
-
-                    record.MarkFailed();
 
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
@@ -604,40 +563,16 @@ namespace Multiplexed.AI.Runtime.Execution
                 // -------------------------------------------------------------
                 var finalState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
 
-                record.CompletedSteps = finalState.Steps.Values
-                    .Where(x => x.IsCompleted)
-                    .Select(x => x.StepName)
-                    .OrderBy(x => x, StringComparer.Ordinal)
-                    .ToList();
-
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
-                if (AiPipelineDagStepSelector.IsCompleted(resolvedPipeline, finalState))
-                {
-                    record.MarkCompleted();
-                    record.CurrentStep = string.Empty;
-                }
-                else if (finalState.Steps.Values.Any(x => x.IsFailed))
-                {
-                    record.MarkFailed();
-                    record.CurrentStep = string.Empty;
-                }
-                else
-                {
-                    // IMPORTANT:
-                    // A successful completion may unlock new ready steps immediately.
-                    // Even if no step is currently running, the execution should remain
-                    // active so ExecuteAllAsync can continue advancing the DAG.
-                    record.MarkRunning();
-                    record.CurrentStep = string.Empty;
-                }
+                ApplyConvergenceToRecord(
+                    record,
+                    AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, finalState),
+                    finalState);
 
                 var expectedStepKeyFinal = record.ExecutionStepKey;
 
-                record.TouchVersion();
-                record.RenewExecutionStepKey();
-
-                await PersistAsync(
+                await PersistDistributedConvergedRecordAsync(
                     record,
                     expectedStepKeyFinal,
                     finalState,
@@ -654,6 +589,64 @@ namespace Multiplexed.AI.Runtime.Execution
             finally
             {
                 Accessor.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Applies a convergence decision to the global execution record.
+        ///
+        /// This method centralizes:
+        /// - global status mutation
+        /// - completed-step projection
+        /// - current-step reset for converged snapshots
+        /// </summary>
+        private static void ApplyConvergenceToRecord(
+            AiExecutionRecord record,
+            AiDagExecutionConvergenceResult convergence,
+            AiExecutionState state)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(convergence);
+            ArgumentNullException.ThrowIfNull(state);
+
+            record.CompletedSteps = state.Steps.Values
+                .Where(x => x.IsCompleted)
+                .Select(x => x.StepName)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
+
+            record.CurrentStep = string.Empty;
+
+            switch (convergence.Status)
+            {
+                case AiExecutionStatus.Pending:
+                    record.Status = AiExecutionStatus.Pending;
+                    record.UpdatedAtUtc = DateTime.UtcNow;
+                    break;
+
+                case AiExecutionStatus.Running:
+                    record.MarkRunning();
+                    break;
+
+                case AiExecutionStatus.Waiting:
+                    record.MarkWaiting();
+                    break;
+
+                case AiExecutionStatus.Completed:
+                    record.MarkCompleted();
+                    break;
+
+                case AiExecutionStatus.Failed:
+                    record.MarkFailed();
+                    break;
+
+                case AiExecutionStatus.Cancelled:
+                    record.MarkCancelled();
+                    break;
+
+                default:
+                    throw new InvalidOperationException(
+                        $"Unsupported convergence status '{convergence.Status}'.");
             }
         }
 
@@ -712,6 +705,131 @@ namespace Multiplexed.AI.Runtime.Execution
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// Persists a converged execution record in a distributed-safe manner.
+        ///
+        /// This method ensures that terminal state transitions (<see cref="AiExecutionStatus.Completed"/> or
+        /// <see cref="AiExecutionStatus.Failed"/>) are promoted atomically using the distributed DAG store,
+        /// preventing race conditions across multiple workers.
+        ///
+        /// For non-terminal states, this method falls back to the standard persistence flow.
+        ///
+        /// BEHAVIOR:
+        /// - If no DAG store is configured, falls back to <c>PersistAsync</c>
+        /// - If terminal state, uses <c>TryFinalizeExecutionAsync</c>
+        /// - If another worker wins the race, reloads the authoritative record
+        /// - Ensures monotonic terminal state transitions
+        ///
+        /// GUARANTEES:
+        /// - No double finalization
+        /// - No state downgrade after terminal
+        /// - Deterministic final state across distributed workers
+        /// </summary>
+        /// <param name="record">The execution record to persist.</param>
+        /// <param name="expectedStepKey">The expected optimistic concurrency key.</param>
+        /// <param name="state">The current execution state snapshot.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task PersistDistributedConvergedRecordAsync(
+            AiExecutionRecord record,
+            string expectedStepKey,
+            AiExecutionState state,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedStepKey);
+            ArgumentNullException.ThrowIfNull(state);
+
+            // ---------------------------------------------------------------------
+            // Fallback for non-distributed execution
+            // ---------------------------------------------------------------------
+            if (_dagStore is null)
+            {
+                record.TouchVersion();
+                record.RenewExecutionStepKey();
+
+                await PersistAsync(
+                    record,
+                    expectedStepKey,
+                    state,
+                    cancellationToken);
+
+                return;
+            }
+
+            var completedSteps = state.Steps.Values
+                .Where(x => x.IsCompleted)
+                .Select(x => x.StepName)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
+
+            // ---------------------------------------------------------------------
+            // Terminal state → atomic finalization
+            // ---------------------------------------------------------------------
+            if (record.Status is AiExecutionStatus.Completed or AiExecutionStatus.Failed)
+            {
+                var success = await _dagStore.TryFinalizeExecutionAsync(
+                    new AiDagExecutionFinalizationRequest
+                    {
+                        ExecutionId = record.ExecutionId,
+                        ExpectedExecutionStepKey = expectedStepKey,
+                        Status = record.Status,
+                        CompletedSteps = completedSteps,
+                        CurrentStep = record.CurrentStep,
+                        WorkerId = Environment.MachineName
+                    },
+                    cancellationToken);
+
+                if (!success)
+                {
+                    // Another worker won the race → reload authoritative state
+                    var refreshed = await _dagStore.GetRecordAsync(
+                        record.ExecutionId,
+                        cancellationToken);
+
+                    if (refreshed is not null)
+                    {
+                        record.Status = refreshed.Status;
+                        record.CompletedSteps = refreshed.CompletedSteps;
+                        record.CurrentStep = refreshed.CurrentStep;
+                        record.ExecutionStepKey = refreshed.ExecutionStepKey;
+                        record.Version = refreshed.Version;
+                        record.UpdatedAtUtc = refreshed.UpdatedAtUtc;
+                    }
+
+                    return;
+                }
+
+                // Reload final authoritative state
+                var updated = await _dagStore.GetRecordAsync(
+                    record.ExecutionId,
+                    cancellationToken);
+
+                if (updated is not null)
+                {
+                    record.Status = updated.Status;
+                    record.CompletedSteps = updated.CompletedSteps;
+                    record.CurrentStep = updated.CurrentStep;
+                    record.ExecutionStepKey = updated.ExecutionStepKey;
+                    record.Version = updated.Version;
+                    record.UpdatedAtUtc = updated.UpdatedAtUtc;
+                }
+
+                return;
+            }
+
+            // ---------------------------------------------------------------------
+            // Non-terminal → standard persistence
+            // ---------------------------------------------------------------------
+            record.TouchVersion();
+            record.RenewExecutionStepKey();
+
+            await PersistAsync(
+                record,
+                expectedStepKey,
+                state,
+                cancellationToken);
         }
     }
 }
