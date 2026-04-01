@@ -7,64 +7,56 @@ namespace Multiplexed.AI.Runtime.Logging
     /// Defines structured runtime logging for the AI execution engine.
     ///
     /// This logger is responsible for orchestration-level events such as:
-    /// - execution creation
-    /// - step failures
-    /// - step exceptions
-    /// - step completion
-    ///
-    /// It is intentionally focused on persisted execution orchestration,
-    /// not on step retry internals or pipeline service entry points.
+    /// - execution lifecycle
+    /// - step lifecycle
+    /// - errors and exceptions
+    /// - runtime diagnostics
     /// </summary>
     public interface IAiExecutionEngineLogger
     {
-        /// <summary>
-        /// Emits a structured event when a new execution is created.
-        /// </summary>
-        /// <param name="record">The created execution record.</param>
+        // =========================
+        // STRUCTURED EVENTS (EXISTING)
+        // =========================
+
         void ExecutionCreated(AiExecutionRecord record);
 
-        /// <summary>
-        /// Emits a structured event when a new execution is loaded.
-        /// </summary>
-        /// <param name="record">The created execution record.</param>
         void ExecutionLoaded(AiExecutionRecord record);
 
-        /// <summary>
-        /// Emits a structured event when a new execution is completed.
-        /// </summary>
-        /// <param name="record">The created execution record.</param>
         void ExecutionCompleted(AiExecutionRecord record);
 
-        /// <summary>
-        /// Emits a structured event when a new execution is already completed.
-        /// </summary>
-        /// <param name="record">The created execution record.</param>
         void ExecutionAlreadyCompleted(AiExecutionRecord record);
 
-        /// <summary>
-        /// Emits a structured event when a step throws an exception.
-        /// </summary>
-        /// <param name="executionId">The current execution identifier.</param>
-        /// <param name="stepName">The logical step name.</param>
-        /// <param name="exception">The thrown exception.</param>
         void StepException(string executionId, string stepName, Exception exception);
 
-        /// <summary>
-        /// Emits a structured event when a step returns a failed result.
-        /// </summary>
-        /// <param name="executionId">The current execution identifier.</param>
-        /// <param name="stepName">The logical step name.</param>
-        /// <param name="error">The returned error message.</param>
         void StepFailed(string executionId, string stepName, string? error);
 
-        /// <summary>
-        /// Emits a structured event when a step completes successfully.
-        /// </summary>
-        /// <param name="record">The updated execution record.</param>
-        /// <param name="step">The completed step.</param>
         void StepCompleted(AiExecutionRecord record, string stepName);
 
+        // =========================
+        // NEW — RUNTIME DIAGNOSTICS
+        // =========================
 
-        
+        /// <summary>
+        /// Emits a low-level informational log.
+        /// Used for tracing execution flow (cleanup, transitions, etc.).
+        /// </summary>
+        void LogInformation(string message);
+
+        /// <summary>
+        /// Emits a warning log.
+        /// Used for recoverable or unexpected situations.
+        /// </summary>
+        void LogWarning(string message);
+
+        /// <summary>
+        /// Emits an error log with exception.
+        /// Used for failures that impact execution flow.
+        /// </summary>
+        void LogError(Exception exception, string message);
+
+        /// <summary>
+        /// Emits an error log without exception.
+        /// </summary>
+        void LogError(string message);
     }
 }

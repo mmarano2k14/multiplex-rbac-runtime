@@ -20,6 +20,7 @@ namespace Multiplexed.AI.Stores.Cache
     {
         private readonly IConnectionMultiplexer _multiplexer;
         private readonly IDatabase _database;
+        private readonly IAiExecutionKeyBuilder _keyBuilder;
         private readonly JsonSerializerOptions _jsonOptions;
 
         /// <summary>
@@ -61,12 +62,16 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Initializes a new instance of the Redis execution store.
         /// </summary>
-        public RedisAiExecutionStore(IConnectionMultiplexer multiplexer)
+        public RedisAiExecutionStore(
+            IConnectionMultiplexer multiplexer,
+            IAiExecutionKeyBuilder keyBuilder)
         {
             ArgumentNullException.ThrowIfNull(multiplexer);
+            ArgumentNullException.ThrowIfNull(keyBuilder);
 
             _multiplexer = multiplexer;
             _database = multiplexer.GetDatabase();
+            _keyBuilder = keyBuilder;
 
             _jsonOptions = new JsonSerializerOptions
             {
@@ -94,8 +99,8 @@ namespace Multiplexed.AI.Stores.Cache
             if (!string.Equals(record.ExecutionId, state.ExecutionId, StringComparison.Ordinal))
                 throw new ArgumentException("Record and State must share the same ExecutionId.");
 
-            var recordKey = GetRecordRedisKey(record.ExecutionId);
-            var stateKey = GetStateRedisKey(state.ExecutionId);
+            var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stateKey = _keyBuilder.GetExecutionStateKey(state.ExecutionId);
 
             var recordPayload = JsonSerializer.Serialize(record, _jsonOptions);
             var statePayload = JsonSerializer.Serialize(state, _jsonOptions);
@@ -114,7 +119,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var value = await _database.StringGetAsync(GetRecordRedisKey(executionId));
+            var value = await _database.StringGetAsync(_keyBuilder.GetExecutionRecordKey(executionId));
 
             if (!value.HasValue)
                 return null;
@@ -132,7 +137,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var value = await _database.StringGetAsync(GetStateRedisKey(executionId));
+            var value = await _database.StringGetAsync(_keyBuilder.GetExecutionStateKey(executionId));
 
             if (!value.HasValue)
                 return null;
@@ -163,8 +168,8 @@ namespace Multiplexed.AI.Stores.Cache
             ArgumentNullException.ThrowIfNull(record);
             ArgumentNullException.ThrowIfNull(state);
 
-            var recordKey = GetRecordRedisKey(executionId);
-            var stateKey = GetStateRedisKey(executionId);
+            var recordKey = _keyBuilder.GetExecutionRecordKey(executionId);
+            var stateKey = _keyBuilder.GetExecutionStateKey(executionId);
 
             var recordPayload = JsonSerializer.Serialize(record, _jsonOptions);
             var statePayload = JsonSerializer.Serialize(state, _jsonOptions);
@@ -205,6 +210,78 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
+        /// Saves an execution record independently.
+        ///
+        /// This operation overwrites the current persisted record value.
+        /// </summary>
+        public async Task SaveRecordAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            var recordPayload = JsonSerializer.Serialize(record, _jsonOptions);
+
+            await _database.StringSetAsync(
+                _keyBuilder.GetExecutionRecordKey(record.ExecutionId),
+                recordPayload);
+        }
+
+        /// <summary>
+        /// Saves an execution state independently.
+        ///
+        /// This operation overwrites the current persisted state value.
+        /// </summary>
+        public async Task SaveStateAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            ArgumentNullException.ThrowIfNull(state);
+
+            var statePayload = JsonSerializer.Serialize(state, _jsonOptions);
+
+            await _database.StringSetAsync(
+                _keyBuilder.GetExecutionStateKey(executionId),
+                statePayload);
+        }
+
+        /// <summary>
+        /// Deletes an execution record.
+        ///
+        /// This operation is idempotent. If the key does not exist,
+        /// the method completes successfully without throwing.
+        /// </summary>
+        public async Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            await _database.KeyDeleteAsync(_keyBuilder.GetExecutionRecordKey(executionId));
+        }
+
+        /// <summary>
+        /// Deletes an execution state.
+        ///
+        /// This operation is idempotent. If the key does not exist,
+        /// the method completes successfully without throwing.
+        /// </summary>
+        public async Task DeleteStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            await _database.KeyDeleteAsync(_keyBuilder.GetExecutionStateKey(executionId));
+        }
+
+        /// <summary>
         /// Loads the Lua script into Redis and returns the SHA-bound instance.
         /// </summary>
         private LoadedLuaScript LoadTryUpdateScript()
@@ -214,11 +291,5 @@ namespace Multiplexed.AI.Stores.Cache
 
             return TryUpdatePreparedScript.Load(server);
         }
-
-        private static string GetRecordRedisKey(string executionId)
-            => $"ai:execution:record:{executionId}";
-
-        private static string GetStateRedisKey(string executionId)
-            => $"ai:execution:state:{executionId}";
     }
 }

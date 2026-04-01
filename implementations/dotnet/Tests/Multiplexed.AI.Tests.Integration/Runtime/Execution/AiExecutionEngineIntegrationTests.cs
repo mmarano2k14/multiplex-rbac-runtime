@@ -7,7 +7,9 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Steps;
 using Multiplexed.AI.Stores;
@@ -488,7 +490,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var pipelineExecutor = new FakeAiPipelineExecutor(pipelineName, steps);
             var logger = new NoopLogger();
 
-            accessor.Set(BuildTestExecutionContext()); 
+            accessor.Set(BuildTestExecutionContext());
+
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
 
             return new AiSequentialExecutionEngine(
                 store,
@@ -497,7 +508,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 contextFactory,
                 services,
                 pipelineExecutor,
-                logger);
+                logger, cleanupService, cleanupOptions);
         }
 
         /// <summary>
@@ -518,6 +529,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             accessor.Set(BuildTestExecutionContext());
 
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
+
             return new AiSequentialExecutionEngine(
                 store,
                 contextStore,
@@ -525,7 +545,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 contextFactory,
                 services,
                 pipelineExecutor,
-                logger);
+                logger, cleanupService, cleanupOptions);
         }
 
         /// <summary>
@@ -534,7 +554,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// </summary>
         private IAiExecutionStore GetStore()
         {
-            var redis = new RedisAiExecutionStore(_connection);
+            var keyBuilder = new AiExecutionKeyBuilder();
+            var redis = new RedisAiExecutionStore(_connection, keyBuilder);
             var memory = new MemoryAiExecutionStore();
             return new AiExecutionStore(redis, memory);
         }

@@ -1,8 +1,11 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -82,6 +85,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                         step)
                 });
 
+
+
             var resolver = new AiPipelineResolver(stepRegistry);
 
             var pipelineExecutor = new AiSequentialPipelineExecutor(
@@ -116,6 +121,15 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             // Seed the runtime context (simulates authenticated request scope)
             accessor.Set(context);
 
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
+
             var engine = new AiSequentialExecutionEngine(
                 store,
                 contextStore,
@@ -123,7 +137,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 factory,
                 services,
                 pipelineExecutor,
-                logger);
+                logger, cleanupService, cleanupOptions);
 
             // -----------------------------
             // Act

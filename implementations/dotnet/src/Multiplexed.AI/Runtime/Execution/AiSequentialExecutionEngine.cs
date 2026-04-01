@@ -1,6 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.AI.Runtime.Configuration;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
@@ -23,6 +26,9 @@ namespace Multiplexed.AI.Runtime.Execution
     {
         private static readonly TimeSpan ContextRotationOverlap = TimeSpan.FromSeconds(30);
 
+        private readonly IAiExecutionCleanupService _cleanupService;
+        private readonly AiExecutionCleanupOptions _cleanupOptions;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="AiSequentialExecutionEngine"/> class.
         /// </summary>
@@ -33,7 +39,9 @@ namespace Multiplexed.AI.Runtime.Execution
             IExecutionContextFactory contextFactory,
             IServiceProvider services,
             IAiSequentialPipelineExecutor pipelineExecutor,
-            IAiRuntimeLogger logger)
+            IAiRuntimeLogger logger,
+            IAiExecutionCleanupService cleanupService,
+            IOptions<AiExecutionCleanupOptions> cleanupOptions)
             : base(
                 store,
                 contextStore,
@@ -43,6 +51,8 @@ namespace Multiplexed.AI.Runtime.Execution
                 pipelineExecutor,
                 logger)
         {
+            _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
+            _cleanupOptions = cleanupOptions?.Value ?? throw new ArgumentNullException(nameof(cleanupOptions));
         }
 
         /// <inheritdoc />
@@ -125,6 +135,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (record.IsTerminal)
             {
+                Logger.Engine.ExecutionAlreadyCompleted(record);
+
+                await TryCleanupIfNeededAsync(record, cancellationToken);
+
                 return record;
             }
 
@@ -171,6 +185,8 @@ namespace Multiplexed.AI.Runtime.Execution
                         state,
                         cancellationToken);
 
+                    await TryCleanupIfNeededAsync(record, cancellationToken);
+
                     return record;
                 }
 
@@ -198,6 +214,12 @@ namespace Multiplexed.AI.Runtime.Execution
                     record,
                     pipelineResult.ExecutedStepName);
 
+                if (record.IsTerminal)
+                {
+                    Logger.Engine.ExecutionCompleted(record);
+                    await TryCleanupIfNeededAsync(record, cancellationToken);
+                }
+
                 return record;
             }
             catch (Exception ex)
@@ -217,6 +239,8 @@ namespace Multiplexed.AI.Runtime.Execution
                     record,
                     state,
                     cancellationToken);
+
+                await TryCleanupIfNeededAsync(record, cancellationToken);
 
                 throw;
             }
@@ -275,6 +299,63 @@ namespace Multiplexed.AI.Runtime.Execution
             {
                 record.MarkRunning();
                 record.CurrentStep = pipelineResult.NextStepName ?? string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Attempts automatic cleanup only when configured and only when the execution is terminal.
+        /// 
+        /// Cleanup is intentionally optional so completed or failed executions can still be
+        /// inspected during development, testing, or debugging workflows.
+        /// </summary>
+        private async Task TryCleanupIfNeededAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            if (!record.IsTerminal)
+            {
+                Logger.Engine.LogInformation(
+                    $"[AI CLEANUP] Skipped for execution '{record.ExecutionId}' because the execution is not terminal.");
+
+                return;
+            }
+
+            var shouldCleanup =
+                (record.Status == AiExecutionStatus.Completed && _cleanupOptions.AutoCleanupOnCompleted) ||
+                (record.Status == AiExecutionStatus.Failed && _cleanupOptions.AutoCleanupOnFailed);
+
+            if (!shouldCleanup)
+            {
+                Logger.Engine.LogInformation(
+                    $"[AI CLEANUP] Skipped for execution '{record.ExecutionId}' with status '{record.Status}' because automatic cleanup is disabled.");
+
+                return;
+            }
+
+            Logger.Engine.LogInformation(
+                $"[AI CLEANUP] Starting for execution '{record.ExecutionId}' with status '{record.Status}'.");
+
+            try
+            {
+                await _cleanupService.DeleteExecutionBundleAsync(
+                    record.ExecutionId,
+                    cancellationToken);
+
+                Logger.Engine.LogInformation(
+                    $"[AI CLEANUP] Completed for execution '{record.ExecutionId}'.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Engine.LogError(
+                    ex,
+                    $"[AI CLEANUP] Failed for execution '{record.ExecutionId}'.");
+
+                if (!_cleanupOptions.SuppressCleanupExceptions)
+                {
+                    throw;
+                }
             }
         }
     }

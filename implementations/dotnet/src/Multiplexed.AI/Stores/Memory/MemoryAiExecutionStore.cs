@@ -95,6 +95,78 @@ namespace Multiplexed.AI.Stores.Memory
         }
 
         /// <summary>
+        /// Saves an execution record independently in memory.
+        /// 
+        /// If an entry already exists, it is replaced with a defensive copy.
+        /// </summary>
+        public Task SaveRecordAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _records[record.ExecutionId] = CloneRecord(record);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Saves an execution state independently in memory.
+        /// 
+        /// If an entry already exists, it is replaced with a defensive copy.
+        /// </summary>
+        public Task SaveStateAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            ArgumentNullException.ThrowIfNull(state);
+
+            _states[executionId] = CloneState(state);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Deletes an execution record from memory.
+        /// 
+        /// This operation is idempotent. If the record does not exist,
+        /// the method completes successfully without throwing.
+        /// </summary>
+        public Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            _records.TryRemove(executionId, out _);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Deletes an execution state from memory.
+        /// 
+        /// This operation is idempotent. If the state does not exist,
+        /// the method completes successfully without throwing.
+        /// </summary>
+        public Task DeleteStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            _states.TryRemove(executionId, out _);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Creates a defensive copy of the execution record.
         /// </summary>
         private static AiExecutionRecord CloneRecord(AiExecutionRecord source)

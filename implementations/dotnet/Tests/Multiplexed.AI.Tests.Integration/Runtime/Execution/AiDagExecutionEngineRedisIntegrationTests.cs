@@ -9,7 +9,9 @@ using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
@@ -526,6 +528,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 resolver,
                 stepExecutor);
 
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
+
             var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
@@ -534,6 +545,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 CreateServiceProvider(accessor, executionStore, dagStore),
                 pipelineExecutor,
                 logger,
+                cleanupService, cleanupOptions,
                 dagStore);
 
 
@@ -746,7 +758,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 resolver,
                 stepExecutor);
 
-            return new AiDagExecutionEngine(
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
+
+            var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
                 accessor,
@@ -754,19 +775,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 CreateServiceProvider(accessor, executionStore, dagStore),
                 pipelineExecutor,
                 logger,
+                cleanupService, cleanupOptions,
                 dagStore);
+
+            return engine;
         }
 
         private IAiExecutionStore GetExecutionStore()
         {
-            var redis = new RedisAiExecutionStore(_connection);
+            var keyBuilder = new AiExecutionKeyBuilder();
+            var redis = new RedisAiExecutionStore(_connection, keyBuilder);
             var memory = new MemoryAiExecutionStore();
             return new AiExecutionStore(redis, memory);
         }
 
         private IAiDagExecutionStore CreateDagStore()
         {
-            return new RedisAiDagExecutionStore(_connection);
+            var keyBuilder = new AiExecutionKeyBuilder();
+            return new RedisAiDagExecutionStore(_connection, keyBuilder);
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(string fileName = "dag-parallel-basic.json")

@@ -9,7 +9,9 @@ using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
@@ -44,6 +46,9 @@ namespace Multiplexed.AI.DI
             services.Configure<AiEngineOptions>(
                 configuration.GetSection("AiEngine"));
 
+            services.Configure<AiExecutionCleanupOptions>(
+                configuration.GetSection("AiExecutionCleanup"));
+
             // ------------------------------------------------------------
             // Retry / step execution infrastructure
             // ------------------------------------------------------------
@@ -66,6 +71,7 @@ namespace Multiplexed.AI.DI
             // Pipeline definition / resolution / execution
             // ------------------------------------------------------------
             services.AddScoped<InMemoryAiPipelineDefinitionProvider>();
+
             services.AddScoped<JsonAiPipelineDefinitionProvider>(sp =>
             {
                 var options = sp.GetRequiredService<
@@ -81,15 +87,9 @@ namespace Multiplexed.AI.DI
                     options.JsonPipelineDefinitionFilePath);
             });
 
-
             services.AddScoped<IAiPipelineDefinitionSourceSelector, DefaultAiPipelineDefinitionSourceSelector>();
             services.AddScoped<IAiPipelineResolver, AiPipelineResolver>();
             services.AddScoped<IAiSequentialPipelineExecutor, AiSequentialPipelineExecutor>();
-
-            // ------------------------------------------------------------
-            // Execution runtime
-            // ------------------------------------------------------------
-            services.AddScoped<IAiExecutionEngine, AiSequentialExecutionEngine>();
 
             // ------------------------------------------------------------
             // Stores
@@ -98,15 +98,36 @@ namespace Multiplexed.AI.DI
             services.AddSingleton<RedisAiExecutionStore>();
             services.AddSingleton<IAiDagExecutionStore, RedisAiDagExecutionStore>();
             services.AddSingleton<IAiExecutionStore, AiExecutionStore>();
+            services.AddSingleton<IAiExecutionKeyBuilder, AiExecutionKeyBuilder>();
+
+            // ------------------------------------------------------------
+            // Cleanup
+            // ------------------------------------------------------------
+            services.AddScoped<IAiExecutionCleanupService, AiExecutionCleanupService>();
+            services.AddScoped<IAiDagDistributedStateCleanup, AiDagDistributedStateCleanup>();
+
+            // NOTE:
+            // Replace this with your real RBAC cleanup implementation if already available.
+            services.AddScoped<IAiOwnedRbacCleanupService, NoOpAiOwnedRbacCleanupService>();
 
             // ------------------------------------------------------------
             // Logger
             // ------------------------------------------------------------
             services.AddScoped<IAiExecutionEngineLogger, AiExecutionEngineLogger>();
             services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
+            services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>();
             services.AddScoped<IAiStepExecutorLogger, AiStepExecutorLogger>();
-            services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
             services.AddScoped<IAiRuntimeLogger, AiRuntimeLogger>();
+
+            // ------------------------------------------------------------
+            // Execution runtime
+            // ------------------------------------------------------------
+            services.AddScoped<AiSequentialExecutionEngine>();
+            services.AddScoped<AiDagExecutionEngine>();
+
+            // Legacy-compatible default engine registration.
+            // Keep this if the default IAiExecutionEngine must remain sequential.
+            services.AddScoped<IAiExecutionEngine, AiSequentialExecutionEngine>();
 
             return services;
         }

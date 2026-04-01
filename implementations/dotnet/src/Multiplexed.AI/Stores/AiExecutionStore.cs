@@ -142,5 +142,157 @@ namespace Multiplexed.AI.Stores
                     cancellationToken);
             }
         }
+
+        /// <summary>
+        /// Saves an execution record independently using the primary store first,
+        /// then mirrors the latest known pair into the fallback store when possible.
+        /// Falls back to memory if the primary store is unavailable.
+        /// </summary>
+        public async Task SaveRecordAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            try
+            {
+                await _primary.SaveRecordAsync(record, cancellationToken);
+
+                var state = await _primary.GetStateAsync(record.ExecutionId, cancellationToken)
+                    ?? await _fallback.GetStateAsync(record.ExecutionId, cancellationToken);
+
+                if (state is not null)
+                {
+                    await _fallback.CreateAsync(record, state, cancellationToken);
+                }
+            }
+            catch
+            {
+                var state = await _fallback.GetStateAsync(record.ExecutionId, cancellationToken)
+                    ?? new AiExecutionState();
+
+                await _fallback.CreateAsync(record, state, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Saves an execution state independently using the primary store first,
+        /// then mirrors the latest known pair into the fallback store when possible.
+        /// Falls back to memory if the primary store is unavailable.
+        /// </summary>
+        public async Task SaveStateAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(state);
+
+            try
+            {
+                await _primary.SaveStateAsync(executionId, state, cancellationToken);
+
+                var record = await _primary.GetRecordAsync(executionId, cancellationToken)
+                    ?? await _fallback.GetRecordAsync(executionId, cancellationToken);
+
+                if (record is not null)
+                {
+                    await _fallback.CreateAsync(record, state, cancellationToken);
+                }
+            }
+            catch
+            {
+                var record = await _fallback.GetRecordAsync(executionId, cancellationToken);
+
+                if (record is not null)
+                {
+                    await _fallback.CreateAsync(record, state, cancellationToken);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Deletes an execution record from the primary store first,
+        /// then deletes it from the fallback store.
+        /// 
+        /// This operation is idempotent and must not fail if the record
+        /// is already missing in one of the stores.
+        /// </summary>
+        public async Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            Exception? primaryException = null;
+
+            try
+            {
+                await _primary.DeleteRecordAsync(executionId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                primaryException = ex;
+            }
+
+            try
+            {
+                await _fallback.DeleteRecordAsync(executionId, cancellationToken);
+            }
+            catch
+            {
+                if (primaryException is not null)
+                {
+                    throw primaryException;
+                }
+            }
+
+            if (primaryException is not null)
+            {
+                throw primaryException;
+            }
+        }
+
+        /// <summary>
+        /// Deletes an execution state from the primary store first,
+        /// then deletes it from the fallback store.
+        /// 
+        /// This operation is idempotent and must not fail if the state
+        /// is already missing in one of the stores.
+        /// </summary>
+        public async Task DeleteStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            Exception? primaryException = null;
+
+            try
+            {
+                await _primary.DeleteStateAsync(executionId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                primaryException = ex;
+            }
+
+            try
+            {
+                await _fallback.DeleteStateAsync(executionId, cancellationToken);
+            }
+            catch
+            {
+                if (primaryException is not null)
+                {
+                    throw primaryException;
+                }
+            }
+
+            if (primaryException is not null)
+            {
+                throw primaryException;
+            }
+        }
     }
 }

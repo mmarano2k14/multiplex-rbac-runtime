@@ -35,7 +35,63 @@ namespace Multiplexed.AI.Runtime.Logging
                 {
                     record.ExecutionId,
                     record.ContextKey,
-                    record.CurrentStep
+                    record.CurrentStep,
+                    record.Status,
+                    record.ExecutionMode
+                });
+        }
+
+        /// <inheritdoc />
+        public void ExecutionLoaded(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution loaded.",
+                category: "ai.execution.loaded",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep,
+                    record.Status,
+                    record.ExecutionMode
+                });
+        }
+
+        /// <inheritdoc />
+        public void ExecutionCompleted(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution completed.",
+                category: "ai.execution.completed",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep,
+                    record.Status,
+                    record.ExecutionMode
+                });
+        }
+
+        /// <inheritdoc />
+        public void ExecutionAlreadyCompleted(AiExecutionRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            _realtime.LogInfo(
+                message: "AI execution already completed.",
+                category: "ai.execution.already.completed",
+                data: new
+                {
+                    record.ExecutionId,
+                    record.ContextKey,
+                    record.CurrentStep,
+                    record.Status,
+                    record.ExecutionMode
                 });
         }
 
@@ -53,6 +109,7 @@ namespace Multiplexed.AI.Runtime.Logging
                 {
                     ExecutionId = executionId,
                     Step = stepName,
+                    ExceptionType = exception.GetType().FullName,
                     Exception = exception.Message
                 });
         }
@@ -78,6 +135,7 @@ namespace Multiplexed.AI.Runtime.Logging
         public void StepCompleted(AiExecutionRecord record, string stepName)
         {
             ArgumentNullException.ThrowIfNull(record);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
 
             _realtime.LogInfo(
                 message: $"Step '{stepName}' completed.",
@@ -85,54 +143,60 @@ namespace Multiplexed.AI.Runtime.Logging
                 data: new
                 {
                     record.ExecutionId,
+                    Step = stepName,
                     record.CurrentStep,
-                    record.Status
+                    record.Status,
+                    record.ExecutionMode
                 });
         }
 
-        public void ExecutionLoaded(AiExecutionRecord record)
+        /// <inheritdoc />
+        public void LogInformation(string message)
         {
-            ArgumentNullException.ThrowIfNull(record);
+            ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
             _realtime.LogInfo(
-                message: "AI execution loaded.",
-                category: "ai.execution.loaded",
+                message: message,
+                category: "ai.execution.info",
+                data: null);
+        }
+
+        /// <inheritdoc />
+        public void LogWarning(string message)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+            _realtime.LogWarning(
+                message: message,
+                category: "ai.execution.warning",
+                data: null);
+        }
+
+        /// <inheritdoc />
+        public void LogError(Exception exception, string message)
+        {
+            ArgumentNullException.ThrowIfNull(exception);
+            ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+            _realtime.LogError(
+                message: message,
+                category: "ai.execution.error",
                 data: new
                 {
-                    record.ExecutionId,
-                    record.ContextKey,
-                    record.CurrentStep
+                    ExceptionType = exception.GetType().FullName,
+                    Exception = exception.Message
                 });
         }
 
-        public void ExecutionCompleted(AiExecutionRecord record)
+        /// <inheritdoc />
+        public void LogError(string message)
         {
-            ArgumentNullException.ThrowIfNull(record);
+            ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
-            _realtime.LogInfo(
-                message: "AI execution completed.",
-                category: "ai.execution.completed",
-                data: new
-                {
-                    record.ExecutionId,
-                    record.ContextKey,
-                    record.CurrentStep
-                });
-        }
-
-        public void ExecutionAlreadyCompleted(AiExecutionRecord record)
-        {
-            ArgumentNullException.ThrowIfNull(record);
-
-            _realtime.LogInfo(
-                message: "AI execution already completed.",
-                category: "ai.execution.already.completed",
-                data: new
-                {
-                    record.ExecutionId,
-                    record.ContextKey,
-                    record.CurrentStep
-                });
+            _realtime.LogError(
+                message: message,
+                category: "ai.execution.error",
+                data: null);
         }
     }
 }

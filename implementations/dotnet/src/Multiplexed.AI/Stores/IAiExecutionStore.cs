@@ -11,6 +11,8 @@ namespace Multiplexed.AI.Stores
     /// - storing execution state
     /// - retrieving both independently
     /// - updating both safely using optimistic concurrency
+    /// - saving record/state independently when needed
+    /// - deleting record/state independently for coordinated cleanup workflows
     /// </summary>
     public interface IAiExecutionStore
     {
@@ -62,6 +64,54 @@ namespace Multiplexed.AI.Stores
             string expectedStepKey,
             AiExecutionRecord record,
             AiExecutionState state,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Saves an execution record independently.
+        /// 
+        /// This is useful for record-only persistence outside the paired optimistic update flow.
+        /// </summary>
+        /// <param name="record">Execution orchestration record.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task SaveRecordAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Saves an execution state independently.
+        /// 
+        /// This is useful for state-only persistence outside the paired optimistic update flow.
+        /// </summary>
+        /// <param name="executionId">Execution identifier.</param>
+        /// <param name="state">Execution working state.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task SaveStateAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes an execution record by execution identifier.
+        /// 
+        /// This method must be safe to call even if the record does not exist.
+        /// Missing data should be treated as a normal idempotent cleanup case.
+        /// </summary>
+        /// <param name="executionId">Execution identifier.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes an execution state by execution identifier.
+        /// 
+        /// This method must be safe to call even if the state does not exist.
+        /// Missing data should be treated as a normal idempotent cleanup case.
+        /// </summary>
+        /// <param name="executionId">Execution identifier.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task DeleteStateAsync(
+            string executionId,
             CancellationToken cancellationToken = default);
     }
 }

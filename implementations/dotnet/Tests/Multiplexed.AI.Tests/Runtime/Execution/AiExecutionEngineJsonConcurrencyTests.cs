@@ -3,8 +3,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Stores;
+using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
+using StackExchange.Redis;
+using System.Data.Common;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -78,6 +83,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
                 services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
                 services.AddSingleton<Multiplexed.AI.Runtime.Logging.IAiRuntimeLogger, NoopLogger>();
+                services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
 
                 var provider = services.BuildServiceProvider();
 
@@ -208,12 +214,14 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddOptions();
 
                 services.AddMultiplexAI(configuration);
+                services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
 
                 services.AddSingleton<Multiplexed.AI.Stores.IAiExecutionStore, FakeInMemoryExecutionStore>();
                 services.AddSingleton<IContextStore, FakeInMemoryContextStore>();
                 services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
                 services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
                 services.AddSingleton<Multiplexed.AI.Runtime.Logging.IAiRuntimeLogger, NoopLogger>();
+                
 
                 var provider = services.BuildServiceProvider();
 

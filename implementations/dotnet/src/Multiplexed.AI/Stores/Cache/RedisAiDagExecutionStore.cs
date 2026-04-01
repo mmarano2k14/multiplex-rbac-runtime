@@ -32,6 +32,7 @@ namespace Multiplexed.AI.Stores.Cache
     {
         private readonly IConnectionMultiplexer _multiplexer;
         private readonly IDatabase _database;
+        private readonly IAiExecutionKeyBuilder _keyBuilder;
         private readonly JsonSerializerOptions _jsonOptions;
 
         // ---------------------------------------------------------------------
@@ -53,99 +54,99 @@ namespace Multiplexed.AI.Stores.Cache
         /// - Normalizes DependsOn so empty arrays stay arrays and not objects
         /// </summary>
         private static readonly LuaScript ClaimPreparedScript = LuaScript.Prepare(
-"""
-local function normalize_array(value)
-    if value == nil or value == cjson.null then
-        return cjson.decode('[]')
-    end
-
-    local count = 0
-    for _, _ in ipairs(value) do
-        count = count + 1
-    end
-
-    if count == 0 then
-        return cjson.decode('[]')
-    end
-
-    return value
-end
-
-local stepNames = redis.call('SMEMBERS', @stepIndexKey)
-
-local workerId = @workerId
-local nowUnix = tonumber(@nowUnix)
-local claimToken = @claimToken
-local stepKeyPrefix = @stepKeyPrefix
-local executionId = @executionId
-
-table.sort(stepNames)
-
-for _, stepName in ipairs(stepNames) do
-    local stepKey = stepKeyPrefix .. stepName
-    local raw = redis.call('GET', stepKey)
-
-    if raw then
-        local step = cjson.decode(raw)
-
-        if step.Status == "Pending" or step.Status == "None" then
-            local canRun = true
-
-            if step.NextRetryAtUtc ~= nil and step.NextRetryAtUtc ~= cjson.null then
-                if tonumber(step.NextRetryAtUtc) > nowUnix then
-                    canRun = false
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
                 end
+
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
+
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
+
+                return value
             end
 
-            if canRun then
-                local deps = normalize_array(step.DependsOn)
+            local stepNames = redis.call('SMEMBERS', @stepIndexKey)
 
-                for _, depName in ipairs(deps) do
-                    local depKey = stepKeyPrefix .. depName
-                    local depRaw = redis.call('GET', depKey)
+            local workerId = @workerId
+            local nowUnix = tonumber(@nowUnix)
+            local claimToken = @claimToken
+            local stepKeyPrefix = @stepKeyPrefix
+            local executionId = @executionId
 
-                    if not depRaw then
-                        canRun = false
-                        break
+            table.sort(stepNames)
+
+            for _, stepName in ipairs(stepNames) do
+                local stepKey = stepKeyPrefix .. stepName
+                local raw = redis.call('GET', stepKey)
+
+                if raw then
+                    local step = cjson.decode(raw)
+
+                    if step.Status == "Pending" or step.Status == "None" then
+                        local canRun = true
+
+                        if step.NextRetryAtUtc ~= nil and step.NextRetryAtUtc ~= cjson.null then
+                            if tonumber(step.NextRetryAtUtc) > nowUnix then
+                                canRun = false
+                            end
+                        end
+
+                        if canRun then
+                            local deps = normalize_array(step.DependsOn)
+
+                            for _, depName in ipairs(deps) do
+                                local depKey = stepKeyPrefix .. depName
+                                local depRaw = redis.call('GET', depKey)
+
+                                if not depRaw then
+                                    canRun = false
+                                    break
+                                end
+
+                                local depStep = cjson.decode(depRaw)
+
+                                if depStep.Status ~= "Completed" then
+                                    canRun = false
+                                    break
+                                end
+                            end
+                        end
+
+                        if canRun then
+                            step.Status = "Running"
+                            step.ClaimedBy = workerId
+                            step.ClaimToken = claimToken
+                            step.ClaimedAtUtc = nowUnix
+
+                            if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
+                                step.StartedAtUtc = nowUnix
+                            end
+
+                            step.UpdatedAtUtc = nowUnix
+                            step.Version = (step.Version or 0) + 1
+                            step.DependsOn = normalize_array(step.DependsOn)
+
+                            redis.call('SET', stepKey, cjson.encode(step))
+
+                            return cjson.encode({
+                                ExecutionId = executionId,
+                                StepName = step.StepName,
+                                ClaimToken = claimToken
+                            })
+                        end
                     end
-
-                    local depStep = cjson.decode(depRaw)
-
-                    if depStep.Status ~= "Completed" then
-                        canRun = false
-                        break
-                    end
                 end
             end
 
-            if canRun then
-                step.Status = "Running"
-                step.ClaimedBy = workerId
-                step.ClaimToken = claimToken
-                step.ClaimedAtUtc = nowUnix
-
-                if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
-                    step.StartedAtUtc = nowUnix
-                end
-
-                step.UpdatedAtUtc = nowUnix
-                step.Version = (step.Version or 0) + 1
-                step.DependsOn = normalize_array(step.DependsOn)
-
-                redis.call('SET', stepKey, cjson.encode(step))
-
-                return cjson.encode({
-                    ExecutionId = executionId,
-                    StepName = step.StepName,
-                    ClaimToken = claimToken
-                })
-            end
-        end
-    end
-end
-
-return nil
-""");
+            return nil
+            """);
 
         /// <summary>
         /// Completes a claimed step atomically.
@@ -156,56 +157,56 @@ return nil
         /// - claim token must match current ownership
         /// </summary>
         private static readonly LuaScript CompletePreparedScript = LuaScript.Prepare(
-"""
-local function normalize_array(value)
-    if value == nil or value == cjson.null then
-        return cjson.decode('[]')
-    end
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
+                end
 
-    local count = 0
-    for _, _ in ipairs(value) do
-        count = count + 1
-    end
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
 
-    if count == 0 then
-        return cjson.decode('[]')
-    end
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
 
-    return value
-end
+                return value
+            end
 
-local raw = redis.call('GET', @stepKey)
-if not raw then
-    return 0
-end
+            local raw = redis.call('GET', @stepKey)
+            if not raw then
+                return 0
+            end
 
-local step = cjson.decode(raw)
-if not step then
-    return 0
-end
+            local step = cjson.decode(raw)
+            if not step then
+                return 0
+            end
 
-if step.Status ~= "Running" then
-    return 0
-end
+            if step.Status ~= "Running" then
+                return 0
+            end
 
-if step.ClaimToken ~= @claimToken then
-    return 0
-end
+            if step.ClaimToken ~= @claimToken then
+                return 0
+            end
 
-step.Status = "Completed"
-step.Result = cjson.decode(@resultJson)
-step.Error = cjson.null
-step.CompletedAtUtc = tonumber(@nowUnix)
-step.UpdatedAtUtc = tonumber(@nowUnix)
-step.ClaimedBy = cjson.null
-step.ClaimToken = cjson.null
-step.ClaimedAtUtc = cjson.null
-step.Version = (step.Version or 0) + 1
-step.DependsOn = normalize_array(step.DependsOn)
+            step.Status = "Completed"
+            step.Result = cjson.decode(@resultJson)
+            step.Error = cjson.null
+            step.CompletedAtUtc = tonumber(@nowUnix)
+            step.UpdatedAtUtc = tonumber(@nowUnix)
+            step.ClaimedBy = cjson.null
+            step.ClaimToken = cjson.null
+            step.ClaimedAtUtc = cjson.null
+            step.Version = (step.Version or 0) + 1
+            step.DependsOn = normalize_array(step.DependsOn)
 
-redis.call('SET', @stepKey, cjson.encode(step))
-return 1
-""");
+            redis.call('SET', @stepKey, cjson.encode(step))
+            return 1
+            """);
 
         /// <summary>
         /// Fails a claimed step atomically.
@@ -216,55 +217,55 @@ return 1
         /// - claim token must match current ownership
         /// </summary>
         private static readonly LuaScript FailPreparedScript = LuaScript.Prepare(
-"""
-local function normalize_array(value)
-    if value == nil or value == cjson.null then
-        return cjson.decode('[]')
-    end
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
+                end
 
-    local count = 0
-    for _, _ in ipairs(value) do
-        count = count + 1
-    end
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
 
-    if count == 0 then
-        return cjson.decode('[]')
-    end
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
 
-    return value
-end
+                return value
+            end
 
-local raw = redis.call('GET', @stepKey)
-if not raw then
-    return 0
-end
+            local raw = redis.call('GET', @stepKey)
+            if not raw then
+                return 0
+            end
 
-local step = cjson.decode(raw)
-if not step then
-    return 0
-end
+            local step = cjson.decode(raw)
+            if not step then
+                return 0
+            end
 
-if step.Status ~= "Running" then
-    return 0
-end
+            if step.Status ~= "Running" then
+                return 0
+            end
 
-if step.ClaimToken ~= @claimToken then
-    return 0
-end
+            if step.ClaimToken ~= @claimToken then
+                return 0
+            end
 
-step.Status = "Failed"
-step.Error = @error
-step.CompletedAtUtc = tonumber(@nowUnix)
-step.UpdatedAtUtc = tonumber(@nowUnix)
-step.ClaimedBy = cjson.null
-step.ClaimToken = cjson.null
-step.ClaimedAtUtc = cjson.null
-step.Version = (step.Version or 0) + 1
-step.DependsOn = normalize_array(step.DependsOn)
+            step.Status = "Failed"
+            step.Error = @error
+            step.CompletedAtUtc = tonumber(@nowUnix)
+            step.UpdatedAtUtc = tonumber(@nowUnix)
+            step.ClaimedBy = cjson.null
+            step.ClaimToken = cjson.null
+            step.ClaimedAtUtc = cjson.null
+            step.Version = (step.Version or 0) + 1
+            step.DependsOn = normalize_array(step.DependsOn)
 
-redis.call('SET', @stepKey, cjson.encode(step))
-return 1
-""");
+            redis.call('SET', @stepKey, cjson.encode(step))
+            return 1
+            """);
 
         /// <summary>
         /// Recovers timed-out running steps.
@@ -277,67 +278,67 @@ return 1
         /// - retry count is incremented
         /// </summary>
         private static readonly LuaScript RecoverPreparedScript = LuaScript.Prepare(
-"""
-local function normalize_array(value)
-    if value == nil or value == cjson.null then
-        return cjson.decode('[]')
-    end
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
+                end
 
-    local count = 0
-    for _, _ in ipairs(value) do
-        count = count + 1
-    end
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
 
-    if count == 0 then
-        return cjson.decode('[]')
-    end
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
 
-    return value
-end
+                return value
+            end
 
-local stepNames = redis.call('SMEMBERS', @stepIndexKey)
-local nowUnix = tonumber(@nowUnix)
-local stepKeyPrefix = @stepKeyPrefix
-local recovered = 0
+            local stepNames = redis.call('SMEMBERS', @stepIndexKey)
+            local nowUnix = tonumber(@nowUnix)
+            local stepKeyPrefix = @stepKeyPrefix
+            local recovered = 0
 
-table.sort(stepNames)
+            table.sort(stepNames)
 
-for _, stepName in ipairs(stepNames) do
-    local stepKey = stepKeyPrefix .. stepName
-    local raw = redis.call('GET', stepKey)
+            for _, stepName in ipairs(stepNames) do
+                local stepKey = stepKeyPrefix .. stepName
+                local raw = redis.call('GET', stepKey)
 
-    if raw then
-        local step = cjson.decode(raw)
+                if raw then
+                    local step = cjson.decode(raw)
 
-        if step.Status == "Running" then
-            local claimedAt = step.ClaimedAtUtc
-            local timeoutSeconds = step.ClaimTimeoutSeconds
+                    if step.Status == "Running" then
+                        local claimedAt = step.ClaimedAtUtc
+                        local timeoutSeconds = step.ClaimTimeoutSeconds
 
-            if claimedAt ~= nil and claimedAt ~= cjson.null
-               and timeoutSeconds ~= nil and timeoutSeconds ~= cjson.null then
+                        if claimedAt ~= nil and claimedAt ~= cjson.null
+                            and timeoutSeconds ~= nil and timeoutSeconds ~= cjson.null then
 
-                local expiresAt = tonumber(claimedAt) + tonumber(timeoutSeconds)
+                            local expiresAt = tonumber(claimedAt) + tonumber(timeoutSeconds)
 
-                if expiresAt <= nowUnix then
-                    step.Status = "Pending"
-                    step.ClaimedBy = cjson.null
-                    step.ClaimToken = cjson.null
-                    step.ClaimedAtUtc = cjson.null
-                    step.UpdatedAtUtc = nowUnix
-                    step.RetryCount = (step.RetryCount or 0) + 1
-                    step.Version = (step.Version or 0) + 1
-                    step.DependsOn = normalize_array(step.DependsOn)
+                            if expiresAt <= nowUnix then
+                                step.Status = "Pending"
+                                step.ClaimedBy = cjson.null
+                                step.ClaimToken = cjson.null
+                                step.ClaimedAtUtc = cjson.null
+                                step.UpdatedAtUtc = nowUnix
+                                step.RetryCount = (step.RetryCount or 0) + 1
+                                step.Version = (step.Version or 0) + 1
+                                step.DependsOn = normalize_array(step.DependsOn)
 
-                    redis.call('SET', stepKey, cjson.encode(step))
-                    recovered = recovered + 1
+                                redis.call('SET', stepKey, cjson.encode(step))
+                                recovered = recovered + 1
+                            end
+                        end
+                    end
                 end
             end
-        end
-    end
-end
 
-return recovered
-""");
+            return recovered
+            """);
 
         // ---------------------------------------------------------------------
         // LOADED SCRIPTS (SHA CACHED)
@@ -351,12 +352,16 @@ return recovered
         /// <summary>
         /// Initializes a new instance of the DAG Redis store.
         /// </summary>
-        public RedisAiDagExecutionStore(IConnectionMultiplexer multiplexer)
+        public RedisAiDagExecutionStore(
+            IConnectionMultiplexer multiplexer,
+            IAiExecutionKeyBuilder keyBuilder)
         {
             ArgumentNullException.ThrowIfNull(multiplexer);
+            ArgumentNullException.ThrowIfNull(keyBuilder);
 
             _multiplexer = multiplexer;
             _database = multiplexer.GetDatabase();
+            _keyBuilder = keyBuilder;
 
             _jsonOptions = new JsonSerializerOptions
             {
@@ -394,8 +399,8 @@ return recovered
             if (!string.Equals(record.ExecutionId, state.ExecutionId, StringComparison.Ordinal))
                 throw new ArgumentException("Record and state must share the same ExecutionId.");
 
-            var recordKey = GetRecordKey(record.ExecutionId);
-            var stepIndexKey = GetStepIndexKey(record.ExecutionId);
+            var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(record.ExecutionId);
 
             await _database.StringSetAsync(
                 recordKey,
@@ -405,7 +410,7 @@ return recovered
             {
                 step.DependsOn ??= new List<string>();
 
-                var stepKey = GetStepKey(record.ExecutionId, step.StepName);
+                var stepKey = _keyBuilder.GetDagStepKey(record.ExecutionId, step.StepName);
 
                 await _database.StringSetAsync(
                     stepKey,
@@ -425,7 +430,7 @@ return recovered
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var value = await _database.StringGetAsync(GetRecordKey(executionId));
+            var value = await _database.StringGetAsync(_keyBuilder.GetExecutionRecordKey(executionId));
 
             if (!value.HasValue)
                 return null;
@@ -435,7 +440,7 @@ return recovered
 
         /// <summary>
         /// Reconstructs execution state by loading all indexed step keys.
-        /// Repairs legacy/corrupted DependsOn payloads before deserialization.
+        /// Repairs legacy/corrupted DependsOn payloads before deserializing.
         /// </summary>
         public async Task<AiExecutionState?> GetStateAsync(
             string executionId,
@@ -444,7 +449,7 @@ return recovered
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var stepIndexKey = GetStepIndexKey(executionId);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepNames = await _database.SetMembersAsync(stepIndexKey);
 
             var state = new AiExecutionState
@@ -459,7 +464,7 @@ return recovered
                 if (string.IsNullOrWhiteSpace(stepName))
                     continue;
 
-                var stepKey = GetStepKey(executionId, stepName);
+                var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
                 var raw = await _database.StringGetAsync(stepKey);
 
                 if (!raw.HasValue)
@@ -476,6 +481,129 @@ return recovered
             }
 
             return state;
+        }
+
+        /// <summary>
+        /// Saves the execution record independently.
+        /// 
+        /// This overwrites the current execution record value without modifying step keys.
+        /// </summary>
+        public async Task SaveRecordAsync(
+            AiExecutionRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            await _database.StringSetAsync(
+                _keyBuilder.GetExecutionRecordKey(record.ExecutionId),
+                JsonSerializer.Serialize(record, _jsonOptions));
+        }
+
+        /// <summary>
+        /// Saves the full distributed DAG state by overwriting indexed step entries
+        /// and rebuilding the step index for the execution.
+        /// 
+        /// This method is intended for administrative persistence paths and recovery flows,
+        /// not for normal concurrent step claim/complete/fail progression.
+        /// </summary>
+        public async Task SaveStateAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            ArgumentNullException.ThrowIfNull(state);
+
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
+            var existingStepNames = await _database.SetMembersAsync(stepIndexKey);
+
+            foreach (var stepNameValue in existingStepNames)
+            {
+                var stepName = (string?)stepNameValue;
+
+                if (string.IsNullOrWhiteSpace(stepName))
+                    continue;
+
+                await _database.KeyDeleteAsync(_keyBuilder.GetDagStepKey(executionId, stepName));
+            }
+
+            await _database.KeyDeleteAsync(stepIndexKey);
+
+            foreach (var step in state.Steps.Values)
+            {
+                step.DependsOn ??= new List<string>();
+
+                var stepKey = _keyBuilder.GetDagStepKey(executionId, step.StepName);
+
+                await _database.StringSetAsync(
+                    stepKey,
+                    JsonSerializer.Serialize(step, _jsonOptions));
+
+                await _database.SetAddAsync(stepIndexKey, step.StepName);
+            }
+        }
+
+        /// <summary>
+        /// Deletes the execution record.
+        /// 
+        /// This operation is idempotent. If the key does not exist,
+        /// the method completes successfully without throwing.
+        /// </summary>
+        public async Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            await _database.KeyDeleteAsync(_keyBuilder.GetExecutionRecordKey(executionId));
+        }
+
+        /// <summary>
+        /// Deletes all distributed DAG step keys and the execution step index.
+        /// 
+        /// This operation is idempotent. Missing step keys are treated as a normal cleanup case.
+        /// </summary>
+        public async Task DeleteStepsAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
+            var stepNames = await _database.SetMembersAsync(stepIndexKey);
+
+            foreach (var stepNameValue in stepNames)
+            {
+                var stepName = (string?)stepNameValue;
+
+                if (string.IsNullOrWhiteSpace(stepName))
+                    continue;
+
+                await _database.KeyDeleteAsync(_keyBuilder.GetDagStepKey(executionId, stepName));
+            }
+
+            await _database.KeyDeleteAsync(stepIndexKey);
+        }
+
+        /// <summary>
+        /// Deletes the full distributed DAG execution bundle owned by this store:
+        /// the global execution record, all indexed step keys, and the step index.
+        /// 
+        /// This operation is idempotent and safe to call multiple times.
+        /// </summary>
+        public async Task DeleteExecutionBundleAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            await DeleteStepsAsync(executionId, cancellationToken);
+            await DeleteRecordAsync(executionId, cancellationToken);
         }
 
         /// <summary>
@@ -500,7 +628,7 @@ return recovered
 
             var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var claimToken = Guid.NewGuid().ToString("N");
-            var stepIndexKey = GetStepIndexKey(executionId);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepKeyPrefix = GetStepKeyPrefix(executionId);
 
             try
@@ -553,7 +681,7 @@ return recovered
 
             ArgumentNullException.ThrowIfNull(result);
 
-            var stepKey = GetStepKey(executionId, stepName);
+            var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
             var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var resultJson = JsonSerializer.Serialize(result, _jsonOptions);
 
@@ -592,7 +720,7 @@ return recovered
             if (string.IsNullOrWhiteSpace(claimToken))
                 throw new ArgumentException("Claim token cannot be null or empty.", nameof(claimToken));
 
-            var stepKey = GetStepKey(executionId, stepName);
+            var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
             var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             try
@@ -624,7 +752,7 @@ return recovered
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
             var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var stepIndexKey = GetStepIndexKey(executionId);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepKeyPrefix = GetStepKeyPrefix(executionId);
 
             try
@@ -728,28 +856,10 @@ return recovered
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Builds Redis key for execution record.
-        /// </summary>
-        private static string GetRecordKey(string executionId)
-            => $"ai:execution:record:{executionId}";
-
-        /// <summary>
-        /// Builds Redis key for the execution step index.
-        /// </summary>
-        private static string GetStepIndexKey(string executionId)
-            => $"ai:execution:steps:{executionId}";
-
-        /// <summary>
         /// Builds Redis key prefix for execution steps.
         /// </summary>
-        private static string GetStepKeyPrefix(string executionId)
-            => $"ai:execution:step:{executionId}:";
-
-        /// <summary>
-        /// Builds Redis key for a step.
-        /// </summary>
-        private static string GetStepKey(string executionId, string step)
-            => $"{GetStepKeyPrefix(executionId)}{step}";
+        private string GetStepKeyPrefix(string executionId)
+            => _keyBuilder.GetDagStepKeyPrefix(executionId);
 
         // ---------------------------------------------------------------------
         // REDIS HELPERS

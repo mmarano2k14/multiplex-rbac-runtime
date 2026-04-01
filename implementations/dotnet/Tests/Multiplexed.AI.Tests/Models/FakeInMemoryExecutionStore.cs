@@ -162,4 +162,24 @@ public sealed class FakeInMemoryExecutionStore : IAiExecutionStore
             Data = new Dictionary<string, object?>(source.Data, StringComparer.Ordinal)
         };
     }
+
+    public Task SaveRecordAsync(AiExecutionRecord record, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task SaveStateAsync(string executionId, AiExecutionState state, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task DeleteRecordAsync(string executionId, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task DeleteStateAsync(string executionId, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
 }

@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
+using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Xunit;
@@ -50,6 +51,7 @@ namespace Multiplexed.AI.Tests.Runtime.DI
             services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
             services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
             services.AddSingleton<IAiRuntimeLogger, NoopLogger>();
+            services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
 
             var provider = services.BuildServiceProvider();
 

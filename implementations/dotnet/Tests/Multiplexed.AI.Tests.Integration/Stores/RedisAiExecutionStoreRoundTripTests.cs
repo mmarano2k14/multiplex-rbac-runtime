@@ -1,11 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using StackExchange.Redis;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Stores
@@ -32,9 +33,10 @@ namespace Multiplexed.AI.Tests.Integration.Stores
         public RedisAiExecutionStoreRoundTripTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
+            var keyBuilder = new AiExecutionKeyBuilder();
 
             _connection = fixture.Connection;
-            _store = new RedisAiExecutionStore(_connection);
+            _store = new RedisAiExecutionStore(_connection, keyBuilder);
         }
 
         /// <summary>

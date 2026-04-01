@@ -1,12 +1,15 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Pipeline;
-using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.AI.Tests.Models;
+using Multiplexed.Rbac.Core.ExecutionContext;
 using Xunit;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -40,6 +43,15 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var services = new ServiceCollection().BuildServiceProvider();
             var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
+
+            var cleanupService = new NoOpAiExecutionCleanupService();
+
+            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            {
+                AutoCleanupOnCompleted = false,
+                AutoCleanupOnFailed = false,
+                SuppressCleanupExceptions = true
+            });
 
             var definitionProvider = new FakeInMemoryAiPipelineDefinitionProvider(
                 new[]
@@ -106,7 +118,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 factory,
                 services,
                 pipelineExecutor,
-                logger);
+                logger, cleanupService, cleanupOptions);
 
             var record = await engine.CreateAsync("test-pipeline", "hello");
 

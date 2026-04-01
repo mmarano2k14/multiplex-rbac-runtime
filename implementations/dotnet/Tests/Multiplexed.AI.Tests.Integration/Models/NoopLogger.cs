@@ -32,6 +32,23 @@ namespace Multiplexed.AI.Tests.Integration.Models
             public void ExecutionCompleted(AiExecutionRecord record) { }
 
             public void ExecutionAlreadyCompleted(AiExecutionRecord record) { }
+
+            public void LogInformation(string message)
+            {
+  
+            }
+
+            public void LogWarning(string message)
+            {
+            }
+
+            public void LogError(Exception exception, string message)
+            {
+            }
+
+            public void LogError(string message)
+            {
+            }
         }
 
         private sealed class NoopPipelineLogger : IAiPipelineLogger

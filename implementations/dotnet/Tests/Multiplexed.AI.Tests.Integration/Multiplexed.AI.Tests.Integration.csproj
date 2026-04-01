@@ -35,6 +35,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Multiplexed.AI\Multiplexed.AI.csproj" />
+    <ProjectReference Include="..\Multiplexed.AI.Tests\Multiplexed.AI.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>

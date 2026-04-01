@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.Stores;
+using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Xunit;
@@ -83,6 +85,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
                 services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
                 services.AddSingleton<Multiplexed.AI.Runtime.Logging.IAiRuntimeLogger, NoopLogger>();
+                services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
 
                 var provider = services.BuildServiceProvider();
 
