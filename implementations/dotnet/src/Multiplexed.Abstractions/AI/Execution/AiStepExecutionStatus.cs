@@ -16,7 +16,7 @@
         /// <summary>
         /// The step is ready to be executed but has not started yet.
         /// </summary>
-        Pending = 1,
+        Ready = 1,
 
         /// <summary>
         /// The step is currently executing.
@@ -36,6 +36,6 @@
         /// <summary>
         /// The step has succeed.
         /// </summary>
-        Succeeded = 5,
+        WaitingForRetry = 5,
     }
 }

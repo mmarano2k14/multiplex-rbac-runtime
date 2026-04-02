@@ -249,7 +249,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             state.Steps["start"] = new AiStepState
             {
                 StepName = "start",
-                Status = AiStepExecutionStatus.Pending
+                Status = AiStepExecutionStatus.Ready
             };
 
             await dagStore.CreateAsync(record, state);
@@ -294,13 +294,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             state.Steps["start"] = new AiStepState
             {
                 StepName = "start",
-                Status = AiStepExecutionStatus.Pending
+                Status = AiStepExecutionStatus.Ready
             };
 
             state.Steps["merge"] = new AiStepState
             {
                 StepName = "merge",
-                Status = AiStepExecutionStatus.Pending,
+                Status = AiStepExecutionStatus.Ready,
                 DependsOn = new List<string> { "start" }
             };
 
@@ -379,10 +379,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = snapshot!.Steps["start"];
 
-                Assert.Equal(AiStepExecutionStatus.Pending, step.Status);
+                Assert.Equal(AiStepExecutionStatus.Ready, step.Status);
                 Assert.Null(step.ClaimedBy);
                 Assert.Null(step.ClaimToken);
-                Assert.Equal(1, step.RetryCount);
+                Assert.Equal(1, step.RecoveryCount);
             }
             finally
             {
@@ -412,7 +412,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             state.Steps["start"] = new AiStepState
             {
                 StepName = "start",
-                Status = AiStepExecutionStatus.Pending
+                Status = AiStepExecutionStatus.Ready
             };
 
             await dagStore.CreateAsync(record, state);

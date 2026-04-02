@@ -162,6 +162,12 @@ namespace Multiplexed.Abstractions.AI.Execution
             stepState.SetInputs(stepDefinition.Input);
             stepState.SetConfig(stepDefinition.Config);
 
+            // Apply resolved retry policy to runtime state.
+            // These values come from the resolved step, so defaults have already been applied
+            // by the resolver when the definition did not explicitly configure retry behavior.
+            stepState.MaxRetries = stepDefinition.RetryMaxCount;
+            stepState.RetryDelay = TimeSpan.FromMilliseconds(stepDefinition.RetryDelayMs);
+
             stepState.UpdatedAtUtc = DateTime.UtcNow;
             UpdatedAtUtc = DateTime.UtcNow;
         }

@@ -11,31 +11,27 @@ namespace Multiplexed.AI.Runtime.Pipeline
     ///
     /// DESIGN:
     /// - Deterministic
-    /// - Stateless
-    /// - Pure (no side effects)
+    /// - Stateless selector logic
+    /// - Retry-aware
     ///
+    /// IMPORTANT:
     /// This class does not execute steps.
     /// It only evaluates execution readiness from resolved topology and mutable step state.
+    ///
+    /// NOTE:
+    /// This selector may promote a retry-waiting step back to Ready
+    /// when its retry window becomes eligible.
+    ///
+    /// In distributed mode, this selector is only a local readiness helper.
+    /// Final multi-worker safety must still be enforced by the distributed claim layer
+    /// (for example Redis Lua).
     /// </summary>
     public static class AiPipelineDagStepSelector
     {
-        /// <summary>
-        /// Selects all steps that are currently ready for execution.
-        ///
-        /// A step is considered ready when:
-        /// - it is not already completed
-        /// - it is not currently running
-        /// - it has not failed
-        /// - all declared dependencies are completed
-        ///
-        /// Steps are returned using deterministic ordering based on <see cref="ResolvedAiPipelineStep.Order"/>.
-        /// </summary>
-        /// <param name="pipeline">The resolved pipeline.</param>
-        /// <param name="state">The mutable execution state.</param>
-        /// <returns>The list of ready step instances.</returns>
         public static IReadOnlyList<ResolvedAiPipelineStep> SelectReadySteps(
             ResolvedAiPipeline pipeline,
-            AiExecutionState state)
+            AiExecutionState state,
+            DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentNullException.ThrowIfNull(state);
@@ -46,62 +42,25 @@ namespace Multiplexed.AI.Runtime.Pipeline
             {
                 var stepState = state.GetOrCreateStep(step.Name);
 
-                if (!stepState.IsSchedulable)
+                if (!IsStepEligible(stepState, step, state, utcNow))
                 {
                     continue;
                 }
 
-                if (step.DependsOn.Count == 0)
-                {
-                    readySteps.Add(step);
-                    continue;
-                }
-
-                var dependenciesSatisfied = true;
-
-                foreach (var dependencyName in step.DependsOn)
-                {
-                    var dependencyState = state.GetOrCreateStep(dependencyName);
-
-                    if (!dependencyState.IsCompleted)
-                    {
-                        dependenciesSatisfied = false;
-                        break;
-                    }
-                }
-
-                if (dependenciesSatisfied)
-                {
-                    readySteps.Add(step);
-                }
+                readySteps.Add(step);
             }
 
             return readySteps;
         }
 
-        /// <summary>
-        /// Selects the next ready step using deterministic ordering.
-        /// Returns null when no step is currently executable.
-        /// </summary>
-        /// <param name="pipeline">The resolved pipeline.</param>
-        /// <param name="state">The mutable execution state.</param>
-        /// <returns>The next ready step, or null if none is ready.</returns>
         public static ResolvedAiPipelineStep? SelectNextReadyStep(
             ResolvedAiPipeline pipeline,
-            AiExecutionState state)
+            AiExecutionState state,
+            DateTime utcNow)
         {
-            return SelectReadySteps(pipeline, state).FirstOrDefault();
+            return SelectReadySteps(pipeline, state, utcNow).FirstOrDefault();
         }
 
-        /// <summary>
-        /// Determines whether the pipeline has completed successfully.
-        ///
-        /// A pipeline is considered completed only when all step instances
-        /// are in the <see cref="AiStepExecutionStatus.Completed"/> state.
-        /// </summary>
-        /// <param name="pipeline">The resolved pipeline.</param>
-        /// <param name="state">The mutable execution state.</param>
-        /// <returns>True if all steps are completed; otherwise false.</returns>
         public static bool IsCompleted(
             ResolvedAiPipeline pipeline,
             AiExecutionState state)
@@ -114,6 +73,61 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 var stepState = state.GetOrCreateStep(step.Name);
 
                 if (!stepState.IsCompleted)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsStepEligible(
+            AiStepState stepState,
+            ResolvedAiPipelineStep step,
+            AiExecutionState state,
+            DateTime utcNow)
+        {
+            ArgumentNullException.ThrowIfNull(stepState);
+            ArgumentNullException.ThrowIfNull(step);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (stepState.Status == AiStepExecutionStatus.Completed ||
+                stepState.Status == AiStepExecutionStatus.Failed)
+            {
+                return false;
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.Running)
+            {
+                return false;
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
+            {
+                if (stepState.NextRetryAtUtc.HasValue &&
+                    stepState.NextRetryAtUtc.Value > utcNow)
+                {
+                    return false;
+                }
+
+                stepState.PromoteRetryToReadyIfDue(utcNow);
+            }
+
+            if (!stepState.IsSchedulable)
+            {
+                return false;
+            }
+
+            if (step.DependsOn.Count == 0)
+            {
+                return true;
+            }
+
+            foreach (var dependencyName in step.DependsOn)
+            {
+                var dependencyState = state.GetOrCreateStep(dependencyName);
+
+                if (!dependencyState.IsCompleted)
                 {
                     return false;
                 }

@@ -820,10 +820,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// Step returning an unsuccessful result without throwing.
         /// Useful for validating failure-result behavior.
         /// </summary>
-        [AiStep("always-fail")]
+        [AiStep("always-fail-fake")]
         private sealed class AlwaysFailStep : IAiStep
         {
-            public string Name => "always-fail";
+            public string Name => "always-fail-fake";
 
             public Task<AiStepResult> ExecuteAsync(
                 AiStepExecutionContext context,

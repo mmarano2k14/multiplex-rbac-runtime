@@ -9,33 +9,21 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
     /// from resolved pipeline topology and current step state.
     ///
     /// DESIGN:
-    /// - Pure
     /// - Deterministic
-    /// - No side effects
+    /// - Engine-oriented
+    /// - Aligned with scheduler readiness semantics
     ///
-    /// This evaluator is the single place where global DAG lifecycle
-    /// semantics are decided.
+    /// IMPORTANT:
+    /// This evaluator may depend on selector-based readiness checks.
+    /// As a result, it should be treated as a runtime convergence evaluator
+    /// rather than a strictly side-effect-free mathematical reducer.
     /// </summary>
     public static class AiDagExecutionConvergenceEvaluator
     {
-        /// <summary>
-        /// Evaluates the current global DAG lifecycle status from pipeline topology
-        /// and step runtime state.
-        ///
-        /// SEMANTICS:
-        /// - Completed: all steps completed and no in-flight claims remain
-        /// - Failed: one or more steps failed and no in-flight claims remain
-        /// - Running: runnable work exists now, or work is currently executing
-        /// - Waiting: no runnable work exists now, execution is not terminal,
-        ///   and no local progress can currently be made
-        ///
-        /// CURRENT FAILURE POLICY:
-        /// - Strict mode
-        /// - Any failed step is considered globally fatal once the DAG converges
-        /// </summary>
         public static AiDagExecutionConvergenceResult Evaluate(
             ResolvedAiPipeline pipeline,
-            AiExecutionState state)
+            AiExecutionState state,
+            DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentNullException.ThrowIfNull(state);
@@ -54,16 +42,15 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
             var hasFailedSteps = stepStates.Any(x => x.IsFailed);
             var hasRunningSteps = stepStates.Any(x => x.IsRunning);
             var hasClaimedSteps = stepStates.Any(HasActiveClaim);
-            var hasReadySteps = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state).Count > 0;
+            var hasReadySteps = AiPipelineDagStepSelector
+                .SelectReadySteps(pipeline, state, utcNow)
+                .Count > 0;
 
             if (allCompleted && !hasRunningSteps && !hasClaimedSteps)
             {
                 return AiDagExecutionConvergenceResult.Completed();
             }
 
-            // Strict failure policy:
-            // any failed step converges the DAG to Failed,
-            // but only after all in-flight work has settled.
             if (hasFailedSteps && !hasRunningSteps && !hasClaimedSteps)
             {
                 return AiDagExecutionConvergenceResult.Failed();

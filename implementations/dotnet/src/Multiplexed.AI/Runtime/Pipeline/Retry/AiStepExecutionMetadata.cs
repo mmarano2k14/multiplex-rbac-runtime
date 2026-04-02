@@ -18,7 +18,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// <summary>
         /// Gets or sets the current execution status.
         /// </summary>
-        public AiStepExecutionStatus Status { get; set; } = AiStepExecutionStatus.Pending;
+        public AiStepExecutionStatus Status { get; set; } = AiStepExecutionStatus.Ready;
 
         /// <summary>
         /// Gets or sets the total number of attempts performed for the step.

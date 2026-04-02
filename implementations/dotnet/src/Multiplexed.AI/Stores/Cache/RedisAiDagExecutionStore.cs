@@ -23,11 +23,12 @@ namespace Multiplexed.AI.Stores.Cache
     /// - Recover timed-out running steps
     ///
     /// IMPORTANT:
-    /// - This implementation is separated from the sequential Redis store on purpose
+    /// - This implementation is intentionally separate from the sequential Redis store
     /// - Sequential execution remains protected by the existing execution-level CAS model
-    /// - DAG distributed execution uses step-level claim/complete/fail semantics
+    /// - DAG distributed execution uses step-level claim / complete / fail semantics
     /// - DateTime values are serialized as unix timestamps in this store only
     ///   so Lua scripts can safely compare numeric values
+    /// - This version uses UNIX TIME IN MILLISECONDS for distributed retry timing
     /// </summary>
     public sealed class RedisAiDagExecutionStore : IAiDagExecutionStore
     {
@@ -41,18 +42,19 @@ namespace Multiplexed.AI.Stores.Cache
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Claims the next ready step atomically.
+        /// Claims the next eligible step atomically.
         ///
-        /// Rules:
-        /// - candidate step must be Pending or None
+        /// ELIGIBILITY RULES:
+        /// - step must be in Ready or None state
+        /// - OR step must be in WaitingForRetry and its retry window must be open
         /// - all dependencies must already be Completed
-        /// - delayed retry must be satisfied
-        /// - claim metadata is written atomically
         ///
         /// IMPORTANT:
-        /// - Uses the step index set for the execution
-        /// - Sorts step names for deterministic ordering
-        /// - Normalizes DependsOn so empty arrays stay arrays and not objects
+        /// - Step names are sorted for deterministic ordering across workers
+        /// - DependsOn is normalized so empty arrays remain arrays and not objects
+        /// - When a retry-waiting step is claimed again, NextRetryAtUtc is cleared
+        ///   because the retry window has already been consumed
+        /// - nowUnix is expressed in milliseconds
         /// </summary>
         private static readonly LuaScript ClaimPreparedScript = LuaScript.Prepare(
             """
@@ -90,58 +92,75 @@ namespace Multiplexed.AI.Stores.Cache
                 if raw then
                     local step = cjson.decode(raw)
 
-                    if step.Status == "Pending" or step.Status == "None" then
-                        local canRun = true
+                    local canRun = false
 
-                        if step.NextRetryAtUtc ~= nil and step.NextRetryAtUtc ~= cjson.null then
-                            if tonumber(step.NextRetryAtUtc) > nowUnix then
+                    -- Normal schedulable states.
+                    if step.Status == "Ready" or step.Status == "None" then
+                        canRun = true
+                    end
+
+                    -- Retry-aware scheduling:
+                    -- a step waiting for retry becomes claimable once its retry window opens.
+                    if step.Status == "WaitingForRetry" then
+                        if step.NextRetryAtUtc == nil or step.NextRetryAtUtc == cjson.null then
+                            -- Safety fallback:
+                            -- if no retry time is present, allow the step to run.
+                            canRun = true
+                        else
+                            local nextRetryAtUtc = tonumber(step.NextRetryAtUtc)
+
+                            if nextRetryAtUtc ~= nil and nextRetryAtUtc <= nowUnix then
+                                canRun = true
+                            end
+                        end
+                    end
+
+                    if canRun then
+                        local deps = normalize_array(step.DependsOn)
+
+                        for _, depName in ipairs(deps) do
+                            local depKey = stepKeyPrefix .. depName
+                            local depRaw = redis.call('GET', depKey)
+
+                            if not depRaw then
                                 canRun = false
-                            end
-                        end
-
-                        if canRun then
-                            local deps = normalize_array(step.DependsOn)
-
-                            for _, depName in ipairs(deps) do
-                                local depKey = stepKeyPrefix .. depName
-                                local depRaw = redis.call('GET', depKey)
-
-                                if not depRaw then
-                                    canRun = false
-                                    break
-                                end
-
-                                local depStep = cjson.decode(depRaw)
-
-                                if depStep.Status ~= "Completed" then
-                                    canRun = false
-                                    break
-                                end
-                            end
-                        end
-
-                        if canRun then
-                            step.Status = "Running"
-                            step.ClaimedBy = workerId
-                            step.ClaimToken = claimToken
-                            step.ClaimedAtUtc = nowUnix
-
-                            if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
-                                step.StartedAtUtc = nowUnix
+                                break
                             end
 
-                            step.UpdatedAtUtc = nowUnix
-                            step.Version = (step.Version or 0) + 1
-                            step.DependsOn = normalize_array(step.DependsOn)
+                            local depStep = cjson.decode(depRaw)
 
-                            redis.call('SET', stepKey, cjson.encode(step))
-
-                            return cjson.encode({
-                                ExecutionId = executionId,
-                                StepName = step.StepName,
-                                ClaimToken = claimToken
-                            })
+                            if depStep.Status ~= "Completed" then
+                                canRun = false
+                                break
+                            end
                         end
+                    end
+
+                    if canRun then
+                        step.Status = "Running"
+                        step.ClaimedBy = workerId
+                        step.ClaimToken = claimToken
+                        step.ClaimedAtUtc = nowUnix
+
+                        -- Retry window has been consumed.
+                        -- Clear it now so the step re-enters a clean running state.
+                        step.NextRetryAtUtc = cjson.null
+
+                        if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
+                            step.StartedAtUtc = nowUnix
+                        end
+
+                        step.UpdatedAtUtc = nowUnix
+                        step.Version = (step.Version or 0) + 1
+                        step.DependsOn = normalize_array(step.DependsOn)
+
+                        redis.call('SET', stepKey, cjson.encode(step))
+
+                        return cjson.encode({
+                            ExecutionId = executionId,
+                            StepName = step.StepName,
+                            ClaimToken = claimToken
+                        })
                     end
                 end
             end
@@ -152,10 +171,13 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Completes a claimed step atomically.
         ///
-        /// Rules:
+        /// RULES:
         /// - step must exist
         /// - step must be Running
         /// - claim token must match current ownership
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
         /// </summary>
         private static readonly LuaScript CompletePreparedScript = LuaScript.Prepare(
             """
@@ -202,6 +224,7 @@ namespace Multiplexed.AI.Stores.Cache
             step.ClaimedBy = cjson.null
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
+            step.NextRetryAtUtc = cjson.null
             step.Version = (step.Version or 0) + 1
             step.DependsOn = normalize_array(step.DependsOn)
 
@@ -212,13 +235,44 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Fails a claimed step atomically.
         ///
-        /// Rules:
+        /// RULES:
         /// - step must exist
         /// - step must be Running
         /// - claim token must match current ownership
+        ///
+        /// RETRY BEHAVIOR:
+        /// - if retry budget remains:
+        ///   -> increment RetryCount
+        ///   -> move to WaitingForRetry
+        ///   -> schedule NextRetryAtUtc using RetryDelayMs
+        /// - otherwise:
+        ///   -> move to terminal Failed
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
+        /// - RetryDelayMs is expressed in milliseconds
         /// </summary>
         private static readonly LuaScript FailPreparedScript = LuaScript.Prepare(
             """
+            --[[
+            Atomically applies a failure transition to a claimed DAG step.
+
+            Behavior:
+            - Validates the step exists
+            - Validates the step is currently Running
+            - Validates the claim token matches the current owner
+            - If retry budget remains:
+                -> increments RetryCount
+                -> moves step to WaitingForRetry
+                -> schedules NextRetryAtUtc
+            - Otherwise:
+                -> moves step to terminal Failed
+
+            RETURN:
+            - 1 when the transition was successfully applied
+            - 0 when the step was not found, not running, or claim ownership did not match
+            ]]
+
             local function normalize_array(value)
                 if value == nil or value == cjson.null then
                     return cjson.decode('[]')
@@ -246,21 +300,47 @@ namespace Multiplexed.AI.Stores.Cache
                 return 0
             end
 
-            if step.Status ~= "Running" then
+            -- Backward-compatible status check:
+            -- supports both current string-based status and older numeric Running values.
+            if not (step.Status == "Running" or step.Status == 2) then
                 return 0
             end
 
+            -- Only the worker holding the current claim token may fail this step.
             if step.ClaimToken ~= @claimToken then
                 return 0
             end
 
-            step.Status = "Failed"
+            local retryCount = tonumber(step.RetryCount) or 0
+            local maxRetries = tonumber(step.MaxRetries) or 3
+            local retryDelayMs = tonumber(step.RetryDelayMs) or 0
+            local nowUnix = tonumber(@nowUnix)
+
             step.Error = @error
-            step.CompletedAtUtc = tonumber(@nowUnix)
-            step.UpdatedAtUtc = tonumber(@nowUnix)
+            step.UpdatedAtUtc = nowUnix
             step.ClaimedBy = cjson.null
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
+
+            -- Retry-aware path:
+            -- if retry budget remains, the step becomes non-terminal WaitingForRetry.
+            if retryCount < maxRetries then
+                retryCount = retryCount + 1
+                step.RetryCount = retryCount
+                step.Status = "WaitingForRetry"
+                step.NextRetryAtUtc = nowUnix + retryDelayMs
+                step.Version = (step.Version or 0) + 1
+                step.DependsOn = normalize_array(step.DependsOn)
+
+                redis.call('SET', @stepKey, cjson.encode(step))
+                return 1
+            end
+
+            -- Retry exhausted:
+            -- terminal failure
+            step.Status = "Failed"
+            step.CompletedAtUtc = nowUnix
+            step.NextRetryAtUtc = cjson.null
             step.Version = (step.Version or 0) + 1
             step.DependsOn = normalize_array(step.DependsOn)
 
@@ -271,12 +351,16 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Recovers timed-out running steps.
         ///
-        /// Rules:
+        /// RULES:
         /// - only Running steps are considered
         /// - ClaimedAtUtc + ClaimTimeoutSeconds must be in the past
-        /// - recovered steps transition back to Pending
+        /// - recovered steps transition back to Ready
         /// - claim ownership is cleared
-        /// - retry count is incremented
+        /// - RecoveryCount is incremented
+        ///
+        /// IMPORTANT:
+        /// Infrastructure recovery must not consume business RetryCount.
+        /// ClaimedAtUtc is stored in milliseconds, so ClaimTimeoutSeconds is converted to milliseconds.
         /// </summary>
         private static readonly LuaScript RecoverPreparedScript = LuaScript.Prepare(
             """
@@ -311,22 +395,24 @@ namespace Multiplexed.AI.Stores.Cache
                 if raw then
                     local step = cjson.decode(raw)
 
-                    if step.Status == "Running" then
+                    -- Backward-compatible status check:
+                    -- supports both current string-based status and older numeric Running values.
+                    if step.Status == "Running" or step.Status == 2 then
                         local claimedAt = step.ClaimedAtUtc
                         local timeoutSeconds = step.ClaimTimeoutSeconds
 
                         if claimedAt ~= nil and claimedAt ~= cjson.null
                             and timeoutSeconds ~= nil and timeoutSeconds ~= cjson.null then
 
-                            local expiresAt = tonumber(claimedAt) + tonumber(timeoutSeconds)
+                            local expiresAt = tonumber(claimedAt) + (tonumber(timeoutSeconds) * 1000)
 
                             if expiresAt <= nowUnix then
-                                step.Status = "Pending"
+                                step.Status = "Ready"
                                 step.ClaimedBy = cjson.null
                                 step.ClaimToken = cjson.null
                                 step.ClaimedAtUtc = cjson.null
                                 step.UpdatedAtUtc = nowUnix
-                                step.RetryCount = (step.RetryCount or 0) + 1
+                                step.RecoveryCount = (step.RecoveryCount or 0) + 1
                                 step.Version = (step.Version or 0) + 1
                                 step.DependsOn = normalize_array(step.DependsOn)
 
@@ -341,6 +427,14 @@ namespace Multiplexed.AI.Stores.Cache
             return recovered
             """);
 
+        /// <summary>
+        /// Atomically finalizes the global execution record.
+        ///
+        /// GUARANTEES:
+        /// - validates ExecutionStepKey
+        /// - refuses to finalize an already terminal record
+        /// - updates CompletedSteps and execution status atomically
+        /// </summary>
         private static readonly LuaScript FinalizeScript = LuaScript.Prepare(@"
             local raw = redis.call('GET', @recordKey)
             if not raw then return 0 end
@@ -397,7 +491,6 @@ namespace Multiplexed.AI.Stores.Cache
             _jsonOptions.Converters.Add(new JsonStringEnumConverter());
             _jsonOptions.Converters.Add(new UnixDateTimeConverter());
             _jsonOptions.Converters.Add(new NullableUnixDateTimeConverter());
-            _jsonOptions.Converters.Add(new NullableTimeSpanSecondsConverter());
 
             _claimLoadedScript = LoadScript(ClaimPreparedScript);
             _completeLoadedScript = LoadScript(CompletePreparedScript);
@@ -460,7 +553,8 @@ namespace Multiplexed.AI.Stores.Cache
             if (!value.HasValue)
                 return null;
 
-            return JsonSerializer.Deserialize<AiExecutionRecord>((string)value!, _jsonOptions);
+            var repairedJson = RepairRecordJson((string)value!);
+            return JsonSerializer.Deserialize<AiExecutionRecord>(repairedJson, _jsonOptions);
         }
 
         /// <summary>
@@ -510,7 +604,7 @@ namespace Multiplexed.AI.Stores.Cache
 
         /// <summary>
         /// Saves the execution record independently.
-        /// 
+        ///
         /// This overwrites the current execution record value without modifying step keys.
         /// </summary>
         public async Task SaveRecordAsync(
@@ -527,9 +621,9 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Saves the full distributed DAG state by overwriting indexed step entries
         /// and rebuilding the step index for the execution.
-        /// 
+        ///
         /// This method is intended for administrative persistence paths and recovery flows,
-        /// not for normal concurrent step claim/complete/fail progression.
+        /// not for normal concurrent step claim / complete / fail progression.
         /// </summary>
         public async Task SaveStateAsync(
             string executionId,
@@ -572,9 +666,8 @@ namespace Multiplexed.AI.Stores.Cache
 
         /// <summary>
         /// Deletes the execution record.
-        /// 
-        /// This operation is idempotent. If the key does not exist,
-        /// the method completes successfully without throwing.
+        ///
+        /// This operation is idempotent.
         /// </summary>
         public async Task DeleteRecordAsync(
             string executionId,
@@ -588,8 +681,8 @@ namespace Multiplexed.AI.Stores.Cache
 
         /// <summary>
         /// Deletes all distributed DAG step keys and the execution step index.
-        /// 
-        /// This operation is idempotent. Missing step keys are treated as a normal cleanup case.
+        ///
+        /// This operation is idempotent.
         /// </summary>
         public async Task DeleteStepsAsync(
             string executionId,
@@ -617,7 +710,7 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Deletes the full distributed DAG execution bundle owned by this store:
         /// the global execution record, all indexed step keys, and the step index.
-        /// 
+        ///
         /// This operation is idempotent and safe to call multiple times.
         /// </summary>
         public async Task DeleteExecutionBundleAsync(
@@ -632,13 +725,16 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Attempts to claim the next ready step atomically.
+        /// Attempts to claim the next eligible step atomically.
         ///
-        /// Claim rules:
-        /// - only Pending or None steps can be claimed
+        /// CLAIM RULES:
+        /// - step must be Ready or None
+        /// - OR WaitingForRetry with retry window open
         /// - all dependencies must already be Completed
-        /// - retry delay must be satisfied
         /// - step transitions to Running atomically
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
         /// </summary>
         public async Task<ClaimedAiStep?> TryClaimNextReadyStepAsync(
             string executionId,
@@ -651,7 +747,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(workerId))
                 throw new ArgumentException("Worker id cannot be null or empty.", nameof(workerId));
 
-            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nowUnix = NowMs();
             var claimToken = Guid.NewGuid().ToString("N");
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepKeyPrefix = GetStepKeyPrefix(executionId);
@@ -687,6 +783,9 @@ namespace Multiplexed.AI.Stores.Cache
         /// - the step exists
         /// - the step is Running
         /// - the claim token matches the current owner
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
         /// </summary>
         public async Task<bool> TryCompleteStepAsync(
             string executionId,
@@ -707,7 +806,7 @@ namespace Multiplexed.AI.Stores.Cache
             ArgumentNullException.ThrowIfNull(result);
 
             var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
-            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nowUnix = NowMs();
             var resultJson = JsonSerializer.Serialize(result, _jsonOptions);
 
             try
@@ -728,6 +827,14 @@ namespace Multiplexed.AI.Stores.Cache
         /// - the step exists
         /// - the step is Running
         /// - the claim token matches the current owner
+        ///
+        /// IMPORTANT:
+        /// This method is retry-aware. A successful failure mutation may result in:
+        /// - WaitingForRetry
+        /// - Failed
+        /// depending on RetryCount / MaxRetries.
+        ///
+        /// - nowUnix is expressed in milliseconds
         /// </summary>
         public async Task<bool> TryFailStepAsync(
             string executionId,
@@ -746,28 +853,42 @@ namespace Multiplexed.AI.Stores.Cache
                 throw new ArgumentException("Claim token cannot be null or empty.", nameof(claimToken));
 
             var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
-            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nowUnix = NowMs();
 
             try
             {
-                return await ExecuteFailAsync(stepKey, claimToken, nowUnix, error ?? string.Empty);
+                return await ExecuteFailAsync(
+                    stepKey,
+                    claimToken,
+                    nowUnix,
+                    error ?? string.Empty);
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
                 _failLoadedScript = LoadScript(FailPreparedScript);
-                return await ExecuteFailAsync(stepKey, claimToken, nowUnix, error ?? string.Empty);
+
+                return await ExecuteFailAsync(
+                    stepKey,
+                    claimToken,
+                    nowUnix,
+                    error ?? string.Empty);
             }
         }
 
         /// <summary>
         /// Recovers timed-out running steps.
         ///
-        /// Recovery rules:
+        /// RECOVERY RULES:
         /// - only Running steps are considered
         /// - ClaimedAtUtc + ClaimTimeoutSeconds must be in the past
-        /// - recovered steps transition back to Pending
+        /// - recovered steps transition back to Ready
         /// - claim ownership is cleared
-        /// - retry count is incremented
+        /// - RecoveryCount is incremented
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
+        /// - ClaimedAtUtc is expressed in milliseconds
+        /// - ClaimTimeoutSeconds is converted to milliseconds inside Lua
         /// </summary>
         public async Task<int> RecoverTimedOutStepsAsync(
             string executionId,
@@ -776,7 +897,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nowUnix = NowMs();
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepKeyPrefix = GetStepKeyPrefix(executionId);
 
@@ -794,23 +915,15 @@ namespace Multiplexed.AI.Stores.Cache
         /// <summary>
         /// Attempts to atomically finalize the global execution record using Redis Lua.
         ///
-        /// This method ensures that:
-        /// - Only one worker can transition the execution into a terminal state
-        /// - The transition is atomic and race-condition free
-        /// - The <see cref="AiExecutionRecord.ExecutionStepKey"/> is validated
-        ///
         /// BEHAVIOR:
-        /// - If the key does not match, the operation fails
-        /// - If the execution is already terminal, the operation fails
-        /// - Otherwise, the record is updated atomically
+        /// - validates optimistic execution key
+        /// - refuses to finalize if already terminal
+        /// - updates terminal status and completed steps atomically
         ///
         /// RETURNS:
-        /// - <c>true</c> if the execution was successfully finalized
-        /// - <c>false</c> if another worker already finalized or concurrency check failed
+        /// - true if finalization succeeded
+        /// - false if another worker already finalized or concurrency validation failed
         /// </summary>
-        /// <param name="request">The finalization request.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>True if finalization succeeded; otherwise false.</returns>
         public async Task<bool> TryFinalizeExecutionAsync(
             AiDagExecutionFinalizationRequest request,
             CancellationToken cancellationToken = default)
@@ -921,10 +1034,16 @@ namespace Multiplexed.AI.Stores.Cache
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Builds Redis key prefix for execution steps.
+        /// Builds the Redis key prefix for all step keys belonging to one execution.
         /// </summary>
         private string GetStepKeyPrefix(string executionId)
             => _keyBuilder.GetDagStepKeyPrefix(executionId);
+
+        /// <summary>
+        /// Returns the current UTC time as a Unix timestamp in milliseconds.
+        /// </summary>
+        private static long NowMs()
+            => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         // ---------------------------------------------------------------------
         // REDIS HELPERS
@@ -950,7 +1069,7 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Repairs legacy or Lua-corrupted step JSON before deserializing into AiStepState.
+        /// Repairs legacy or Lua-corrupted step JSON before deserializing into <see cref="AiStepState"/>.
         /// Specifically ensures DependsOn is always a JSON array.
         /// </summary>
         private static string RepairStepJson(string json)
@@ -990,6 +1109,57 @@ namespace Multiplexed.AI.Stores.Cache
                 if (!hasDependsOn)
                 {
                     writer.WritePropertyName("DependsOn");
+                    writer.WriteStartArray();
+                    writer.WriteEndArray();
+                }
+
+                writer.WriteEndObject();
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        /// <summary>
+        /// Repairs legacy or incompatible execution record JSON before deserializing into <see cref="AiExecutionRecord"/>.
+        /// Specifically ensures CompletedSteps is always a JSON array.
+        /// </summary>
+        private static string RepairRecordJson(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+            using var stream = new MemoryStream();
+
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+
+                var hasCompletedSteps = false;
+
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (property.NameEquals("CompletedSteps"))
+                    {
+                        hasCompletedSteps = true;
+                        writer.WritePropertyName("CompletedSteps");
+
+                        if (property.Value.ValueKind == JsonValueKind.Array)
+                        {
+                            property.Value.WriteTo(writer);
+                        }
+                        else
+                        {
+                            writer.WriteStartArray();
+                            writer.WriteEndArray();
+                        }
+                    }
+                    else
+                    {
+                        property.WriteTo(writer);
+                    }
+                }
+
+                if (!hasCompletedSteps)
+                {
+                    writer.WritePropertyName("CompletedSteps");
                     writer.WriteStartArray();
                     writer.WriteEndArray();
                 }

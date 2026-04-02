@@ -15,6 +15,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
     /// Responsibilities:
     /// - Validate pipeline structure (names, dependencies, cycles)
     /// - Resolve runtime step instances from StepKey
+    /// - Apply runtime defaults for optional step behavior
     /// - Produce a deterministic, executable pipeline representation
     ///
     /// IMPORTANT:
@@ -23,6 +24,18 @@ namespace Multiplexed.AI.Runtime.Pipeline
     /// </summary>
     public sealed class AiPipelineResolver : IAiPipelineResolver
     {
+        /// <summary>
+        /// Default retry count used when a step definition does not provide
+        /// an explicit positive RetryMaxCount value.
+        /// </summary>
+        private const int DefaultRetryMaxCount = 1;
+
+        /// <summary>
+        /// Default retry delay in milliseconds used when a step definition does not provide
+        /// an explicit positive RetryDelayMs value.
+        /// </summary>
+        private const int DefaultRetryDelayMs = 500;
+
         private readonly IAiStepRegistry _stepRegistry;
 
         /// <summary>
@@ -80,7 +93,16 @@ namespace Multiplexed.AI.Runtime.Pipeline
                     Order = stepDefinition.Order,
                     DependsOn = stepDefinition.DependsOn,
                     Input = stepDefinition.Input,
-                    Config = stepDefinition.Config
+                    Config = stepDefinition.Config,
+
+                    // Apply runtime defaults here, not in the definition model.
+                    RetryMaxCount = stepDefinition.MaxRetries > 0
+                        ? stepDefinition.MaxRetries
+                        : DefaultRetryMaxCount,
+
+                    RetryDelayMs = stepDefinition.RetryDelayMs > 0
+                        ? stepDefinition.RetryDelayMs
+                        : DefaultRetryDelayMs
                 });
             }
 
@@ -100,6 +122,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
         /// - Names must be unique
         /// - Dependencies must exist
         /// - No self-dependency
+        /// - Retry settings must not be negative
         /// </summary>
         private static void ValidateStepDefinitions(AiPipelineDefinition definition)
         {
@@ -116,6 +139,18 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 {
                     throw new InvalidOperationException(
                         $"Step '{step.Name}' does not define a valid StepKey.");
+                }
+
+                if (step.MaxRetries < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Step '{step.Name}' defines an invalid RetryMaxCount '{step.MaxRetries}'.");
+                }
+
+                if (step.RetryDelayMs < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Step '{step.Name}' defines an invalid RetryDelayMs '{step.RetryDelayMs}'.");
                 }
 
                 if (!stepsByName.TryAdd(step.Name, step))
@@ -185,7 +220,9 @@ namespace Multiplexed.AI.Runtime.Pipeline
             ISet<string> visiting)
         {
             if (visited.Contains(stepName))
+            {
                 return;
+            }
 
             if (visiting.Contains(stepName))
             {

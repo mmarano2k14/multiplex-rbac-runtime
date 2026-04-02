@@ -6,6 +6,70 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.1] - 2026-03-31
+
+### ✨ Added
+
+- Introduced distributed, step-scoped retry engine integrated with DAG execution
+- Added `WaitingForRetry` status to represent non-terminal retry scheduling state
+- Implemented retry timing using `NextRetryAtUtc` and configurable `RetryDelay`
+- Added `RetryCount` and `MaxRetries` to enforce bounded retry behavior per step
+- Introduced `RecoveryCount` to track infrastructure-level recovery separately from business retries
+- Added retry promotion logic (`PromoteRetryToReadyIfDue`) to transition steps back to execution eligibility
+- Implemented unified retry decision method `MarkRetryOrFail` for deterministic retry vs failure transitions
+- Added timeout recovery mechanism for distributed execution (`MarkRequeuedAfterTimeout`)
+- Extended distributed DAG execution flow to include retry awareness and time-based eligibility
+- Introduced convergence-safe handling of retry states (retry is non-terminal until exhausted)
+
+---
+
+### 🔄 Changed
+
+- Refactored `AiDagExecutionEngine` to fully support retry-aware scheduling in distributed environments
+- Updated step selection logic to exclude steps not yet eligible for retry (`NextRetryAtUtc`)
+- Improved convergence evaluation to correctly account for `WaitingForRetry` state
+- Standardized step lifecycle transitions to include retry and recovery phases
+- Enhanced distributed coordination to prevent premature or duplicate step execution
+- Strengthened separation between execution-level state and step-level state as source of truth
+
+---
+
+### 🧠 Design Improvements
+
+- Enforced deterministic retry behavior across multiple concurrent workers
+- Ensured retry logic remains fully step-scoped and isolated
+- Prevented infinite retry loops through strict retry bounds and timing enforcement
+- Introduced clear distinction between:
+  - business retry (`RetryCount`)
+  - infrastructure recovery (`RecoveryCount`)
+- Improved resilience against worker crashes, timeouts, and partial execution failures
+- Maintained atomic convergence guarantees under retry conditions
+
+---
+
+### 🧪 Test Improvements
+
+- Added test coverage for:
+  - retry success scenarios
+  - retry exhaustion (max retries reached)
+  - retry delay enforcement (`NextRetryAtUtc`)
+  - timeout recovery and requeue behavior
+- Extended concurrency tests to validate retry safety in multi-worker scenarios
+- Verified deterministic convergence across retry transitions
+- Ensured no infinite execution loops under failure conditions
+
+---
+
+### 🎯 Result
+
+- Fully distributed, retry-capable DAG execution engine
+- Deterministic and safe execution under high concurrency
+- Strong consistency between step state and global execution convergence
+- Robust handling of failures, retries, and worker crashes
+- Production-ready orchestration model for complex AI pipelines
+
+---
+
 ## [1.0.2.0] - 2026-03-31
 
 ### ✨ Added

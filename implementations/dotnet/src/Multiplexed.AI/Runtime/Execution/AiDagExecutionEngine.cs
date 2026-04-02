@@ -13,27 +13,23 @@ using Multiplexed.Rbac.Core.ExecutionContext;
 namespace Multiplexed.AI.Runtime.Execution
 {
     /// <summary>
-    /// Executes AI pipelines using DAG-based scheduling.
+    /// Executes AI pipelines using DAG-based orchestration.
     ///
-    /// DAG behavior:
-    /// - step readiness is determined from dependency satisfaction
-    /// - per-step runtime status is the source of truth
-    /// - CurrentStepIndex is not the orchestration driver
+    /// DESIGN OVERVIEW:
+    /// - This engine executes one DAG step at a time
+    /// - Step readiness comes from per-step runtime state and dependency completion
+    /// - Sequential fields on the execution record are preserved only for compatibility / observability
     ///
-    /// LOCAL DAG behavior:
-    /// - executes one ready step per call
-    /// - uses in-memory / composite state evaluation
-    /// - deterministic scheduling through dependency state and order
-    ///
-    /// DISTRIBUTED DAG behavior:
-    /// - step claiming is delegated to <see cref="IAiDagExecutionStore"/>
-    /// - readiness, retry delay, and dependency checks are enforced atomically by Redis Lua
-    /// - completion/failure ownership is validated through claim tokens
+    /// EXECUTION MODES:
+    /// - Local mode:
+    ///   Uses the in-memory / store-backed state model directly
+    /// - Distributed mode:
+    ///   Delegates claim / complete / fail / recovery semantics to the DAG execution store
     ///
     /// IMPORTANT:
-    /// - This engine preserves the existing DAG execution flow for non-distributed stores
-    /// - When a DAG store is provided, distributed claim/complete/fail semantics are used
-    /// - RBAC context ownership still belongs to the execution as a whole, not to each step
+    /// - Global execution lifecycle is still represented by <see cref="AiExecutionRecord"/>
+    /// - Per-step lifecycle is represented by <see cref="AiStepState"/>
+    /// - RBAC context ownership belongs to the execution as a whole, not to individual steps
     /// </summary>
     public sealed class AiDagExecutionEngine : AiExecutionEngine
     {
@@ -102,12 +98,12 @@ namespace Multiplexed.AI.Runtime.Execution
             }
 
             // -----------------------------------------------------------------
-            // Seed an AI-owned RBAC context copy.
+            // Seed one AI-owned RBAC context copy for the whole execution.
             //
             // IMPORTANT:
             // - One execution owns one RBAC context copy
-            // - DAG steps reuse the same context
-            // - No per-step RBAC context rotation is performed here
+            // - All DAG steps reuse the same context
+            // - No per-step context cloning or rotation occurs here
             // -----------------------------------------------------------------
 
             var newContextKey = Guid.NewGuid().ToString("N");
@@ -140,9 +136,9 @@ namespace Multiplexed.AI.Runtime.Execution
             {
                 state.EnsureStepInitialized(step);
 
-                // Keep DAG dependency metadata inside step state so the distributed
-                // Redis DAG store can make claim decisions without re-resolving
-                // the whole pipeline in Lua.
+                // Persist DAG dependency metadata directly in step state
+                // so both local and distributed execution paths can evaluate readiness
+                // without reintroducing global "current step" semantics.
                 var stepState = state.GetOrCreateStep(step.Name);
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
             }
@@ -182,8 +178,10 @@ namespace Multiplexed.AI.Runtime.Execution
             {
                 record = await ExecuteNextAsync(executionId, cancellationToken);
 
-                // In DAG mode, Waiting means no further progress can be made
-                // in the current execution loop.
+                // In DAG mode, Waiting means:
+                // - no runnable work exists right now
+                // - execution is not terminal
+                // - no further local progress can currently be made in this loop
                 if (record.Status == AiExecutionStatus.Waiting)
                 {
                     return record;
@@ -199,9 +197,21 @@ namespace Multiplexed.AI.Runtime.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Executes one DAG step using the existing local orchestration model.
+        /// Executes one DAG step using the local / non-distributed execution path.
         ///
-        /// This path is used when no distributed DAG store is configured.
+        /// BEHAVIOR:
+        /// - Loads record and state
+        /// - Resolves the pipeline
+        /// - Selects the next ready step locally
+        /// - Executes that step
+        /// - Applies retry-aware transitions through <see cref="AiStepState"/>
+        /// - Recomputes global convergence
+        /// - Persists the updated execution snapshot
+        ///
+        /// IMPORTANT:
+        /// - This path does not use distributed claims
+        /// - Synthetic local claim metadata is still used to keep step lifecycle shape aligned
+        ///   with the distributed model
         /// </summary>
         private async Task<AiExecutionRecord> ExecuteNextLocalAsync(
             string executionId,
@@ -216,9 +226,7 @@ namespace Multiplexed.AI.Runtime.Execution
             if (record.IsTerminal)
             {
                 Logger.Engine.ExecutionAlreadyCompleted(record);
-
                 await TryCleanupIfNeededAsync(record, cancellationToken);
-
                 return record;
             }
 
@@ -242,15 +250,26 @@ namespace Multiplexed.AI.Runtime.Execution
 
             try
             {
+                var utcNow = DateTime.UtcNow;
+
                 var nextStep = AiPipelineDagStepSelector.SelectNextReadyStep(
                     resolvedPipeline,
-                    state);
+                    state,
+                    utcNow);
 
+                // -------------------------------------------------------------
+                // No local step is ready.
+                //
+                // This can mean:
+                // - the DAG is complete
+                // - the DAG is globally failed
+                // - execution is waiting for retry timing or dependency completion
+                // -------------------------------------------------------------
                 if (nextStep is null)
                 {
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state, utcNow),
                         state);
 
                     record.TouchVersion();
@@ -273,8 +292,8 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 var stepState = state.GetOrCreateStep(nextStep.Name);
 
-                // Local DAG path still marks running using synthetic local claim metadata.
-                // This keeps the step lifecycle shape aligned with the distributed model.
+                // Synthetic local claim metadata is used only so local execution
+                // keeps the same per-step lifecycle structure as distributed execution.
                 stepState.MarkRunning("local-worker", Guid.NewGuid().ToString("N"));
 
                 record.MarkRunning();
@@ -284,13 +303,59 @@ namespace Multiplexed.AI.Runtime.Execution
                     executionContext,
                     nextStep);
 
-                var stepResult = await nextStep.Step.ExecuteAsync(
-                    stepContext,
-                    cancellationToken);
+                AiStepResult stepResult;
+
+                try
+                {
+                    stepResult = await nextStep.Step.ExecuteAsync(
+                        stepContext,
+                        cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Retry-aware local failure:
+                    // if retry budget remains, the step transitions to WaitingForRetry;
+                    // otherwise it becomes terminally Failed.
+                    stepState.MarkRetryOrFail(ex.Message, DateTime.UtcNow);
+
+                    Logger.Engine.StepException(
+                        record.ExecutionId,
+                        nextStep.Name,
+                        ex);
+
+                    record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
+
+                    ApplyConvergenceToRecord(
+                        record,
+                        AiDagExecutionConvergenceEvaluator.Evaluate(
+                            resolvedPipeline,
+                            state,
+                            DateTime.UtcNow),
+                        state);
+
+                    record.TouchVersion();
+                    record.RenewExecutionStepKey();
+
+                    await PersistAsync(
+                        record,
+                        expectedStepKey,
+                        state,
+                        cancellationToken);
+
+                    if (record.IsTerminal)
+                    {
+                        Logger.Engine.ExecutionCompleted(record);
+                        await TryCleanupIfNeededAsync(record, cancellationToken);
+                    }
+
+                    throw;
+                }
 
                 if (!stepResult.Success)
                 {
-                    stepState.MarkFailed(stepResult.Error);
+                    // Retry-aware local unsuccessful result:
+                    // business retry policy is applied through the step state itself.
+                    stepState.MarkRetryOrFail(stepResult.Error, DateTime.UtcNow);
 
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
@@ -310,7 +375,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 ApplyConvergenceToRecord(
                     record,
-                    AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                    AiDagExecutionConvergenceEvaluator.Evaluate(
+                        resolvedPipeline,
+                        state,
+                        DateTime.UtcNow),
                     state);
 
                 record.TouchVersion();
@@ -330,28 +398,6 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 return record;
             }
-            catch (Exception ex)
-            {
-                record.MarkFailed();
-                record.TouchVersion();
-                record.RenewExecutionStepKey();
-
-                Logger.Engine.StepException(
-                    record.ExecutionId,
-                    record.CurrentStep,
-                    ex);
-
-                await Store.TryUpdateAsync(
-                    record.ExecutionId,
-                    expectedStepKey,
-                    record,
-                    state,
-                    cancellationToken);
-
-                await TryCleanupIfNeededAsync(record, cancellationToken);
-
-                throw;
-            }
             finally
             {
                 Accessor.Clear();
@@ -359,25 +405,26 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         // ---------------------------------------------------------------------
-        // DISTRIBUTED DAG EXECUTION (REDIS LUA)
+        // DISTRIBUTED DAG EXECUTION
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Executes one DAG step using the distributed Redis/Lua claim model.
+        /// Executes one DAG step using the distributed execution path.
         ///
-        /// Flow:
-        /// - load execution record
-        /// - recover timed-out running steps
-        /// - claim one ready step atomically via Redis Lua
-        /// - execute the claimed step
-        /// - complete or fail the step using claim-token ownership
-        /// - rebuild a fresh DAG snapshot
-        /// - persist the global execution record through the existing record/state contract
+        /// FLOW:
+        /// - Load the execution record
+        /// - Resolve the pipeline
+        /// - Recover timed-out running steps through the DAG store
+        /// - Atomically claim one ready step via the distributed store
+        /// - Execute the claimed step
+        /// - Complete or fail the step using claim-token ownership validation
+        /// - Reload the authoritative distributed state snapshot
+        /// - Recompute global convergence and persist the execution record
         ///
         /// IMPORTANT:
-        /// - step claim semantics come from the DAG store
-        /// - pipeline completion is still derived from the full state snapshot
-        /// - the execution record remains the global orchestration summary
+        /// - Claim / retry / timeout logic belongs to the DAG store and its Redis/Lua layer
+        /// - The execution record remains the global orchestration summary
+        /// - The step state remains the source of truth for DAG lifecycle
         /// </summary>
         private async Task<AiExecutionRecord> ExecuteNextDistributedAsync(
             string executionId,
@@ -391,9 +438,7 @@ namespace Multiplexed.AI.Runtime.Execution
             if (record.IsTerminal)
             {
                 Logger.Engine.ExecutionAlreadyCompleted(record);
-
                 await TryCleanupIfNeededAsync(record, cancellationToken);
-
                 return record;
             }
 
@@ -411,7 +456,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 record.PipelineName!,
                 cancellationToken);
 
-            // Best-effort timed-out claim recovery before claiming new work.
+            // Best-effort timeout recovery before any new distributed claim attempt.
             await _dagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
 
             var claimed = await _dagStore.TryClaimNextReadyStepAsync(
@@ -419,7 +464,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 workerId: Environment.MachineName,
                 cancellationToken: cancellationToken);
 
-            // Reload a fresh state snapshot after recovery/claim attempt.
+            // Reload fresh distributed state after recovery / claim attempt.
             var state = await _dagStore.GetStateAsync(executionId, cancellationToken)
                 ?? new AiExecutionState
                 {
@@ -432,20 +477,22 @@ namespace Multiplexed.AI.Runtime.Execution
             try
             {
                 // -------------------------------------------------------------
-                // No step claim available.
+                // No step was claimed.
                 //
-                // This means either:
-                // - the DAG is completed
-                // - the DAG is waiting on dependencies or retry timing
-                // - the DAG still has in-flight work running on another worker
+                // This can mean:
+                // - the DAG is complete
+                // - the DAG is waiting on dependency or retry timing
+                // - another worker still owns the runnable work
                 // -------------------------------------------------------------
                 if (claimed is null)
                 {
+                    var utcNow = DateTime.UtcNow;
+
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state),
+                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state, utcNow),
                         state);
 
                     var expectedStepKey = record.ExecutionStepKey;
@@ -465,9 +512,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     return record;
                 }
 
-                // -------------------------------------------------------------
-                // Resolve claimed step from pipeline topology.
-                // -------------------------------------------------------------
+                // Resolve the claimed step against the resolved pipeline topology.
                 var claimedStep = resolvedPipeline.Steps
                     .FirstOrDefault(x => string.Equals(x.Name, claimed.StepName, StringComparison.Ordinal))
                     ?? throw new InvalidOperationException(
@@ -490,6 +535,9 @@ namespace Multiplexed.AI.Runtime.Execution
                 }
                 catch (Exception ex)
                 {
+                    // Distributed failure path:
+                    // step failure is persisted through the DAG store so ownership checks
+                    // and retry scheduling remain atomic and multi-worker safe.
                     await _dagStore.TryFailStepAsync(
                         executionId,
                         claimed.StepName,
@@ -508,7 +556,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, failedState),
+                        AiDagExecutionConvergenceEvaluator.Evaluate(
+                            resolvedPipeline,
+                            failedState,
+                            DateTime.UtcNow),
                         failedState);
 
                     var expectedStepKey = record.ExecutionStepKey;
@@ -526,6 +577,9 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (!stepResult.Success)
                 {
+                    // Distributed unsuccessful result:
+                    // use the DAG store so retry scheduling and ownership validation
+                    // remain centralized and atomic.
                     await _dagStore.TryFailStepAsync(
                         executionId,
                         claimed.StepName,
@@ -558,16 +612,18 @@ namespace Multiplexed.AI.Runtime.Execution
                         claimed.StepName);
                 }
 
-                // -------------------------------------------------------------
-                // Reload final distributed state snapshot after completion/failure.
-                // -------------------------------------------------------------
+                // Reload final authoritative distributed state snapshot
+                // after completion / failure.
                 var finalState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
                 ApplyConvergenceToRecord(
                     record,
-                    AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, finalState),
+                    AiDagExecutionConvergenceEvaluator.Evaluate(
+                        resolvedPipeline,
+                        finalState,
+                        DateTime.UtcNow),
                     finalState);
 
                 var expectedStepKeyFinal = record.ExecutionStepKey;
@@ -595,10 +651,14 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <summary>
         /// Applies a convergence decision to the global execution record.
         ///
-        /// This method centralizes:
-        /// - global status mutation
-        /// - completed-step projection
-        /// - current-step reset for converged snapshots
+        /// RESPONSIBILITIES:
+        /// - Project completed steps from the step-state snapshot
+        /// - Reset the current step for converged snapshots
+        /// - Mutate the global execution status accordingly
+        ///
+        /// IMPORTANT:
+        /// The execution record is only a summary projection.
+        /// The per-step state remains the source of truth for DAG lifecycle.
         /// </summary>
         private static void ApplyConvergenceToRecord(
             AiExecutionRecord record,
@@ -653,8 +713,8 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <summary>
         /// Attempts automatic cleanup only when configured and only when the execution is terminal.
         ///
-        /// Cleanup is intentionally optional so completed or failed executions can still be
-        /// inspected during development, testing, or debugging workflows.
+        /// Cleanup remains optional so completed / failed executions can still be inspected
+        /// during development, testing, or debugging workflows.
         /// </summary>
         private async Task TryCleanupIfNeededAsync(
             AiExecutionRecord record,
@@ -710,27 +770,18 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <summary>
         /// Persists a converged execution record in a distributed-safe manner.
         ///
-        /// This method ensures that terminal state transitions (<see cref="AiExecutionStatus.Completed"/> or
-        /// <see cref="AiExecutionStatus.Failed"/>) are promoted atomically using the distributed DAG store,
-        /// preventing race conditions across multiple workers.
+        /// TERMINAL BEHAVIOR:
+        /// - Completed / Failed execution states are finalized atomically through the DAG store
+        /// - If another worker wins the terminal race, the authoritative record is reloaded
         ///
-        /// For non-terminal states, this method falls back to the standard persistence flow.
-        ///
-        /// BEHAVIOR:
-        /// - If no DAG store is configured, falls back to <c>PersistAsync</c>
-        /// - If terminal state, uses <c>TryFinalizeExecutionAsync</c>
-        /// - If another worker wins the race, reloads the authoritative record
-        /// - Ensures monotonic terminal state transitions
+        /// NON-TERMINAL BEHAVIOR:
+        /// - Falls back to the standard optimistic persistence flow
         ///
         /// GUARANTEES:
         /// - No double finalization
-        /// - No state downgrade after terminal
-        /// - Deterministic final state across distributed workers
+        /// - No terminal-state downgrade
+        /// - Deterministic final record projection across workers
         /// </summary>
-        /// <param name="record">The execution record to persist.</param>
-        /// <param name="expectedStepKey">The expected optimistic concurrency key.</param>
-        /// <param name="state">The current execution state snapshot.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task PersistDistributedConvergedRecordAsync(
             AiExecutionRecord record,
             string expectedStepKey,
@@ -741,9 +792,7 @@ namespace Multiplexed.AI.Runtime.Execution
             ArgumentException.ThrowIfNullOrWhiteSpace(expectedStepKey);
             ArgumentNullException.ThrowIfNull(state);
 
-            // ---------------------------------------------------------------------
-            // Fallback for non-distributed execution
-            // ---------------------------------------------------------------------
+            // Fallback for local / non-distributed execution.
             if (_dagStore is null)
             {
                 record.TouchVersion();
@@ -764,9 +813,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
 
-            // ---------------------------------------------------------------------
-            // Terminal state → atomic finalization
-            // ---------------------------------------------------------------------
+            // Terminal execution states are finalized atomically in the distributed store.
             if (record.Status is AiExecutionStatus.Completed or AiExecutionStatus.Failed)
             {
                 var success = await _dagStore.TryFinalizeExecutionAsync(
@@ -783,7 +830,7 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (!success)
                 {
-                    // Another worker won the race → reload authoritative state
+                    // Another worker won the finalization race -> reload authoritative record.
                     var refreshed = await _dagStore.GetRecordAsync(
                         record.ExecutionId,
                         cancellationToken);
@@ -801,7 +848,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     return;
                 }
 
-                // Reload final authoritative state
+                // Reload final authoritative record after successful finalization.
                 var updated = await _dagStore.GetRecordAsync(
                     record.ExecutionId,
                     cancellationToken);
@@ -819,9 +866,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 return;
             }
 
-            // ---------------------------------------------------------------------
-            // Non-terminal → standard persistence
-            // ---------------------------------------------------------------------
+            // Non-terminal state -> standard optimistic persistence.
             record.TouchVersion();
             record.RenewExecutionStepKey();
 

@@ -64,8 +64,33 @@ namespace Multiplexed.Abstractions.AI.Pipeline
             = new Dictionary<string, object?>();
 
         /// <summary>
+        /// Gets or sets the maximum number of retry attempts allowed for this step
+        /// after the initial execution attempt fails.
+        ///
+        /// A value of 0 means no retries.
+        /// This value is resolved from the declarative pipeline definition and carried
+        /// forward so the runtime can initialize persisted retry state deterministically.
+        /// </summary>
+        public int RetryMaxCount { get; init; }
+
+        /// <summary>
+        /// Gets or sets the delay, in milliseconds, to wait before a failed step
+        /// becomes eligible for another retry attempt.
+        ///
+        /// A value of 0 means immediate retry eligibility.
+        /// This value should be used to compute persisted retry timing such as
+        /// NextRetryAtUtc in step runtime state.
+        /// </summary>
+        public int RetryDelayMs { get; init; }
+
+        /// <summary>
         /// Gets a value indicating whether this step has any declared dependencies.
         /// </summary>
         public bool HasDependencies => DependsOn.Count > 0;
+
+        /// <summary>
+        /// Gets a value indicating whether this step declares retry behavior.
+        /// </summary>
+        public bool HasRetryPolicy => RetryMaxCount > 0;
     }
 }

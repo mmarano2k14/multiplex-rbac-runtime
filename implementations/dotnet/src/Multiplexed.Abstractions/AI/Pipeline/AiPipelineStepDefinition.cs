@@ -55,8 +55,33 @@
             = new Dictionary<string, object?>();
 
         /// <summary>
+        /// Gets or sets the maximum number of retry attempts allowed for this step
+        /// after the initial execution attempt fails.
+        ///
+        /// A value of 0 means no retries.
+        /// This is a declarative retry policy attached to the step definition
+        /// and should be copied into runtime step state during initialization.
+        /// </summary>
+        public int MaxRetries { get; init; }
+
+        /// <summary>
+        /// Gets or sets the delay, in milliseconds, to wait before the next retry
+        /// attempt after a retryable failure.
+        ///
+        /// A value of 0 means immediate retry eligibility.
+        /// This value should be interpreted by the runtime as a persisted retry delay,
+        /// not as an in-memory sleep or timer.
+        /// </summary>
+        public int RetryDelayMs { get; init; }
+
+        /// <summary>
         /// Gets a value indicating whether this step declares dependencies.
         /// </summary>
         public bool HasDependencies => DependsOn.Count > 0;
+
+        /// <summary>
+        /// Gets a value indicating whether this step declares retry behavior.
+        /// </summary>
+        public bool HasRetryPolicy => MaxRetries > 0;
     }
 }

@@ -37,7 +37,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = new AiExecutionState();
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -52,7 +52,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             Assert.Equal(2, ready.Count);
@@ -68,7 +68,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -83,7 +83,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1", "a2");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -98,7 +98,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start");
 
             // Act
-            var next = AiPipelineDagStepSelector.SelectNextReadyStep(pipeline, state);
+            var next = AiPipelineDagStepSelector.SelectNextReadyStep(pipeline, state, DateTime.UtcNow);
 
             // Assert
             Assert.NotNull(next);
@@ -113,7 +113,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1", "a2", "merge");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             Assert.Empty(ready);
@@ -133,10 +133,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             a1.Status = AiStepExecutionStatus.Running;
 
             var a2 = state.GetOrCreateStep("a2");
-            a2.Status = AiStepExecutionStatus.Pending;
+            a2.Status = AiStepExecutionStatus.Ready;
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -157,10 +157,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             a1.Status = AiStepExecutionStatus.Failed;
 
             var a2 = state.GetOrCreateStep("a2");
-            a2.Status = AiStepExecutionStatus.Pending;
+            a2.Status = AiStepExecutionStatus.Ready;
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
