@@ -20,6 +20,9 @@ This project follows a deterministic runtime and observability model designed fo
 - Added timeout recovery mechanism for distributed execution (`MarkRequeuedAfterTimeout`)
 - Extended distributed DAG execution flow to include retry awareness and time-based eligibility
 - Introduced convergence-safe handling of retry states (retry is non-terminal until exhausted)
+- Added integration tests for multi-worker retry behavior
+- Introduced pipeline steps for retry scenarios
+- Added hardcore multi-worker retry configuration (test)
 
 ---
 

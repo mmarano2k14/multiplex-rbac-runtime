@@ -1,0 +1,16 @@
+{
+  "pipelines": [
+    {
+      "name": "multi-worker-retry-hardcore",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "start",
+          "stepKey": "test-flaky-retry",
+          "retryMaxCount": 2,
+          "retryDelayMs": 300
+        }
+      ]
+    }
+  ]
+}

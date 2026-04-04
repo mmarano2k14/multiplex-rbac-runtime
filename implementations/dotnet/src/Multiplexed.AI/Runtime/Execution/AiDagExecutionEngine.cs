@@ -814,7 +814,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 .ToList();
 
             // Terminal execution states are finalized atomically in the distributed store.
-            if (record.Status is AiExecutionStatus.Completed or AiExecutionStatus.Failed)
+            if ((record.Status == AiExecutionStatus.Completed || record.Status == AiExecutionStatus.Failed) && CanFinalize(state, record.Status))
             {
                 var success = await _dagStore.TryFinalizeExecutionAsync(
                     new AiDagExecutionFinalizationRequest
@@ -875,6 +875,87 @@ namespace Multiplexed.AI.Runtime.Execution
                 expectedStepKey,
                 state,
                 cancellationToken);
+        }
+
+        /// <summary>
+        /// Determines whether the execution can safely transition to a terminal state
+        /// (<see cref="AiExecutionStatus.Completed"/> or <see cref="AiExecutionStatus.Failed"/>)
+        /// based on the current distributed DAG step state.
+        ///
+        /// DESIGN:
+        /// - Acts as a safety barrier against premature finalization in distributed environments
+        /// - Ensures no active, retryable, or pending work remains before allowing termination
+        ///
+        /// RULES:
+        /// - Execution MUST NOT finalize if any step is:
+        ///   - Running (owned by another worker)
+        ///   - WaitingForRetry (scheduled for future retry)
+        ///   - Ready (eligible for execution but not yet claimed)
+        ///
+        /// - Completed:
+        ///   - Allowed only if ALL steps are completed
+        ///
+        /// - Failed:
+        ///   - Allowed only if:
+        ///     - At least one step is Failed
+        ///     - AND all steps are either Failed or Completed
+        ///
+        /// IMPORTANT:
+        /// This method protects against:
+        /// - race conditions across multiple workers
+        /// - delayed Redis state propagation
+        /// - evaluator misclassification under concurrency
+        ///
+        /// The DAG step state remains the source of truth.
+        /// This method only validates whether terminal projection is safe.
+        /// </summary>
+        /// <param name="state">The current execution state containing all step states.</param>
+        /// <param name="targetStatus">The target terminal status being evaluated.</param>
+        /// <returns>
+        /// <c>true</c> if the execution can safely finalize to the target status; otherwise, <c>false</c>.
+        /// </returns>
+        private static bool CanFinalize(
+            AiExecutionState state,
+            AiExecutionStatus targetStatus)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+
+            var steps = state.Steps.Values;
+
+            // ---------------------------------------------------------------------
+            // SAFETY GUARD:
+            // Do NOT allow finalization if any step is still active or retryable.
+            // ---------------------------------------------------------------------
+            if (steps.Any(x =>
+                x.Status == AiStepExecutionStatus.Running ||
+                x.Status == AiStepExecutionStatus.WaitingForRetry ||
+                x.Status == AiStepExecutionStatus.Ready))
+            {
+                return false;
+            }
+
+            // ---------------------------------------------------------------------
+            // COMPLETED:
+            // All steps must be completed.
+            // ---------------------------------------------------------------------
+            if (targetStatus == AiExecutionStatus.Completed)
+            {
+                return steps.All(x => x.IsCompleted);
+            }
+
+            // ---------------------------------------------------------------------
+            // FAILED:
+            // At least one failed AND no further progress possible.
+            // ---------------------------------------------------------------------
+            if (targetStatus == AiExecutionStatus.Failed)
+            {
+                return steps.Any(x => x.Status == AiStepExecutionStatus.Failed)
+                       && steps.All(x =>
+                           x.Status == AiStepExecutionStatus.Failed ||
+                           x.Status == AiStepExecutionStatus.Completed);
+            }
+
+            return false;
         }
     }
 }
