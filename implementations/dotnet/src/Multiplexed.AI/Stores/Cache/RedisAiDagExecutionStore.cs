@@ -94,17 +94,12 @@ namespace Multiplexed.AI.Stores.Cache
 
                     local canRun = false
 
-                    -- Normal schedulable states.
                     if step.Status == "Ready" or step.Status == "None" then
                         canRun = true
                     end
 
-                    -- Retry-aware scheduling:
-                    -- a step waiting for retry becomes claimable once its retry window opens.
                     if step.Status == "WaitingForRetry" then
                         if step.NextRetryAtUtc == nil or step.NextRetryAtUtc == cjson.null then
-                            -- Safety fallback:
-                            -- if no retry time is present, allow the step to run.
                             canRun = true
                         else
                             local nextRetryAtUtc = tonumber(step.NextRetryAtUtc)
@@ -141,9 +136,6 @@ namespace Multiplexed.AI.Stores.Cache
                         step.ClaimedBy = workerId
                         step.ClaimToken = claimToken
                         step.ClaimedAtUtc = nowUnix
-
-                        -- Retry window has been consumed.
-                        -- Clear it now so the step re-enters a clean running state.
                         step.NextRetryAtUtc = cjson.null
 
                         if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
@@ -254,25 +246,6 @@ namespace Multiplexed.AI.Stores.Cache
         /// </summary>
         private static readonly LuaScript FailPreparedScript = LuaScript.Prepare(
             """
-            --[[
-            Atomically applies a failure transition to a claimed DAG step.
-
-            Behavior:
-            - Validates the step exists
-            - Validates the step is currently Running
-            - Validates the claim token matches the current owner
-            - If retry budget remains:
-                -> increments RetryCount
-                -> moves step to WaitingForRetry
-                -> schedules NextRetryAtUtc
-            - Otherwise:
-                -> moves step to terminal Failed
-
-            RETURN:
-            - 1 when the transition was successfully applied
-            - 0 when the step was not found, not running, or claim ownership did not match
-            ]]
-
             local function normalize_array(value)
                 if value == nil or value == cjson.null then
                     return cjson.decode('[]')
@@ -300,13 +273,10 @@ namespace Multiplexed.AI.Stores.Cache
                 return 0
             end
 
-            -- Backward-compatible status check:
-            -- supports both current string-based status and older numeric Running values.
             if not (step.Status == "Running" or step.Status == 2) then
                 return 0
             end
 
-            -- Only the worker holding the current claim token may fail this step.
             if step.ClaimToken ~= @claimToken then
                 return 0
             end
@@ -322,8 +292,6 @@ namespace Multiplexed.AI.Stores.Cache
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
 
-            -- Retry-aware path:
-            -- if retry budget remains, the step becomes non-terminal WaitingForRetry.
             if retryCount < maxRetries then
                 retryCount = retryCount + 1
                 step.RetryCount = retryCount
@@ -336,8 +304,6 @@ namespace Multiplexed.AI.Stores.Cache
                 return 1
             end
 
-            -- Retry exhausted:
-            -- terminal failure
             step.Status = "Failed"
             step.CompletedAtUtc = nowUnix
             step.NextRetryAtUtc = cjson.null
@@ -395,8 +361,6 @@ namespace Multiplexed.AI.Stores.Cache
                 if raw then
                     local step = cjson.decode(raw)
 
-                    -- Backward-compatible status check:
-                    -- supports both current string-based status and older numeric Running values.
                     if step.Status == "Running" or step.Status == 2 then
                         local claimedAt = step.ClaimedAtUtc
                         local timeoutSeconds = step.ClaimTimeoutSeconds
@@ -433,31 +397,42 @@ namespace Multiplexed.AI.Stores.Cache
         /// GUARANTEES:
         /// - validates ExecutionStepKey
         /// - refuses to finalize an already terminal record
-        /// - updates CompletedSteps and execution status atomically
+        /// - persists terminal status and completion metadata atomically
+        /// - terminal states are monotonic
         /// </summary>
-        private static readonly LuaScript FinalizeScript = LuaScript.Prepare(@"
+        private static readonly LuaScript FinalizeScript = LuaScript.Prepare(
+            """
             local raw = redis.call('GET', @recordKey)
-            if not raw then return 0 end
+            if not raw then
+                return 0
+            end
 
             local record = cjson.decode(raw)
+            if not record then
+                return 0
+            end
 
             if record.ExecutionStepKey ~= @expectedExecutionStepKey then
                 return 0
             end
 
-            if record.Status == 'Completed' or record.Status == 'Failed' then
+            if record.Status == 'Completed'
+                or record.Status == 'Failed'
+                or record.Status == 'Cancelled' then
                 return 0
             end
 
             record.Status = @status
+            record.CompletedAtUtc = tonumber(@completedAtUtc)
             record.CompletedSteps = cjson.decode(@completedStepsJson)
             record.CurrentStep = ''
+            record.UpdatedAtUtc = tonumber(@completedAtUtc)
             record.Version = (record.Version or 0) + 1
             record.ExecutionStepKey = @newExecutionStepKey
 
             redis.call('SET', @recordKey, cjson.encode(record))
             return 1
-            ");
+            """);
 
         // ---------------------------------------------------------------------
         // LOADED SCRIPTS (SHA CACHED)
@@ -467,6 +442,7 @@ namespace Multiplexed.AI.Stores.Cache
         private LoadedLuaScript _completeLoadedScript;
         private LoadedLuaScript _failLoadedScript;
         private LoadedLuaScript _recoverLoadedScript;
+        private LoadedLuaScript _finalizeLoadedScript;
 
         /// <summary>
         /// Initializes a new instance of the DAG Redis store.
@@ -496,6 +472,7 @@ namespace Multiplexed.AI.Stores.Cache
             _completeLoadedScript = LoadScript(CompletePreparedScript);
             _failLoadedScript = LoadScript(FailPreparedScript);
             _recoverLoadedScript = LoadScript(RecoverPreparedScript);
+            _finalizeLoadedScript = LoadScript(FinalizeScript);
         }
 
         /// <summary>
@@ -917,31 +894,76 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// BEHAVIOR:
         /// - validates optimistic execution key
-        /// - refuses to finalize if already terminal
-        /// - updates terminal status and completed steps atomically
+        /// - refuses to finalize if the record is already terminal
+        /// - persists terminal status and completion metadata atomically
         ///
-        /// RETURNS:
-        /// - true if finalization succeeded
-        /// - false if another worker already finalized or concurrency validation failed
+        /// IMPORTANT:
+        /// This method is terminal-only. Non-terminal statuses must never be passed here.
         /// </summary>
         public async Task<bool> TryFinalizeExecutionAsync(
             AiDagExecutionFinalizationRequest request,
             CancellationToken cancellationToken = default)
         {
+            ArgumentNullException.ThrowIfNull(request);
+
+            if (string.IsNullOrWhiteSpace(request.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(request));
+
+            if (string.IsNullOrWhiteSpace(request.ExpectedExecutionStepKey))
+                throw new ArgumentException("Expected execution step key cannot be null or empty.", nameof(request));
+
+            if (request.Status is not AiExecutionStatus.Completed
+                and not AiExecutionStatus.Failed
+                and not AiExecutionStatus.Cancelled)
+            {
+                throw new ArgumentException(
+                    "Only terminal execution statuses are allowed for finalization.",
+                    nameof(request));
+            }
+
             var key = _keyBuilder.GetExecutionRecordKey(request.ExecutionId);
+            var completedAtUtc = request.CompletedAtUtc == default
+                ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                : new DateTimeOffset(request.CompletedAtUtc).ToUnixTimeMilliseconds();
 
-            var result = await _database.ScriptEvaluateAsync(
-                FinalizeScript,
-                new
-                {
-                    recordKey = (RedisKey)key,
-                    expectedExecutionStepKey = request.ExpectedExecutionStepKey,
-                    status = request.Status.ToString(),
-                    completedStepsJson = JsonSerializer.Serialize(request.CompletedSteps),
-                    newExecutionStepKey = Guid.NewGuid().ToString("N")
-                });
+            var completedStepsJson = JsonSerializer.Serialize(
+                request.CompletedSteps ?? Array.Empty<string>(),
+                _jsonOptions);
 
-            return (int)result == 1;
+            try
+            {
+                var result = await _finalizeLoadedScript.EvaluateAsync(
+                    _database,
+                    new
+                    {
+                        recordKey = (RedisKey)key,
+                        expectedExecutionStepKey = (RedisValue)request.ExpectedExecutionStepKey,
+                        status = (RedisValue)request.Status.ToString(),
+                        completedAtUtc = (RedisValue)completedAtUtc,
+                        completedStepsJson = (RedisValue)completedStepsJson,
+                        newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
+                    });
+
+                return (int)result! == 1;
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _finalizeLoadedScript = LoadScript(FinalizeScript);
+
+                var result = await _finalizeLoadedScript.EvaluateAsync(
+                    _database,
+                    new
+                    {
+                        recordKey = (RedisKey)key,
+                        expectedExecutionStepKey = (RedisValue)request.ExpectedExecutionStepKey,
+                        status = (RedisValue)request.Status.ToString(),
+                        completedAtUtc = (RedisValue)completedAtUtc,
+                        completedStepsJson = (RedisValue)completedStepsJson,
+                        newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
+                    });
+
+                return (int)result! == 1;
+            }
         }
 
         // ---------------------------------------------------------------------

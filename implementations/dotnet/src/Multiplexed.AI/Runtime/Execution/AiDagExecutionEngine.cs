@@ -490,15 +490,21 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
+                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                        resolvedPipeline,
+                        state,
+                        utcNow);
+
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state, utcNow),
+                        convergence,
                         state);
 
                     var expectedStepKey = record.ExecutionStepKey;
 
                     await PersistDistributedConvergedRecordAsync(
                         record,
+                        convergence,
                         expectedStepKey,
                         state,
                         cancellationToken);
@@ -554,18 +560,21 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
+                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                        resolvedPipeline,
+                        failedState,
+                        DateTime.UtcNow);
+
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(
-                            resolvedPipeline,
-                            failedState,
-                            DateTime.UtcNow),
+                        convergence,
                         failedState);
 
                     var expectedStepKey = record.ExecutionStepKey;
 
                     await PersistDistributedConvergedRecordAsync(
                         record,
+                        convergence,
                         expectedStepKey,
                         failedState,
                         cancellationToken);
@@ -618,18 +627,21 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
+                var finalConvergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                    resolvedPipeline,
+                    finalState,
+                    DateTime.UtcNow);
+
                 ApplyConvergenceToRecord(
                     record,
-                    AiDagExecutionConvergenceEvaluator.Evaluate(
-                        resolvedPipeline,
-                        finalState,
-                        DateTime.UtcNow),
+                    finalConvergence,
                     finalState);
 
                 var expectedStepKeyFinal = record.ExecutionStepKey;
 
                 await PersistDistributedConvergedRecordAsync(
                     record,
+                    finalConvergence,
                     expectedStepKeyFinal,
                     finalState,
                     cancellationToken);
@@ -771,7 +783,7 @@ namespace Multiplexed.AI.Runtime.Execution
         /// Persists a converged execution record in a distributed-safe manner.
         ///
         /// TERMINAL BEHAVIOR:
-        /// - Completed / Failed execution states are finalized atomically through the DAG store
+        /// - Completed / Failed / Cancelled execution states are finalized atomically through the DAG store
         /// - If another worker wins the terminal race, the authoritative record is reloaded
         ///
         /// NON-TERMINAL BEHAVIOR:
@@ -781,14 +793,26 @@ namespace Multiplexed.AI.Runtime.Execution
         /// - No double finalization
         /// - No terminal-state downgrade
         /// - Deterministic final record projection across workers
+        ///
+        /// IMPORTANT:
+        /// - The step-state snapshot remains the source of truth
+        /// - The <paramref name="convergence"/> argument is the evaluated truth derived from that step-state
+        /// - The execution record is only the projection being persisted
         /// </summary>
+        /// <param name="record">The execution record projection to persist.</param>
+        /// <param name="convergence">The evaluated convergence result derived from the current step-state snapshot.</param>
+        /// <param name="expectedStepKey">The optimistic execution step key expected by the persistence layer.</param>
+        /// <param name="state">The authoritative distributed step-state snapshot.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task PersistDistributedConvergedRecordAsync(
             AiExecutionRecord record,
+            AiDagExecutionConvergenceResult convergence,
             string expectedStepKey,
             AiExecutionState state,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(convergence);
             ArgumentException.ThrowIfNullOrWhiteSpace(expectedStepKey);
             ArgumentNullException.ThrowIfNull(state);
 
@@ -814,18 +838,21 @@ namespace Multiplexed.AI.Runtime.Execution
                 .ToList();
 
             // Terminal execution states are finalized atomically in the distributed store.
-            if ((record.Status == AiExecutionStatus.Completed || record.Status == AiExecutionStatus.Failed) && CanFinalize(state, record.Status))
+            if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
             {
+                var request = new AiDagExecutionFinalizationRequest
+                {
+                    ExecutionId = record.ExecutionId,
+                    ExpectedExecutionStepKey = expectedStepKey,
+                    Status = convergence.Status,
+                    CompletedAtUtc = DateTime.UtcNow,
+                    CompletedSteps = completedSteps,
+                    CurrentStep = string.Empty,
+                    WorkerId = Environment.MachineName
+                };
+
                 var success = await _dagStore.TryFinalizeExecutionAsync(
-                    new AiDagExecutionFinalizationRequest
-                    {
-                        ExecutionId = record.ExecutionId,
-                        ExpectedExecutionStepKey = expectedStepKey,
-                        Status = record.Status,
-                        CompletedSteps = completedSteps,
-                        CurrentStep = record.CurrentStep,
-                        WorkerId = Environment.MachineName
-                    },
+                    request,
                     cancellationToken);
 
                 if (!success)
@@ -843,6 +870,7 @@ namespace Multiplexed.AI.Runtime.Execution
                         record.ExecutionStepKey = refreshed.ExecutionStepKey;
                         record.Version = refreshed.Version;
                         record.UpdatedAtUtc = refreshed.UpdatedAtUtc;
+                        record.CompletedAtUtc = refreshed.CompletedAtUtc;
                     }
 
                     return;
@@ -861,6 +889,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     record.ExecutionStepKey = updated.ExecutionStepKey;
                     record.Version = updated.Version;
                     record.UpdatedAtUtc = updated.UpdatedAtUtc;
+                    record.CompletedAtUtc = updated.CompletedAtUtc;
                 }
 
                 return;
@@ -879,18 +908,20 @@ namespace Multiplexed.AI.Runtime.Execution
 
         /// <summary>
         /// Determines whether the execution can safely transition to a terminal state
-        /// (<see cref="AiExecutionStatus.Completed"/> or <see cref="AiExecutionStatus.Failed"/>)
+        /// (<see cref="AiExecutionStatus.Completed"/>, <see cref="AiExecutionStatus.Failed"/>,
+        /// or <see cref="AiExecutionStatus.Cancelled"/>)
         /// based on the current distributed DAG step state.
         ///
         /// DESIGN:
         /// - Acts as a safety barrier against premature finalization in distributed environments
-        /// - Ensures no active, retryable, or pending work remains before allowing termination
+        /// - Ensures no active, retryable, ready, or ambiguous work remains before allowing termination
         ///
         /// RULES:
         /// - Execution MUST NOT finalize if any step is:
-        ///   - Running (owned by another worker)
-        ///   - WaitingForRetry (scheduled for future retry)
-        ///   - Ready (eligible for execution but not yet claimed)
+        ///   - <see cref="AiStepExecutionStatus.Running"/>
+        ///   - <see cref="AiStepExecutionStatus.WaitingForRetry"/>
+        ///   - <see cref="AiStepExecutionStatus.Ready"/>
+        ///   - <see cref="AiStepExecutionStatus.None"/>
         ///
         /// - Completed:
         ///   - Allowed only if ALL steps are completed
@@ -899,6 +930,9 @@ namespace Multiplexed.AI.Runtime.Execution
         ///   - Allowed only if:
         ///     - At least one step is Failed
         ///     - AND all steps are either Failed or Completed
+        ///
+        /// - Cancelled:
+        ///   - Allowed only if no active, retryable, ready, or ambiguous work remains
         ///
         /// IMPORTANT:
         /// This method protects against:
@@ -920,39 +954,54 @@ namespace Multiplexed.AI.Runtime.Execution
         {
             ArgumentNullException.ThrowIfNull(state);
 
-            var steps = state.Steps.Values;
+            var steps = state.Steps.Values.ToList();
 
             // ---------------------------------------------------------------------
             // SAFETY GUARD:
-            // Do NOT allow finalization if any step is still active or retryable.
+            // Do NOT allow finalization if any step is still active, retryable,
+            // immediately runnable, or still ambiguous / uninitialized.
             // ---------------------------------------------------------------------
             if (steps.Any(x =>
                 x.Status == AiStepExecutionStatus.Running ||
                 x.Status == AiStepExecutionStatus.WaitingForRetry ||
-                x.Status == AiStepExecutionStatus.Ready))
+                x.Status == AiStepExecutionStatus.Ready ||
+                x.Status == AiStepExecutionStatus.None))
             {
                 return false;
             }
 
             // ---------------------------------------------------------------------
             // COMPLETED:
-            // All steps must be completed.
+            // All steps must be completed successfully.
             // ---------------------------------------------------------------------
             if (targetStatus == AiExecutionStatus.Completed)
             {
-                return steps.All(x => x.IsCompleted);
+                return steps.Count > 0 && steps.All(x => x.IsCompleted);
             }
 
             // ---------------------------------------------------------------------
             // FAILED:
-            // At least one failed AND no further progress possible.
+            // At least one failed step must exist and all remaining steps must already
+            // be terminal as either Completed or Failed.
             // ---------------------------------------------------------------------
             if (targetStatus == AiExecutionStatus.Failed)
             {
                 return steps.Any(x => x.Status == AiStepExecutionStatus.Failed)
-                       && steps.All(x =>
-                           x.Status == AiStepExecutionStatus.Failed ||
-                           x.Status == AiStepExecutionStatus.Completed);
+                    && steps.All(x =>
+                        x.Status == AiStepExecutionStatus.Failed ||
+                        x.Status == AiStepExecutionStatus.Completed);
+            }
+
+            // ---------------------------------------------------------------------
+            // CANCELLED:
+            // Cancellation is treated as terminal only when all steps are already in
+            // terminal states and no active or ambiguous work remains.
+            // ---------------------------------------------------------------------
+            if (targetStatus == AiExecutionStatus.Cancelled)
+            {
+                return steps.All(x =>
+                    x.Status == AiStepExecutionStatus.Completed ||
+                    x.Status == AiStepExecutionStatus.Failed);
             }
 
             return false;

@@ -31,7 +31,7 @@ namespace Multiplexed.AI.Stores
 
         /// <summary>
         /// Saves the global execution record independently.
-        /// 
+        ///
         /// This is intended for administrative persistence or lifecycle updates
         /// that do not require re-writing all distributed step entries.
         /// </summary>
@@ -42,7 +42,7 @@ namespace Multiplexed.AI.Stores
         /// <summary>
         /// Saves the full distributed DAG state by replacing the current indexed steps
         /// for the specified execution.
-        /// 
+        ///
         /// This is intended for administrative persistence, repair, or recovery flows,
         /// not for normal concurrent worker progression.
         /// </summary>
@@ -53,7 +53,7 @@ namespace Multiplexed.AI.Stores
 
         /// <summary>
         /// Deletes the global execution record.
-        /// 
+        ///
         /// This operation should be idempotent.
         /// </summary>
         Task DeleteRecordAsync(
@@ -63,7 +63,7 @@ namespace Multiplexed.AI.Stores
         /// <summary>
         /// Deletes all indexed distributed DAG steps for the execution,
         /// including the step index itself.
-        /// 
+        ///
         /// This operation should be idempotent.
         /// </summary>
         Task DeleteStepsAsync(
@@ -72,7 +72,7 @@ namespace Multiplexed.AI.Stores
 
         /// <summary>
         /// Deletes the full distributed DAG execution bundle owned by this store.
-        /// 
+        ///
         /// This includes the global execution record and all indexed step entries.
         /// This operation should be idempotent.
         /// </summary>
@@ -106,23 +106,24 @@ namespace Multiplexed.AI.Stores
         /// <summary>
         /// Attempts to atomically finalize the global execution record after convergence evaluation.
         ///
-        /// This operation ensures that only one worker can promote the execution
-        /// into a terminal state (<see cref="AiExecutionStatus.Completed"/> or
-        /// <see cref="AiExecutionStatus.Failed"/>).
+        /// This operation is terminal-only and must never be used to project non-terminal states
+        /// such as <see cref="AiExecutionStatus.Running"/> or <see cref="AiExecutionStatus.Waiting"/>.
         ///
-        /// RULES:
-        /// - The execution record must exist
-        /// - The <see cref="AiExecutionRecord.ExecutionStepKey"/> must match the expected value
-        /// - Terminal states are monotonic and cannot be downgraded
-        /// - Concurrent finalization attempts are resolved atomically
+        /// GUARANTEES:
+        /// - the execution record must exist
+        /// - the <see cref="AiExecutionRecord.ExecutionStepKey"/> must match the expected value
+        /// - terminal states are monotonic and cannot be downgraded
+        /// - concurrent finalization attempts are resolved atomically
         ///
         /// RETURNS:
         /// - <c>true</c> if this worker successfully finalized the execution
-        /// - <c>false</c> if another worker already finalized or the state changed
+        /// - <c>false</c> if another worker already finalized the execution,
+        ///   if the optimistic execution key did not match,
+        ///   or if the record was already terminal
         /// </summary>
-        /// <param name="request">The finalization request.</param>
+        /// <param name="request">The terminal finalization request.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>True if the finalization succeeded; otherwise false.</returns>
+        /// <returns>True if finalization succeeded; otherwise false.</returns>
         Task<bool> TryFinalizeExecutionAsync(
             AiDagExecutionFinalizationRequest request,
             CancellationToken cancellationToken = default);

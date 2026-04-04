@@ -13,6 +13,7 @@ using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
+using Multiplexed.AI.Tests.Integration.Runtime.Pipeline.Steps;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores;
@@ -707,58 +708,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             await db.KeyDeleteAsync(recordKey);
             await db.KeyDeleteAsync(stateKey);
             await db.KeyDeleteAsync(stepsIndexKey);
-        }
-
-        /// <summary>
-        /// Tracks the number of real step executions observed by the flaky retry test step.
-        /// This is used to prove that only one worker actually executes each retry attempt.
-        /// </summary>
-        private sealed class TestStepAttemptTracker
-        {
-            private int _count;
-
-            /// <summary>
-            /// Gets the total number of recorded step execution attempts.
-            /// </summary>
-            public int Count => Volatile.Read(ref _count);
-
-            /// <summary>
-            /// Atomically increments the execution attempt count and returns the new value.
-            /// </summary>
-            public int Increment()
-                => Interlocked.Increment(ref _count);
-        }
-
-        /// <summary>
-        /// Test step that always fails and records each real execution attempt through a shared tracker.
-        /// This allows the test to prove that distributed retry claim behavior remains single-owner.
-        /// </summary>
-        [AiStep("test-flaky-retry")]
-        private sealed class TestFlakyRetryStep : IAiStep
-        {
-            private readonly TestStepAttemptTracker _tracker;
-
-            public TestFlakyRetryStep(TestStepAttemptTracker tracker)
-            {
-                _tracker = tracker ?? throw new ArgumentNullException(nameof(tracker));
-            }
-
-            public string Key => "test-flaky-retry";
-
-            public string Name => "test-flaky-retry";
-
-            public Task<AiStepResult> ExecuteAsync(
-                AiStepExecutionContext context,
-                CancellationToken cancellationToken = default)
-            {
-                var attempt = _tracker.Increment();
-
-                return Task.FromResult(new AiStepResult
-                {
-                    Success = false,
-                    Error = $"Simulated retryable failure attempt {attempt}."
-                });
-            }
         }
 
         /// <summary>

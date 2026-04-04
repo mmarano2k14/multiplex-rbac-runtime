@@ -113,6 +113,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// Gets or sets the UTC last update timestamp.
         /// </summary>
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>
+        /// Gets the UTC timestamp at which the execution reached its terminal state.
+        /// </summary>
+        public DateTime CompletedAtUtc { get; set; }
 
         /// <summary>
         /// Returns true when the execution is in a terminal state.
