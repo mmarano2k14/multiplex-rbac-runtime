@@ -1,6 +1,39 @@
 ﻿namespace Multiplexed.Abstractions.AI.Pipeline
 {
     /// <summary>
+    /// Represents declarative execution policy metadata attached to a pipeline step.
+    ///
+    /// This section contains runtime orchestration settings rather than business
+    /// configuration. It is intended for retry, timeout, and other execution-level
+    /// behaviors controlled by the runtime engine.
+    /// </summary>
+    public sealed class AiPipelineStepExecutionDefinition
+    {
+        /// <summary>
+        /// Gets or sets the maximum number of retry attempts allowed after the
+        /// initial execution attempt fails.
+        ///
+        /// A value of 0 means no retries.
+        /// </summary>
+        public int MaxRetries { get; init; }
+
+        /// <summary>
+        /// Gets or sets the delay, in milliseconds, before the runtime may attempt
+        /// the next retry after a retryable failure.
+        ///
+        /// A value of 0 means immediate retry eligibility.
+        /// This value is declarative runtime metadata and must be persisted in
+        /// step state rather than implemented as an in-memory delay.
+        /// </summary>
+        public int RetryDelayMs { get; init; }
+
+        /// <summary>
+        /// Gets a value indicating whether this execution policy enables retries.
+        /// </summary>
+        public bool HasRetryPolicy => MaxRetries > 0;
+    }
+
+    /// <summary>
     /// Represents a single declarative step inside an AI pipeline definition.
     /// The step is identified by a provider-neutral key so that the definition
     /// remains portable across storage providers and runtime implementations.
@@ -49,30 +82,33 @@
             = new Dictionary<string, object?>();
 
         /// <summary>
-        /// Gets or sets the optional declarative configuration for this step.
+        /// Gets or sets the optional declarative business configuration for this step.
+        ///
+        /// This section is intended for step-specific behavior and input shaping,
+        /// not for runtime orchestration policy such as retries or claim handling.
         /// </summary>
         public IReadOnlyDictionary<string, object?> Config { get; init; }
             = new Dictionary<string, object?>();
 
         /// <summary>
-        /// Gets or sets the maximum number of retry attempts allowed for this step
-        /// after the initial execution attempt fails.
+        /// Gets or sets the optional execution policy for this step.
         ///
-        /// A value of 0 means no retries.
-        /// This is a declarative retry policy attached to the step definition
-        /// and should be copied into runtime step state during initialization.
+        /// This section contains runtime orchestration metadata such as retry
+        /// configuration. It is the preferred location for new pipeline definitions.
         /// </summary>
-        public int MaxRetries { get; init; }
+        public AiPipelineStepExecutionDefinition? Execution { get; init; }
+
+        public int ResolvedMaxRetries => Execution?.MaxRetries ?? 0;
 
         /// <summary>
-        /// Gets or sets the delay, in milliseconds, to wait before the next retry
-        /// attempt after a retryable failure.
+        /// Gets the resolved retry delay, in milliseconds, for this step.
         ///
-        /// A value of 0 means immediate retry eligibility.
-        /// This value should be interpreted by the runtime as a persisted retry delay,
-        /// not as an in-memory sleep or timer.
+        /// Resolution order:
+        /// 1. Execution.RetryDelayMs
+        /// 2. root-level RetryDelayMs
+        /// 3. default value 0
         /// </summary>
-        public int RetryDelayMs { get; init; }
+        public int ResolvedRetryDelayMs => Execution?.RetryDelayMs ?? 0;
 
         /// <summary>
         /// Gets a value indicating whether this step declares dependencies.
@@ -82,6 +118,6 @@
         /// <summary>
         /// Gets a value indicating whether this step declares retry behavior.
         /// </summary>
-        public bool HasRetryPolicy => MaxRetries > 0;
+        public bool HasRetryPolicy => ResolvedMaxRetries > 0;
     }
 }

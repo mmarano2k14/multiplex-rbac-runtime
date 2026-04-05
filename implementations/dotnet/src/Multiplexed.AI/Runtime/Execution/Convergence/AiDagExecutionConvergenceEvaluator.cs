@@ -91,6 +91,11 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
             // -----------------------------------------------------------------
             // WAITING FOR FUTURE PROGRESS:
             // Retry-delayed work is explicitly non-terminal.
+            //
+            // IMPORTANT:
+            // Even if one or more steps have already failed, retry-waiting steps
+            // must prevent terminal failure projection until their retry window
+            // has either been consumed or all progress is truly exhausted.
             // -----------------------------------------------------------------
             if (hasWaitingForRetrySteps)
             {
@@ -101,14 +106,13 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
             // PROGRESS POSSIBILITY CHECK:
             // Progress is still possible if:
             // - a step is currently claimed
-            // - a step is waiting for retry
             // - a step is still uninitialized / unresolved
             //
+            // WaitingForRetry was already handled above and returned Waiting.
             // Ready and Running were already handled above and returned Running.
             // -----------------------------------------------------------------
             var canStillProgress =
                 hasClaimedSteps ||
-                hasWaitingForRetrySteps ||
                 hasPendingSteps;
 
             // -----------------------------------------------------------------

@@ -26,13 +26,13 @@ namespace Multiplexed.AI.Runtime.Pipeline
     {
         /// <summary>
         /// Default retry count used when a step definition does not provide
-        /// an explicit positive RetryMaxCount value.
+        /// an explicit execution retry policy.
         /// </summary>
         private const int DefaultRetryMaxCount = 1;
 
         /// <summary>
         /// Default retry delay in milliseconds used when a step definition does not provide
-        /// an explicit positive RetryDelayMs value.
+        /// an explicit execution retry policy.
         /// </summary>
         private const int DefaultRetryDelayMs = 500;
 
@@ -85,6 +85,11 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
                 var step = _stepRegistry.Resolve(stepDefinition.StepKey);
 
+                // Apply runtime defaults here, not in the definition model.
+                // Execution policy is now defined through the dedicated Execution section.
+                var maxRetries = stepDefinition.Execution?.MaxRetries ?? DefaultRetryMaxCount;
+                var retryDelayMs = stepDefinition.Execution?.RetryDelayMs ?? DefaultRetryDelayMs;
+
                 resolvedSteps.Add(new ResolvedAiPipelineStep
                 {
                     Name = stepDefinition.Name,
@@ -94,15 +99,8 @@ namespace Multiplexed.AI.Runtime.Pipeline
                     DependsOn = stepDefinition.DependsOn,
                     Input = stepDefinition.Input,
                     Config = stepDefinition.Config,
-
-                    // Apply runtime defaults here, not in the definition model.
-                    RetryMaxCount = stepDefinition.MaxRetries > 0
-                        ? stepDefinition.MaxRetries
-                        : DefaultRetryMaxCount,
-
-                    RetryDelayMs = stepDefinition.RetryDelayMs > 0
-                        ? stepDefinition.RetryDelayMs
-                        : DefaultRetryDelayMs
+                    MaxRetries = maxRetries,
+                    RetryDelayMs = retryDelayMs
                 });
             }
 
@@ -141,16 +139,16 @@ namespace Multiplexed.AI.Runtime.Pipeline
                         $"Step '{step.Name}' does not define a valid StepKey.");
                 }
 
-                if (step.MaxRetries < 0)
+                if (step.Execution?.MaxRetries < 0)
                 {
                     throw new InvalidOperationException(
-                        $"Step '{step.Name}' defines an invalid RetryMaxCount '{step.MaxRetries}'.");
+                        $"Step '{step.Name}' defines an invalid RetryMaxCount '{step.Execution.MaxRetries}'.");
                 }
 
-                if (step.RetryDelayMs < 0)
+                if (step.Execution?.RetryDelayMs < 0)
                 {
                     throw new InvalidOperationException(
-                        $"Step '{step.Name}' defines an invalid RetryDelayMs '{step.RetryDelayMs}'.");
+                        $"Step '{step.Name}' defines an invalid RetryDelayMs '{step.Execution.RetryDelayMs}'.");
                 }
 
                 if (!stepsByName.TryAdd(step.Name, step))

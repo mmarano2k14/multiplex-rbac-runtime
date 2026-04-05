@@ -4,18 +4,22 @@ using Multiplexed.Abstractions.AI.Steps;
 namespace Multiplexed.Abstractions.AI.Execution
 {
     /// <summary>
-    /// Represents the mutable runtime state of a single step instance
-    /// within an AI pipeline execution.
+    /// Represents the durable runtime state of a single step within an AI pipeline execution.
     ///
-    /// DESIGN NOTES:
-    /// - Step state is the source of truth for DAG orchestration
-    /// - Each step instance is tracked independently by StepName
-    /// - This state is used by both local scheduling and distributed Redis/Lua coordination
+    /// PURPOSE:
+    /// - This object is the source of truth for DAG step lifecycle
+    /// - It drives scheduling, retry eligibility, completion, and failure semantics
+    /// - It is shared across local execution and distributed Redis/Lua coordination
     ///
     /// IMPORTANT:
-    /// This object intentionally stores only durable runtime state.
-    /// Computed helper properties are marked with <see cref="JsonIgnoreAttribute"/>
-    /// so they do not pollute persisted JSON payloads.
+    /// - This model stores durable execution state only
+    /// - Distributed retry behavior must be derived from this object
+    /// - Local in-process attempt tracking must not replace or override this state
+    ///
+    /// DESIGN:
+    /// - Each step is uniquely identified by <see cref="StepName"/>
+    /// - State transitions should remain deterministic and monotonic
+    /// - Computed helper properties are excluded from persistence
     /// </summary>
     public sealed class AiStepState
     {
@@ -24,8 +28,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Gets or sets the unique step instance name.
-        /// This is the logical identity of the step inside the pipeline execution.
+        /// Gets or sets the unique logical name of the step within the pipeline execution.
         /// </summary>
         public string StepName { get; set; } = string.Empty;
 
@@ -34,13 +37,18 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Gets or sets the current execution lifecycle status of the step.
+        /// Gets or sets the current lifecycle status of the step.
         ///
-        /// This is the primary driver for:
+        /// This is the primary state used for:
         /// - DAG readiness selection
-        /// - retry eligibility
-        /// - completion and failure semantics
-        /// - distributed claim recovery
+        /// - retry scheduling
+        /// - completion and failure transitions
+        /// - distributed claim ownership and recovery
+        ///
+        /// Typical lifecycle:
+        /// None -> Ready -> Running -> Completed
+        ///                      -> WaitingForRetry -> Ready -> Running
+        ///                      -> Failed
         /// </summary>
         public AiStepExecutionStatus Status { get; set; } = AiStepExecutionStatus.None;
 
@@ -49,7 +57,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Gets or sets the list of prerequisite step names that must complete
+        /// Gets or sets the list of prerequisite step names that must be completed
         /// before this step becomes eligible for execution.
         /// </summary>
         public List<string> DependsOn { get; set; } = new();
@@ -59,20 +67,20 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Gets or sets the worker identifier that currently owns this step claim.
+        /// Gets or sets the identifier of the worker that currently owns this step claim.
         /// Null when the step is not currently claimed.
         /// </summary>
         public string? ClaimedBy { get; set; }
 
         /// <summary>
         /// Gets or sets the unique claim token used to validate ownership
-        /// for distributed completion and failure operations.
+        /// during distributed completion and failure operations.
         /// </summary>
         public string? ClaimToken { get; set; }
 
         /// <summary>
         /// Gets or sets the UTC timestamp at which the step was claimed.
-        /// Used for timeout recovery in distributed execution.
+        /// Used for timeout detection and distributed recovery.
         /// </summary>
         public DateTime? ClaimedAtUtc { get; set; }
 
@@ -82,7 +90,10 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the UTC timestamp when execution first started for this step.
-        /// This is preserved across retries once set.
+        ///
+        /// IMPORTANT:
+        /// - This value is preserved across retries once set
+        /// - It represents the first logical start of the step lifecycle
         /// </summary>
         public DateTime? StartedAtUtc { get; set; }
 
@@ -93,11 +104,12 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the UTC timestamp when the step reached a terminal state.
+        /// Terminal states are typically Completed or Failed.
         /// </summary>
         public DateTime? CompletedAtUtc { get; set; }
 
         /// <summary>
-        /// Gets or sets the total execution duration when the step reaches a terminal state.
+        /// Gets or sets the total execution duration once the step reaches a terminal state.
         /// </summary>
         public TimeSpan? Duration { get; set; }
 
@@ -107,49 +119,68 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the last error message associated with the step.
+        ///
         /// This may represent either:
-        /// - a retryable failure
+        /// - a retryable business failure
         /// - a terminal failure
         /// </summary>
         public string? Error { get; set; }
 
         /// <summary>
-        /// Gets or sets the business retry count.
+        /// Gets or sets the number of business retry attempts already scheduled
+        /// after the initial execution attempt.
         ///
-        /// This counter is incremented when the step execution itself fails
-        /// and retry policy decides to schedule another attempt.
+        /// SEMANTICS:
+        /// - The initial execution attempt is not counted here
+        /// - This counter is incremented only when a failed execution is promoted
+        ///   into <see cref="AiStepExecutionStatus.WaitingForRetry"/>
+        /// - Infrastructure timeout recovery does not modify this counter
+        ///
+        /// EXAMPLE:
+        /// - RetryCount = 0 -> no retry scheduled yet
+        /// - RetryCount = 1 -> one retry has already been scheduled
         /// </summary>
         public int RetryCount { get; set; }
 
         /// <summary>
-        /// Gets or sets the infrastructure recovery count.
+        /// Gets or sets the number of infrastructure recovery operations.
         ///
         /// This counter is incremented when a distributed running claim is recovered
         /// after timeout or worker loss.
         ///
         /// IMPORTANT:
-        /// This is intentionally separate from <see cref="RetryCount"/>
-        /// so infrastructure recovery does not consume business retry budget.
+        /// - This is intentionally separate from <see cref="RetryCount"/>
+        /// - Infrastructure recovery must not consume business retry budget
         /// </summary>
         public int RecoveryCount { get; set; }
 
         /// <summary>
-        /// Gets or sets the maximum allowed number of business retries.
+        /// Gets or sets the maximum number of business retry attempts allowed
+        /// after the initial execution attempt.
+        ///
+        /// EXAMPLE:
+        /// - MaxRetries = 0 -> no retry after the first failure
+        /// - MaxRetries = 1 -> one retry after the first failure
+        /// - MaxRetries = 2 -> two retries after the first failure
         /// </summary>
         public int MaxRetries { get; set; } = 3;
 
         /// <summary>
         /// Gets or sets the UTC timestamp when the next retry becomes eligible.
+        ///
         /// While this value is still in the future, the step must not be claimed again.
         /// </summary>
         public DateTime? NextRetryAtUtc { get; set; }
 
         /// <summary>
-        /// Gets or sets the retry delay applied when scheduling the next retry attempt.
-        /// If null, a default fallback delay is used by the runtime.
+        /// Gets or sets the retry delay in milliseconds used when scheduling the next retry attempt.
         /// </summary>
         public int RetryDelayMs { get; set; }
 
+        /// <summary>
+        /// Gets or sets the retry delay as a <see cref="TimeSpan"/>.
+        /// This is a convenience wrapper around <see cref="RetryDelayMs"/>.
+        /// </summary>
         [JsonIgnore]
         public TimeSpan RetryDelay
         {
@@ -159,6 +190,7 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the distributed claim timeout in seconds.
+        ///
         /// When exceeded, a running step may be recovered and requeued.
         /// </summary>
         public int? ClaimTimeoutSeconds { get; set; }
@@ -169,7 +201,7 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets the resolved runtime input values for this step instance.
-        /// These values are prepared during pipeline binding / resolution.
+        /// These values are prepared during pipeline binding and resolution.
         /// </summary>
         public Dictionary<string, object?> Inputs { get; set; } = new(StringComparer.Ordinal);
 
@@ -184,7 +216,7 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the final execution result of the step.
-        /// Populated when the step completes successfully.
+        /// This is populated when the step completes successfully.
         /// </summary>
         public AiStepResult? Result { get; set; }
 
@@ -194,7 +226,7 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Gets or sets the state version.
-        /// Used to support optimistic concurrency and Lua-based CAS semantics.
+        /// Used for optimistic concurrency and Lua-based CAS semantics.
         /// </summary>
         public long Version { get; set; }
 
@@ -230,7 +262,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// Marks the step as ready for execution.
         ///
         /// This clears any active distributed claim metadata but does not alter
-        /// retry counters. It is used both for initial readiness and for requeue scenarios.
+        /// retry counters. It is used both for initial readiness and requeue scenarios.
         /// </summary>
         public void MarkReady()
         {
@@ -243,7 +275,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Marks the step as running after a successful claim.
+        /// Marks the step as running after a successful distributed claim.
         ///
         /// In distributed mode, the supplied claim token is later used to validate
         /// ownership for completion and failure transitions.
@@ -321,7 +353,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as waiting for a future retry attempt.
         ///
-        /// This is a non-terminal transition used by retry-aware execution.
+        /// This is a non-terminal retry state.
+        /// While in this state, the step must not be claimed until <see cref="NextRetryAtUtc"/>
+        /// is reached or passed.
         /// </summary>
         public void MarkWaitingForRetry(string? error, DateTime nextRetryAtUtc)
         {
@@ -341,8 +375,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// Requeues a timed-out running step back to Ready.
         ///
         /// IMPORTANT:
-        /// This is an infrastructure recovery transition, not a business retry decision.
-        /// It increments <see cref="RecoveryCount"/> and does not consume business retry budget.
+        /// - This is an infrastructure recovery transition
+        /// - This is NOT a business retry decision
+        /// - <see cref="RecoveryCount"/> is incremented
+        /// - <see cref="RetryCount"/> is not modified
         /// </summary>
         public void MarkRequeuedAfterTimeout()
         {
@@ -381,11 +417,14 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Applies retry-or-fail semantics for a failed step attempt.
+        /// Applies retry-or-fail semantics for a failed step execution attempt.
         ///
-        /// Behavior:
-        /// - If retry budget remains, the step moves to WaitingForRetry
-        /// - Otherwise the step becomes terminally Failed
+        /// SEMANTICS:
+        /// - <see cref="RetryCount"/> tracks scheduled business retries only
+        /// - The initial execution attempt is not counted in <see cref="RetryCount"/>
+        /// - If <see cref="RetryCount"/> is still lower than <see cref="MaxRetries"/>,
+        ///   the step transitions to <see cref="AiStepExecutionStatus.WaitingForRetry"/>
+        /// - Otherwise the step becomes terminally <see cref="AiStepExecutionStatus.Failed"/>
         /// </summary>
         public void MarkRetryOrFail(string? error, DateTime utcNow)
         {
@@ -410,7 +449,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Gets a value indicating whether the step is completed successfully.
+        /// Gets a value indicating whether the step has completed successfully.
         ///
         /// This is a computed property and is intentionally excluded from persisted JSON.
         /// </summary>
@@ -444,6 +483,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Gets a value indicating whether the step is terminal.
         ///
+        /// A step is terminal when it is either Completed or Failed.
         /// This is a computed property and is intentionally excluded from persisted JSON.
         /// </summary>
         [JsonIgnore]
@@ -455,8 +495,8 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// Gets a value indicating whether the step is locally schedulable.
         ///
         /// NOTE:
-        /// This helper does not validate dependency satisfaction.
-        /// The selector must still validate DAG prerequisites separately.
+        /// - This helper does not validate dependency satisfaction
+        /// - The selector must still validate DAG prerequisites separately
         ///
         /// This is a computed property and is intentionally excluded from persisted JSON.
         /// </summary>

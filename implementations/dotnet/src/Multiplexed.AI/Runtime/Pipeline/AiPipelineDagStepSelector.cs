@@ -28,6 +28,11 @@ namespace Multiplexed.AI.Runtime.Pipeline
     /// </summary>
     public static class AiPipelineDagStepSelector
     {
+        /// <summary>
+        /// Selects all steps that are currently eligible for execution.
+        ///
+        /// The returned list is ordered deterministically using the resolved pipeline order.
+        /// </summary>
         public static IReadOnlyList<ResolvedAiPipelineStep> SelectReadySteps(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
@@ -53,6 +58,9 @@ namespace Multiplexed.AI.Runtime.Pipeline
             return readySteps;
         }
 
+        /// <summary>
+        /// Selects the next eligible step using deterministic pipeline order.
+        /// </summary>
         public static ResolvedAiPipelineStep? SelectNextReadyStep(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
@@ -61,6 +69,9 @@ namespace Multiplexed.AI.Runtime.Pipeline
             return SelectReadySteps(pipeline, state, utcNow).FirstOrDefault();
         }
 
+        /// <summary>
+        /// Determines whether all pipeline steps have completed successfully.
+        /// </summary>
         public static bool IsCompleted(
             ResolvedAiPipeline pipeline,
             AiExecutionState state)
@@ -81,6 +92,17 @@ namespace Multiplexed.AI.Runtime.Pipeline
             return true;
         }
 
+        /// <summary>
+        /// Determines whether a step is currently eligible for execution.
+        ///
+        /// ELIGIBILITY RULES:
+        /// - Completed steps are never eligible
+        /// - Terminally failed steps are never eligible
+        /// - Running steps are never eligible
+        /// - WaitingForRetry steps are eligible only when their retry window is due
+        /// - Non-schedulable statuses are excluded
+        /// - All declared dependencies must already be completed
+        /// </summary>
         private static bool IsStepEligible(
             AiStepState stepState,
             ResolvedAiPipelineStep step,
@@ -91,17 +113,22 @@ namespace Multiplexed.AI.Runtime.Pipeline
             ArgumentNullException.ThrowIfNull(step);
             ArgumentNullException.ThrowIfNull(state);
 
+            // Terminal success and terminal failure must never be selected again.
             if (stepState.Status == AiStepExecutionStatus.Completed ||
                 stepState.Status == AiStepExecutionStatus.Failed)
             {
                 return false;
             }
 
+            // A running step is already owned or executing and cannot be selected again.
             if (stepState.Status == AiStepExecutionStatus.Running)
             {
                 return false;
             }
 
+            // Retry-waiting steps remain explicitly non-runnable until their retry window opens.
+            // Once the retry time is due, the step is promoted back to Ready and may continue
+            // through normal schedulability and dependency checks.
             if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
             {
                 if (stepState.NextRetryAtUtc.HasValue &&
@@ -113,16 +140,21 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 stepState.PromoteRetryToReadyIfDue(utcNow);
             }
 
+            // Only schedulable states may continue.
+            // At this stage this typically means Ready or None.
             if (!stepState.IsSchedulable)
             {
                 return false;
             }
 
+            // Root nodes with no dependencies are immediately eligible once schedulable.
             if (step.DependsOn.Count == 0)
             {
                 return true;
             }
 
+            // DAG dependency rule:
+            // all upstream dependencies must already be completed.
             foreach (var dependencyName in step.DependsOn)
             {
                 var dependencyState = state.GetOrCreateStep(dependencyName);

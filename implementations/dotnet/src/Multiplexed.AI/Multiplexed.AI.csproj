@@ -23,5 +23,10 @@
 		    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 	    </Content>
     </ItemGroup>
+    <ItemGroup>
+      <Content Remove="Config\retry-budget-maxretries-0.json" />
+      <Content Remove="Config\retry-budget-maxretries-1.json" />
+      <Content Remove="Config\retry-budget-maxretries-2.json" />
+    </ItemGroup>
 
 </Project>

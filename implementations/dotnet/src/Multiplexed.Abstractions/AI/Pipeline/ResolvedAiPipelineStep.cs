@@ -71,7 +71,7 @@ namespace Multiplexed.Abstractions.AI.Pipeline
         /// This value is resolved from the declarative pipeline definition and carried
         /// forward so the runtime can initialize persisted retry state deterministically.
         /// </summary>
-        public int RetryMaxCount { get; init; }
+        public int MaxRetries { get; init; }
 
         /// <summary>
         /// Gets or sets the delay, in milliseconds, to wait before a failed step
@@ -91,6 +91,6 @@ namespace Multiplexed.Abstractions.AI.Pipeline
         /// <summary>
         /// Gets a value indicating whether this step declares retry behavior.
         /// </summary>
-        public bool HasRetryPolicy => RetryMaxCount > 0;
+        public bool HasRetryPolicy => MaxRetries > 0;
     }
 }

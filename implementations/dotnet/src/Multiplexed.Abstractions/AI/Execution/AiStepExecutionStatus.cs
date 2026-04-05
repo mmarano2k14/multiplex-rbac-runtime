@@ -29,12 +29,15 @@
         Completed = 3,
 
         /// <summary>
-        /// The step has failed.
+        /// The step has failed terminally and will not be retried again.
         /// </summary>
         Failed = 4,
 
         /// <summary>
-        /// The step has succeed.
+        /// The step has failed, but a retry is still allowed.
+        ///
+        /// While in this state, the step must not be executed again until
+        /// its retry window becomes due.
         /// </summary>
         WaitingForRetry = 5,
     }

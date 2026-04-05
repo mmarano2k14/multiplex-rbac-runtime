@@ -7,23 +7,31 @@ namespace Multiplexed.Abstractions.AI.Execution
     /// <summary>
     /// Represents a step-scoped execution context bound to a single resolved pipeline step.
     ///
-    /// This context is created after pipeline orchestration has selected the step to execute.
-    /// It provides:
-    /// - access to the global execution context
-    /// - access to the resolved step definition
-    /// - step-scoped input/config resolution
-    /// - cross-step path resolution through the underlying execution state
+    /// PURPOSE:
+    /// - Exposes the global execution context to one concrete resolved step
+    /// - Provides step-scoped access to state, inputs, configuration, and services
+    /// - Supports both sequential and DAG-based execution without relying on mutable global step pointers
     ///
-    /// This design avoids relying on global mutable metadata such as "CurrentStepName"
-    /// and enables safe sequential or DAG-based execution models.
+    /// DESIGN:
+    /// - This context is created only after orchestration has selected a step to execute
+    /// - It binds one <see cref="ResolvedAiPipelineStep"/> to one <see cref="AiExecutionContext"/>
+    /// - The current step state is always resolved through <see cref="StepName"/>
+    ///
+    /// IMPORTANT:
+    /// - This class does not own orchestration decisions
+    /// - It is a read/write execution helper for the selected step only
+    /// - Cross-step and global path resolution are delegated to the underlying execution context/state
     /// </summary>
     public sealed class AiStepExecutionContext
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepExecutionContext"/> class.
+        ///
+        /// During construction, the selected step is guaranteed to have
+        /// an initialized durable <see cref="AiStepState"/> entry.
         /// </summary>
-        /// <param name="execution">The global execution context.</param>
-        /// <param name="step">The resolved pipeline step bound to this execution scope.</param>
+        /// <param name="execution">The global execution context for the current pipeline execution.</param>
+        /// <param name="step">The resolved pipeline step bound to this context.</param>
         public AiStepExecutionContext(
             AiExecutionContext execution,
             ResolvedAiPipelineStep step)
@@ -33,39 +41,48 @@ namespace Multiplexed.Abstractions.AI.Execution
             ArgumentException.ThrowIfNullOrWhiteSpace(step.Name);
 
             Execution = execution;
-
             Step = step;
 
+            // Ensure durable step state exists for this resolved step.
             Execution.State.EnsureStepInitialized(step);
         }
 
         /// <summary>
         /// Gets the global execution context.
+        ///
+        /// This gives access to shared execution state, services, bindings,
+        /// and cross-step path resolution.
         /// </summary>
         public AiExecutionContext Execution { get; }
 
         /// <summary>
         /// Gets the resolved pipeline step bound to this context.
+        ///
+        /// This is the orchestration-selected step instance being executed.
         /// </summary>
         public ResolvedAiPipelineStep Step { get; }
 
         /// <summary>
-        /// Gets the persisted orchestration record.
+        /// Gets the persisted execution record.
+        ///
+        /// This is the global orchestration summary, not the per-step source of truth.
         /// </summary>
         public AiExecutionRecord Record => Execution.Record;
 
         /// <summary>
         /// Gets the mutable execution state.
+        ///
+        /// This contains durable step state, shared state values, inputs, and config.
         /// </summary>
         public AiExecutionState State => Execution.State;
 
         /// <summary>
-        /// Gets the scoped service provider.
+        /// Gets the scoped service provider available to the current execution.
         /// </summary>
         public IServiceProvider Services => Execution.Services;
 
         /// <summary>
-        /// Gets the active cancellation token.
+        /// Gets the active cancellation token for the current execution scope.
         /// </summary>
         public CancellationToken CancellationToken => Execution.CancellationToken;
 
@@ -75,18 +92,23 @@ namespace Multiplexed.Abstractions.AI.Execution
         public string ExecutionId => Execution.ExecutionId;
 
         /// <summary>
-        /// Gets the unique step instance name inside the pipeline.
+        /// Gets the logical step instance name inside the pipeline.
+        ///
+        /// This is the durable identity used to resolve <see cref="StepState"/>.
         /// </summary>
         public string StepName => Step.Name;
 
         /// <summary>
-        /// Gets the step registry key / type key.
+        /// Gets the step registry key / implementation key.
+        ///
+        /// This identifies the step type or implementation resolved by the registry.
         /// </summary>
         public string StepKey => Step.StepKey;
 
         /// <summary>
-        /// Gets the mutable state for the current step instance.
-        /// Creates it when missing.
+        /// Gets the durable mutable state for the current step instance.
+        ///
+        /// If the step state does not exist yet, it is created automatically.
         /// </summary>
         public AiStepState StepState => State.GetOrCreateStep(StepName);
 
@@ -95,8 +117,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Retrieves a raw input value from the current step state.
-        /// This method performs a direct key lookup only.
+        /// Retrieves a raw input value from the current step state using a direct key lookup.
+        ///
+        /// This method does not perform nested path traversal.
         /// </summary>
         public T? GetCurrentStepInputValue<T>(string key)
         {
@@ -105,8 +128,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a raw input value from the current step state.
-        /// This method performs a direct key lookup only.
+        /// Attempts to retrieve a raw input value from the current step state using a direct key lookup.
+        ///
+        /// This method does not perform nested path traversal.
         /// </summary>
         public bool TryGetCurrentStepInputValue<T>(string key, out T? value)
         {
@@ -116,6 +140,9 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Resolves a nested input value from the current step state using a dot-separated path.
+        ///
+        /// Example:
+        /// <c>customer.address.city</c>
         /// </summary>
         public T? ResolveCurrentStepInput<T>(string path)
         {
@@ -140,8 +167,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ---------------------------------------------------------------------
 
         /// <summary>
-        /// Retrieves a raw configuration value from the current step state.
-        /// This method performs a direct key lookup only.
+        /// Retrieves a raw configuration value from the current step state using a direct key lookup.
+        ///
+        /// This method does not perform nested path traversal.
         /// </summary>
         public T? GetCurrentStepConfigValue<T>(string key)
         {
@@ -150,8 +178,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a raw configuration value from the current step state.
-        /// This method performs a direct key lookup only.
+        /// Attempts to retrieve a raw configuration value from the current step state using a direct key lookup.
+        ///
+        /// This method does not perform nested path traversal.
         /// </summary>
         public bool TryGetCurrentStepConfigValue<T>(string key, out T? value)
         {
@@ -161,6 +190,9 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Resolves a nested configuration value from the current step state using a dot-separated path.
+        ///
+        /// Example:
+        /// <c>retry.policy.delayMs</c>
         /// </summary>
         public T? ResolveCurrentStepConfig<T>(string path)
         {
@@ -184,13 +216,25 @@ namespace Multiplexed.Abstractions.AI.Execution
         // COMPATIBILITY HELPERS
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// Compatibility alias for <see cref="GetCurrentStepInputValue{T}(string)"/>.
+        /// </summary>
         public T? GetStepInputValue<T>(string key) => GetCurrentStepInputValue<T>(key);
 
+        /// <summary>
+        /// Compatibility alias for <see cref="TryGetCurrentStepInputValue{T}(string, out T?)"/>.
+        /// </summary>
         public bool TryGetStepInputValue<T>(string key, out T? value) =>
             TryGetCurrentStepInputValue(key, out value);
 
+        /// <summary>
+        /// Compatibility alias for <see cref="GetCurrentStepConfigValue{T}(string)"/>.
+        /// </summary>
         public T? GetStepConfigValue<T>(string key) => GetCurrentStepConfigValue<T>(key);
 
+        /// <summary>
+        /// Compatibility alias for <see cref="TryGetCurrentStepConfigValue{T}(string, out T?)"/>.
+        /// </summary>
         public bool TryGetStepConfigValue<T>(string key, out T? value) =>
             TryGetCurrentStepConfigValue(key, out value);
 
@@ -201,12 +245,14 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Resolves a named input binding from the current step state.
         ///
+        /// The stored step input is treated as a structured path and resolved against execution state.
+        ///
         /// Supported path formats:
-        /// - steps.{stepName}.inputs.{path}
-        /// - steps.{stepName}.config.{path}
-        /// - steps.{stepName}.result.value
-        /// - steps.{stepName}.result.data.{path}
-        /// - state.{path}
+        /// - <c>steps.{stepName}.inputs.{path}</c>
+        /// - <c>steps.{stepName}.config.{path}</c>
+        /// - <c>steps.{stepName}.result.value</c>
+        /// - <c>steps.{stepName}.result.data.{path}</c>
+        /// - <c>state.{path}</c>
         /// </summary>
         public T? ResolveInputBinding<T>(string inputName)
         {
@@ -240,6 +286,8 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Resolves a named configuration binding from the current step state.
+        ///
+        /// The stored configuration entry is treated as a structured path and resolved against execution state.
         /// </summary>
         public T? ResolveConfigBinding<T>(string configName)
         {
@@ -277,6 +325,8 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Resolves a structured path against the execution state.
+        ///
+        /// This is the main entry point for cross-step and global binding resolution.
         /// </summary>
         public T? ResolvePath<T>(string path)
         {
@@ -292,7 +342,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Retrieves a configuration value from a specific step.
+        /// Retrieves a configuration value from a specific step by direct key lookup.
         /// </summary>
         public T? GetStepConfig<T>(string stepName, string key)
         {
@@ -300,7 +350,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a configuration value from a specific step.
+        /// Attempts to retrieve a configuration value from a specific step by direct key lookup.
         /// </summary>
         public bool TryGetStepConfig<T>(string stepName, string key, out T? value)
         {
@@ -319,6 +369,19 @@ namespace Multiplexed.Abstractions.AI.Execution
         // INTERNAL HELPERS
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// Attempts to resolve a nested value from a source object using a dot-separated path.
+        ///
+        /// Supported source types:
+        /// - <see cref="IDictionary{TKey,TValue}"/>
+        /// - <see cref="IReadOnlyDictionary{TKey,TValue}"/>
+        /// - <see cref="JsonElement"/> objects
+        ///
+        /// Conversion behavior:
+        /// - If the final value already matches <typeparamref name="T"/>, it is returned directly
+        /// - If the final value is a <see cref="JsonElement"/>, JSON deserialization is attempted
+        /// - Otherwise <see cref="Convert.ChangeType(object, Type)"/> is attempted
+        /// </summary>
         private static bool TryResolveNestedValue<T>(
             object? source,
             string path,

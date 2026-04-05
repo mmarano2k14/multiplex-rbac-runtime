@@ -9,65 +9,78 @@ namespace Multiplexed.Abstractions.AI.Execution
     /// <summary>
     /// Represents the mutable working state of an AI execution.
     ///
-    /// This object is the central data exchange layer between pipeline steps.
-    /// It is intentionally separated from <see cref="AiExecutionRecord"/> to isolate:
-    /// 
-    /// - Orchestration metadata (lifecycle, steps, status)
-    /// - Execution payload (data flowing through the pipeline)
+    /// PURPOSE:
+    /// - Stores the mutable runtime payload exchanged across the execution
+    /// - Holds durable step-scoped state for orchestration and execution
+    /// - Separates working state from <see cref="AiExecutionRecord"/>, which remains
+    ///   the orchestration summary and lifecycle projection
     ///
-    /// This separation enables:
-    /// - Safe persistence (e.g. Redis, database)
-    /// - Replay and recovery scenarios
-    /// - Distributed execution models
+    /// DESIGN:
+    /// - <see cref="Data"/> is the legacy shared execution bag
+    /// - <see cref="Steps"/> contains durable per-step state and is the source of truth
+    ///   for step-scoped execution and DAG orchestration
+    /// - <see cref="Metadata"/> stores technical/runtime hints and diagnostics,
+    ///   not business-critical pipeline payload
     ///
-    /// Migration note:
-    /// - Legacy shared bag access is still available for compatibility
-    /// - New step-scoped state is exposed through <see cref="Steps"/>
+    /// IMPORTANT:
+    /// - This object is intended to be safely persisted and restored
+    /// - It supports replay, recovery, and distributed execution scenarios
+    /// - Newer runtime flows should prefer step-scoped state over the legacy shared bag
     /// </summary>
     public sealed class AiExecutionState
     {
         /// <summary>
-        /// Unique identifier of the execution state.
-        /// Typically matches the parent execution identifier.
+        /// Gets or sets the unique identifier of the execution state.
+        ///
+        /// This typically matches the parent execution identifier.
         /// </summary>
         public string ExecutionId { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
         /// Gets or sets the optional pipeline name associated with this execution state.
-        /// This value identifies the workflow definition used to resolve
-        /// the executable runtime pipeline.
+        ///
+        /// This identifies the workflow definition used to resolve the executable runtime pipeline.
         /// </summary>
         public string? PipelineName { get; set; }
 
         /// <summary>
-        /// Shared execution data exchanged between steps.
+        /// Gets or sets the legacy shared execution data bag.
         ///
-        /// This is the legacy primary data bag used by the pipeline.
-        /// Keys should remain stable across steps.
+        /// PURPOSE:
+        /// - Stores global execution data exchanged across steps
+        /// - Preserved for compatibility with older runtime flows
+        ///
+        /// IMPORTANT:
+        /// - Keys should remain stable across steps
+        /// - Newer step-aware flows should prefer <see cref="Steps"/> when possible
         /// </summary>
         public Dictionary<string, object?> Data { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// Gets or sets the structured state of pipeline steps.
-        /// Each step keeps its own resolved inputs and produced outputs.
+        /// Gets or sets the durable per-step runtime state.
+        ///
+        /// Each entry is keyed by logical step name and contains the mutable execution
+        /// state for that step, including inputs, config, result, retry state, and status.
         /// </summary>
         public Dictionary<string, AiStepState> Steps { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// Additional execution metadata used for diagnostics, tracing,
+        /// Gets or sets additional execution metadata used for diagnostics, tracing,
         /// orchestration hints, or transport-related concerns.
         ///
-        /// This should not contain business-critical data required by steps.
+        /// IMPORTANT:
+        /// - This bag is intended for technical/runtime metadata
+        /// - It should not contain business-critical pipeline payload
         /// </summary>
         public Dictionary<string, object?> Metadata { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// UTC timestamp indicating when the execution state was created.
+        /// Gets or sets the UTC timestamp indicating when the execution state was created.
         /// </summary>
         public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
         /// <summary>
-        /// UTC timestamp indicating the last time the state was updated.
+        /// Gets or sets the UTC timestamp indicating the last time the execution state was updated.
         /// </summary>
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -78,11 +91,12 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Retrieves a strongly-typed value from the legacy shared execution data bag.
         ///
-        /// Returns <c>default</c> if the key does not exist or the value is null.
-        /// Throws if the stored value cannot be cast to the requested type.
+        /// Behavior:
+        /// - Returns <c>default</c> if the key does not exist
+        /// - Returns <c>default</c> if the stored value is null
+        /// - Throws if the stored value exists but cannot be converted to the requested type
         ///
-        /// Also supports values restored from JSON persistence layers
-        /// as <see cref="JsonElement"/>.
+        /// Also supports values restored from JSON persistence layers as <see cref="JsonElement"/>.
         /// </summary>
         public T? Get<T>(string key)
         {
@@ -92,7 +106,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Stores or replaces a value in the legacy shared execution data bag.
         ///
-        /// Updates the <see cref="UpdatedAtUtc"/> timestamp.
+        /// Updates <see cref="UpdatedAtUtc"/>.
         /// </summary>
         public void Set<T>(string key, T value)
         {
@@ -103,9 +117,12 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Attempts to retrieve a strongly-typed value from the legacy shared execution data bag.
         ///
-        /// Returns true if the key exists and the value matches the expected type.
-        /// Also supports values restored from JSON persistence layers
-        /// as <see cref="JsonElement"/>.
+        /// Behavior:
+        /// - Returns <c>true</c> when the key exists and the value can be converted
+        /// - Returns <c>true</c> with <c>default</c> when the key exists but the stored value is null
+        /// - Returns <c>false</c> when the key does not exist or conversion fails
+        ///
+        /// Also supports values restored from JSON persistence layers as <see cref="JsonElement"/>.
         /// </summary>
         public bool TryGet<T>(string key, out T? value)
         {
@@ -120,7 +137,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Removes a value from the legacy shared execution data bag if it exists.
         ///
-        /// Updates the <see cref="UpdatedAtUtc"/> timestamp if removal succeeds.
+        /// Updates <see cref="UpdatedAtUtc"/> when removal succeeds.
         /// </summary>
         public void Remove(string key)
         {
@@ -128,22 +145,22 @@ namespace Multiplexed.Abstractions.AI.Execution
                 UpdatedAtUtc = DateTime.UtcNow;
         }
 
-
         /// <summary>
-        /// Applies the step definition to the execution state by initializing
+        /// Applies a resolved step definition to the execution state by initializing
         /// or updating the corresponding <see cref="AiStepState"/>.
         ///
         /// This method:
-        /// - Ensures the step state exists
-        /// - Sets or replaces Inputs and Config from the definition
+        /// - Ensures the durable step state exists
+        /// - Copies resolved Inputs and Config into runtime state
+        /// - Applies resolved retry policy values
         /// - Updates timestamps for traceability
         ///
-        /// Notes:
-        /// - This does NOT execute the step
-        /// - This does NOT set the Result
-        /// - Inputs/Config are considered runtime-ready copies of the definition
+        /// IMPORTANT:
+        /// - This does not execute the step
+        /// - This does not set the step result
+        /// - Inputs and Config are treated as runtime-ready copies of the resolved step definition
         /// </summary>
-        /// <param name="stepDefinition">The pipeline step definition.</param>
+        /// <param name="stepDefinition">The resolved pipeline step definition.</param>
         private void ApplyStepDefinition(ResolvedAiPipelineStep stepDefinition)
         {
             ArgumentNullException.ThrowIfNull(stepDefinition);
@@ -162,10 +179,10 @@ namespace Multiplexed.Abstractions.AI.Execution
             stepState.SetInputs(stepDefinition.Input);
             stepState.SetConfig(stepDefinition.Config);
 
-            // Apply resolved retry policy to runtime state.
+            // Apply resolved retry policy to durable runtime state.
             // These values come from the resolved step, so defaults have already been applied
-            // by the resolver when the definition did not explicitly configure retry behavior.
-            stepState.MaxRetries = stepDefinition.RetryMaxCount;
+            // by pipeline resolution when the definition did not explicitly configure retry.
+            stepState.MaxRetries = stepDefinition.MaxRetries;
             stepState.RetryDelay = TimeSpan.FromMilliseconds(stepDefinition.RetryDelayMs);
 
             stepState.UpdatedAtUtc = DateTime.UtcNow;
@@ -175,16 +192,16 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Ensures that a step is initialized in the execution state.
         ///
-        /// This method:
-        /// - Checks whether a step state already exists for the given definition
-        /// - Creates and initializes it using <see cref="ApplyStepDefinition"/> if missing
+        /// Behavior:
+        /// - If the step does not exist, it is created and initialized from the resolved definition
+        /// - If the step already exists, it is preserved as-is
         ///
-        /// Notes:
-        /// - This method is idempotent: calling it multiple times will not override existing state
-        /// - Existing step data (including Result, Inputs, Config) is preserved
-        /// - Use this during pipeline initialization or DAG preparation phases
+        /// IMPORTANT:
+        /// - This method is intentionally idempotent
+        /// - Existing runtime data such as result, inputs, config, or retry state is not overwritten
+        /// - Use this during pipeline preparation, binding, or DAG initialization
         /// </summary>
-        /// <param name="stepDefinition">The pipeline step definition.</param>
+        /// <param name="stepDefinition">The resolved pipeline step definition.</param>
         public void EnsureStepInitialized(ResolvedAiPipelineStep stepDefinition)
         {
             ArgumentNullException.ThrowIfNull(stepDefinition);
@@ -196,7 +213,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Gets the existing step state or creates a new one when missing.
+        /// Gets the existing durable step state or creates a new one when missing.
+        ///
+        /// This helper is useful when orchestration needs to inspect or mutate step state
+        /// without requiring a full resolved pipeline step definition.
         /// </summary>
         public AiStepState GetOrCreateStep(string stepName)
         {
@@ -218,7 +238,8 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Retrieves a strongly-typed resolved input value for the specified step.
-        /// Returns default if the step or key does not exist.
+        ///
+        /// Returns <c>default</c> when the step or key does not exist.
         /// </summary>
         public T? GetStepInput<T>(string stepName, string key)
         {
@@ -232,8 +253,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a strongly-typed resolved input value
-        /// for the specified step.
+        /// Attempts to retrieve a strongly-typed resolved input value for the specified step.
         /// </summary>
         public bool TryGetStepInput<T>(string stepName, string key, out T? value)
         {
@@ -255,7 +275,8 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Retrieves a strongly-typed configuration value for the specified step.
-        /// Returns default if the step or key does not exist.
+        ///
+        /// Returns <c>default</c> when the step or key does not exist.
         /// </summary>
         public T? GetStepConfig<T>(string stepName, string key)
         {
@@ -272,8 +293,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a strongly-typed configuration value
-        /// for the specified step.
+        /// Attempts to retrieve a strongly-typed configuration value for the specified step.
         /// </summary>
         public bool TryGetStepConfig<T>(string stepName, string key, out T? value)
         {
@@ -302,13 +322,12 @@ namespace Multiplexed.Abstractions.AI.Execution
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Retrieves a strongly-typed value from the execution metadata.
+        /// Retrieves a strongly-typed value from the execution metadata bag.
         ///
-        /// Returns <c>default</c> if the key does not exist or the value is null.
-        /// Throws if the stored value cannot be cast to the requested type.
+        /// Returns <c>default</c> when the key does not exist or the stored value is null.
+        /// Throws when a present value cannot be converted to the requested type.
         ///
-        /// Also supports values restored from JSON persistence layers
-        /// as <see cref="JsonElement"/>.
+        /// Also supports values restored from JSON persistence layers as <see cref="JsonElement"/>.
         /// </summary>
         public T? GetMetadata<T>(string key)
         {
@@ -316,9 +335,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Stores or replaces a value in the execution metadata.
+        /// Stores or replaces a value in the execution metadata bag.
         ///
-        /// Updates the <see cref="UpdatedAtUtc"/> timestamp.
+        /// Updates <see cref="UpdatedAtUtc"/>.
         /// </summary>
         public void SetMetadata<T>(string key, T value)
         {
@@ -327,11 +346,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Attempts to retrieve a strongly-typed value from the execution metadata.
+        /// Attempts to retrieve a strongly-typed value from the execution metadata bag.
         ///
-        /// Returns true if the key exists and the value matches the expected type.
-        /// Also supports values restored from JSON persistence layers
-        /// as <see cref="JsonElement"/>.
+        /// Also supports values restored from JSON persistence layers as <see cref="JsonElement"/>.
         /// </summary>
         public bool TryGetMetadata<T>(string key, out T? value)
         {
@@ -339,14 +356,14 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         /// <summary>
-        /// Determines whether a key exists in the execution metadata.
+        /// Determines whether a key exists in the execution metadata bag.
         /// </summary>
         public bool ContainsMetadata(string key) => Metadata.ContainsKey(key);
 
         /// <summary>
-        /// Removes a value from the execution metadata if it exists.
+        /// Removes a value from the execution metadata bag if it exists.
         ///
-        /// Updates the <see cref="UpdatedAtUtc"/> timestamp if removal succeeds.
+        /// Updates <see cref="UpdatedAtUtc"/> when removal succeeds.
         /// </summary>
         public void RemoveMetadata(string key)
         {
@@ -356,7 +373,8 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Sets or replaces the execution result for the specified step.
-        /// Throws if the step is not initialized in the dictionary.
+        ///
+        /// Throws when the step has not been initialized.
         /// </summary>
         /// <param name="stepName">The unique step name.</param>
         /// <param name="result">The execution result produced by the step.</param>
@@ -456,9 +474,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Converts a JSON-backed value into the requested target type.
         ///
-        /// This is required when execution state is restored from persistence
-        /// layers such as Redis, because <see cref="System.Text.Json"/> deserializes
-        /// <c>object</c>-based dictionary values as <see cref="JsonElement"/>.
+        /// This is required when execution state is restored from persistence layers
+        /// such as Redis, because <see cref="System.Text.Json"/> deserializes
+        /// object-based dictionary values as <see cref="JsonElement"/>.
         /// </summary>
         private static T? ConvertJsonElement<T>(
             string key,

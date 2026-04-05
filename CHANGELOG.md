@@ -6,6 +6,70 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.3] - 2026-04-06
+
+### Added
+
+- Introduced deterministic distributed retry engine for DAG execution
+- Added execution-level retry configuration (`MaxRetries`, `RetryDelayMs`)
+- Introduced `WaitingForRetry` as a non-terminal step lifecycle state
+- Added retry-aware DAG step selector with time-based eligibility
+- Implemented retry window scheduling using `NextRetryAtUtc`
+- Added multi-worker safe retry reclaim logic
+- Introduced convergence-safe retry handling in global execution evaluator
+
+### Changed
+
+- Refactored pipeline step definition to support execution-level configuration
+- Updated step state model to include retry lifecycle metadata
+- Improved DAG convergence evaluation to prevent premature failure during retry windows
+- Enhanced selector logic to support retry promotion and dependency validation
+
+### Fixed
+
+- Prevented double retry consumption under concurrent worker execution
+- Fixed premature terminal failure when retryable steps were still pending
+- Ensured retry count is incremented only once per scheduled retry window
+- Corrected retry eligibility logic based on deterministic time evaluation
+
+### Tests
+
+- Added retry budget validation tests (0, 1, 2 retries)
+- Added selector tests for retry timing and eligibility
+- Added convergence tests ensuring non-terminal retry behavior
+- Added multi-worker retry reclaim tests to validate distributed safety
+
+### Guarantees
+
+- Deterministic retry behavior across distributed workers
+- No duplicate retry execution under concurrency
+- No premature failure during retry windows
+- Convergence-safe execution state projection
+
+---
+
+## [1.0.2.2] - 2026-04-04
+
+### Added
+- Introduced convergence hardening for distributed DAG execution engine
+- Added dedicated convergence test suite validating retry-aware execution behavior
+- Introduced shared test step and tracker for deterministic retry validation across integration tests
+
+### Changed
+- Improved global execution convergence evaluation to ensure deterministic final state projection
+- Strengthened terminal finalization rules:
+  - Execution can only finalize when no steps are Running, Ready, or WaitingForRetry
+  - Failed state is only reached when no forward progress is possible
+  - Completed state requires all steps to be fully completed with no active claims
+- Updated Redis DAG execution store to enforce strict convergence validation before finalization
+- Refactored integration test setup to use shared top-level retry test components instead of nested types
+
+### Fixed
+- Fixed DI resolution issues caused by nested test step types during assembly scanning
+- Ensured consistent step resolution across multiple integration test suites
+
+---
+
 ## [1.0.2.1] - 2026-03-31
 
 ### ✨ Added
@@ -34,6 +98,10 @@ This project follows a deterministic runtime and observability model designed fo
 - Standardized step lifecycle transitions to include retry and recovery phases
 - Enhanced distributed coordination to prevent premature or duplicate step execution
 - Strengthened separation between execution-level state and step-level state as source of truth
+
+### Removed
+- Removed unused legacy `RedisAiDagStepLifecycleScripts`
+- Deleted obsolete single-document Redis DAG Lua lifecycle model that was no longer aligned with the current distributed execution store
 
 ---
 

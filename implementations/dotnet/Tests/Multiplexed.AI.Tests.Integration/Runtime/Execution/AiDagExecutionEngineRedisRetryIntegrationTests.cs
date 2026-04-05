@@ -402,8 +402,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                         StepKey = "fail-once-then-succeed",
                         Order = 1,
                         DependsOn = [],
-                        RetryDelayMs = 1000,
-                        MaxRetries = 2,
+                        Execution = new AiPipelineStepExecutionDefinition  {
+                            RetryDelayMs = 1000,
+                            MaxRetries = 2,
+                        },
+              
                     }
                 ]
             });
@@ -421,8 +424,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                         StepKey = "fail-once-then-succeed",
                         Order = 1,
                         DependsOn = [],
-                        RetryDelayMs = 500,
-                        MaxRetries = 1,
+                        Execution = new AiPipelineStepExecutionDefinition  {
+                            RetryDelayMs = 500,
+                            MaxRetries = 1,
+                        }
                     }
                 ]
             });
@@ -440,8 +445,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                         StepKey = "always-fail",
                         Order = 1,
                         DependsOn = [],
-                        RetryDelayMs = 1000,
-                        MaxRetries = 3
+                        Execution = new AiPipelineStepExecutionDefinition  {
+                            RetryDelayMs = 1000,
+                            MaxRetries = 3
+                        }
                     }
                 ]
             });

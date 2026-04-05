@@ -10,24 +10,40 @@ using System.Reflection;
 namespace Multiplexed.AI.Runtime.Pipeline.Retry
 {
     /// <summary>
-    /// Executes individual AI steps using attribute-driven retry behavior,
-    /// minimal idempotency, and execution metadata tracking.
+    /// Executes a single resolved AI step with local, in-process retry behavior.
     ///
-    /// Responsibilities:
-    /// - Read retry configuration from <see cref="AiRetryPolicyAttribute"/>
-    /// - Classify retryable exceptions
-    /// - Track execution metadata per step
-    /// - Prevent re-execution of already completed steps
-    /// - Emit structured runtime events for observability
+    /// PURPOSE:
+    /// - Reads retry intent from <see cref="AiRetryPolicyAttribute"/>
+    /// - Classifies retryable exceptions using <see cref="IAiRetryExceptionClassifier"/>
+    /// - Tracks local execution attempts through <see cref="AiStepExecutionMetadata"/>
+    /// - Prevents re-execution of steps already marked as completed in local metadata
+    /// - Emits structured execution events for observability
     ///
-    /// This class is intentionally focused on the execution of a single step.
-    /// It does not own workflow orchestration or persistence orchestration.
+    /// IMPORTANT:
+    /// - This class is scoped to execution of ONE resolved step
+    /// - It does not own pipeline orchestration
+    /// - It does not own distributed retry coordination
+    /// - Durable DAG retry state remains owned by <see cref="AiStepState"/> and the execution store
+    ///
+    /// SEMANTICS:
+    /// - <see cref="AiStepExecutionMetadata.AttemptCount"/> counts local in-process attempts
+    /// - It is NOT equivalent to distributed <see cref="AiStepState.RetryCount"/>
+    /// - This executor may retry inside the same process before control returns to orchestration
     /// </summary>
     public sealed class AiStepExecutor : IAiStepExecutor
     {
         private readonly IAiRetryExceptionClassifier _exceptionClassifier;
         private readonly IAiRuntimeLogger _logger;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
+        /// </summary>
+        /// <param name="exceptionClassifier">
+        /// Classifies exceptions to determine whether they are retryable.
+        /// </param>
+        /// <param name="logger">
+        /// Runtime logger used to emit structured step execution events.
+        /// </param>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
             IAiRuntimeLogger logger)
@@ -40,12 +56,25 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Executes the specified step using retry behavior declared by attribute.
+        /// Executes the specified resolved step using local attribute-driven retry behavior.
+        ///
+        /// FLOW:
+        /// - Resolve retry policy from the concrete step type
+        /// - Load or create local step execution metadata
+        /// - Skip execution if local metadata already marks the step as completed
+        /// - Execute the step
+        /// - Retry locally when policy allows and the exception is retryable
+        /// - Return the final <see cref="AiStepResult"/> or rethrow the terminal exception
+        ///
+        /// IMPORTANT:
+        /// - This method performs only local retry within the current process
+        /// - It does not schedule durable DAG retry windows
+        /// - It does not mutate distributed retry counters in <see cref="AiStepState"/>
         /// </summary>
         public async Task<AiStepResult> ExecuteAsync(
-    ResolvedAiPipelineStep resolvedStep,
-    AiStepExecutionContext context,
-    CancellationToken cancellationToken = default)
+            ResolvedAiPipelineStep resolvedStep,
+            AiStepExecutionContext context,
+            CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(resolvedStep);
             ArgumentNullException.ThrowIfNull(resolvedStep.Step);
@@ -53,17 +82,24 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
 
             var stepType = resolvedStep.Step.GetType();
 
-            // 🔥 STRONG IDENTITY (support test + runtime)
+            // Primary runtime identity comes from the resolved pipeline step name.
+            // Fallback type name support is kept for compatibility with tests or
+            // older metadata that may have used the concrete type name instead.
             var stepName = resolvedStep.Name;
             var fallbackStepName = stepType.Name;
 
             var retryPolicy = stepType.GetCustomAttribute<AiRetryPolicyAttribute>(inherit: true);
 
-            // 🔥 Try both keys (VERY IMPORTANT)
+            // Attempt to reuse existing local step execution metadata.
+            // We first try the resolved logical step name, then the fallback type name
+            // for compatibility with older or test-oriented metadata keys.
             var metadata =
                 TryGetStepMetadata(context.State, stepName)
                 ?? TryGetStepMetadata(context.State, fallbackStepName);
 
+            // Local idempotency safeguard:
+            // if this step has already completed successfully in local execution metadata,
+            // skip re-execution and return a successful no-op result.
             if (metadata != null && metadata.IsCompleted)
             {
                 _logger.StepExecutor.Skipped(context.ExecutionId, stepName);
@@ -72,7 +108,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     output: $"Step '{stepName}' was skipped because it had already completed successfully.");
             }
 
-            // Only create using PRIMARY identity
+            // Always create or bind metadata using the primary logical step identity.
             metadata ??= GetOrCreateStepMetadata(context.State, stepName);
 
             while (true)
@@ -150,7 +186,12 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Attempts to retrieve existing step metadata without creating it.
+        /// Attempts to retrieve existing local step execution metadata without creating it.
+        ///
+        /// Returns <c>null</c> when:
+        /// - no step execution metadata bag exists
+        /// - the bag exists but has an unexpected type
+        /// - the specified step key is not present
         /// </summary>
         private static AiStepExecutionMetadata? TryGetStepMetadata(
             AiExecutionState state,
@@ -168,7 +209,13 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Begins a new execution attempt.
+        /// Begins a new local execution attempt.
+        ///
+        /// This method:
+        /// - increments <see cref="AiStepExecutionMetadata.AttemptCount"/>
+        /// - marks metadata status as <see cref="AiStepExecutionStatus.Running"/>
+        /// - records the latest attempt start time
+        /// - preserves the first attempt start time once set
         /// </summary>
         private static void BeginAttempt(AiStepExecutionMetadata metadata)
         {
@@ -179,7 +226,12 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Marks execution as successful.
+        /// Marks the local execution metadata as successfully completed.
+        ///
+        /// This method:
+        /// - sets status to <see cref="AiStepExecutionStatus.Completed"/>
+        /// - records completion time
+        /// - clears the last error and exception type
         /// </summary>
         private static void MarkSucceeded(AiStepExecutionMetadata metadata)
         {
@@ -190,7 +242,17 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Determines whether a retry should occur.
+        /// Determines whether the current exception should trigger another local retry attempt.
+        ///
+        /// RULES:
+        /// - if no retry policy is declared, retry is disabled
+        /// - if the current local attempt count exceeds the configured max retry count, retry is disabled
+        /// - if <see cref="AiRetryPolicyAttribute.RetryTransientOnly"/> is false, all exceptions are retryable
+        /// - otherwise exception retryability is delegated to <see cref="IAiRetryExceptionClassifier"/>
+        ///
+        /// IMPORTANT:
+        /// - <paramref name="attemptCount"/> is the local in-process attempt count
+        /// - it is not the same thing as durable DAG retry count
         /// </summary>
         private bool ShouldRetry(
             Exception exception,
@@ -210,7 +272,15 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Computes retry delay.
+        /// Computes the delay before the next local retry attempt.
+        ///
+        /// Supported modes:
+        /// - <see cref="AiRetryBackoffMode.Fixed"/>
+        /// - <see cref="AiRetryBackoffMode.Exponential"/>
+        ///
+        /// IMPORTANT:
+        /// - delay is computed from local retry policy only
+        /// - this does not schedule durable retry windows in execution state
         /// </summary>
         private static TimeSpan ComputeDelay(
             AiRetryPolicyAttribute retryPolicy,
@@ -233,7 +303,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Gets or creates step metadata.
+        /// Gets the local step execution metadata map or creates it when missing,
+        /// then returns the entry for the specified logical step name.
+        ///
+        /// If the step metadata entry does not yet exist, a new one is created.
+        /// Updates <see cref="AiExecutionState.UpdatedAtUtc"/>.
         /// </summary>
         private static AiStepExecutionMetadata GetOrCreateStepMetadata(
             AiExecutionState state,
