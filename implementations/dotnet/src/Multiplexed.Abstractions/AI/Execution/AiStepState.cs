@@ -18,9 +18,14 @@ namespace Multiplexed.Abstractions.AI.Execution
     ///
     /// DESIGN:
     /// - Each step is uniquely identified by <see cref="StepName"/>
-    /// - State transitions should remain deterministic and monotonic
+    /// - State transitions remain deterministic and monotonic
     /// - Computed helper properties are excluded from persistence
     /// - Distributed ownership is modeled through explicit claim metadata and lease expiration
+    ///
+    /// INVARIANT MODEL:
+    /// - A step in <see cref="AiStepExecutionStatus.Running"/> must represent a claimed in-flight execution
+    /// - Terminal states (<see cref="AiStepExecutionStatus.Completed"/> / <see cref="AiStepExecutionStatus.Failed"/>) must not retain claim metadata
+    /// - Business retry and infrastructure recovery are intentionally separate concepts
     /// </summary>
     public sealed class AiStepState
     {
@@ -283,16 +288,24 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as ready for execution.
         ///
-        /// This clears any active distributed claim metadata but does not alter
-        /// retry counters. It is used both for initial readiness and requeue scenarios.
+        /// SAFE TRANSITION FROM:
+        /// - None
+        /// - WaitingForRetry (when retry window is open)
+        /// - Running (only through timeout recovery or controlled reset)
+        ///
+        /// GUARANTEES:
+        /// - Clears all distributed claim metadata
+        /// - Does not modify retry counters
         /// </summary>
         public void MarkReady()
         {
             Status = AiStepExecutionStatus.Ready;
+
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
             LeaseExpiresAtUtc = null;
+
             UpdatedAtUtc = DateTime.UtcNow;
             Version++;
         }
@@ -300,18 +313,28 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as running after a successful distributed claim.
         ///
-        /// In distributed mode, the supplied claim token is later used to validate
-        /// ownership for completion and failure transitions.
+        /// INVARIANTS:
+        /// - Step must not already be Running
+        /// - Step must not already be terminal (Completed / Failed)
+        /// - Claim must originate from a schedulable state
         ///
         /// LEASE SEMANTICS:
         /// - Claim ownership starts immediately
         /// - Lease expiration is computed once and persisted on the step state
         /// - Recovery logic must use <see cref="LeaseExpiresAtUtc"/> as the authoritative boundary
+        ///
+        /// VIOLATION OF THESE RULES INDICATES A DISTRIBUTION OR STATE MACHINE BUG.
         /// </summary>
         public void MarkRunning(string workerId, string claimToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
             ArgumentException.ThrowIfNullOrWhiteSpace(claimToken);
+
+            if (Status == AiStepExecutionStatus.Running)
+                throw new InvalidOperationException($"Step '{StepName}' is already running.");
+
+            if (Status == AiStepExecutionStatus.Completed || Status == AiStepExecutionStatus.Failed)
+                throw new InvalidOperationException($"Step '{StepName}' is terminal and cannot be claimed.");
 
             var now = DateTime.UtcNow;
 
@@ -330,15 +353,28 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as completed successfully.
         ///
-        /// This transition:
-        /// - stores the final result
-        /// - clears retry timing
-        /// - clears claim ownership
-        /// - computes final duration when possible
+        /// INVARIANTS:
+        /// - The step must currently be Running
+        /// - Completion must come from the worker owning the active claim
+        ///   (ownership is validated by the store in distributed mode)
+        ///
+        /// NOTE:
+        /// - This is a STEP-level terminal transition
+        /// - GLOBAL execution completion is handled separately via convergence + finalization
+        ///
+        /// GUARANTEES:
+        /// - Stores the final result
+        /// - Clears retry timing
+        /// - Clears claim ownership
+        /// - Computes final duration when possible
         /// </summary>
         public void MarkCompleted(AiStepResult result)
         {
             ArgumentNullException.ThrowIfNull(result);
+
+            if (Status != AiStepExecutionStatus.Running)
+                throw new InvalidOperationException(
+                    $"Step '{StepName}' cannot complete from status '{Status}'.");
 
             var now = DateTime.UtcNow;
 
@@ -361,11 +397,20 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as terminally failed.
         ///
-        /// This should only be used when retry budget has been exhausted
-        /// or when the failure is considered non-retriable.
+        /// INVARIANTS:
+        /// - The step must currently be Running or WaitingForRetry
+        /// - This should only be used when retry budget is exhausted
+        ///   or the failure is considered non-retriable
         /// </summary>
         public void MarkFailed(string? error)
         {
+            if (Status != AiStepExecutionStatus.Running &&
+                Status != AiStepExecutionStatus.WaitingForRetry)
+            {
+                throw new InvalidOperationException(
+                    $"Step '{StepName}' cannot fail from status '{Status}'.");
+            }
+
             var now = DateTime.UtcNow;
 
             Status = AiStepExecutionStatus.Failed;
@@ -386,12 +431,26 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Marks the step as waiting for a future retry attempt.
         ///
-        /// This is a non-terminal retry state.
-        /// While in this state, the step must not be claimed until <see cref="NextRetryAtUtc"/>
-        /// is reached or passed.
+        /// INVARIANTS:
+        /// - The step must currently be Running
+        /// - RetryCount must not exceed MaxRetries
+        ///
+        /// IMPORTANT:
+        /// - This is a non-terminal retry state
+        /// - This method does not increment RetryCount
+        /// - While in this state, the step must not be claimed until <see cref="NextRetryAtUtc"/>
+        ///   is reached or passed
         /// </summary>
         public void MarkWaitingForRetry(string? error, DateTime nextRetryAtUtc)
         {
+            if (Status != AiStepExecutionStatus.Running)
+                throw new InvalidOperationException(
+                    $"Step '{StepName}' cannot enter WaitingForRetry from status '{Status}'.");
+
+            if (RetryCount > MaxRetries)
+                throw new InvalidOperationException(
+                    $"RetryCount '{RetryCount}' exceeds MaxRetries '{MaxRetries}' for step '{StepName}'.");
+
             Status = AiStepExecutionStatus.WaitingForRetry;
             Error = error;
             NextRetryAtUtc = nextRetryAtUtc;
@@ -408,6 +467,9 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Requeues a timed-out running step back to Ready.
         ///
+        /// INVARIANTS:
+        /// - The step must currently be Running
+        ///
         /// IMPORTANT:
         /// - This is an infrastructure recovery transition
         /// - This is NOT a business retry decision
@@ -417,6 +479,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// </summary>
         public void MarkRequeuedAfterTimeout()
         {
+            if (Status != AiStepExecutionStatus.Running)
+                throw new InvalidOperationException(
+                    $"Step '{StepName}' cannot be recovered from status '{Status}'.");
+
             Status = AiStepExecutionStatus.Ready;
 
             ClaimedBy = null;
@@ -455,20 +521,40 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Applies retry-or-fail semantics for a failed step execution attempt.
         ///
+        /// INVARIANTS:
+        /// - The step must currently be Running
+        /// - RetryCount must never exceed MaxRetries
+        ///
         /// SEMANTICS:
         /// - <see cref="RetryCount"/> tracks scheduled business retries only
         /// - The initial execution attempt is not counted in <see cref="RetryCount"/>
         /// - If <see cref="RetryCount"/> is still lower than <see cref="MaxRetries"/>,
         ///   the step transitions to <see cref="AiStepExecutionStatus.WaitingForRetry"/>
         /// - Otherwise the step becomes terminally <see cref="AiStepExecutionStatus.Failed"/>
+        ///
+        /// GUARANTEES:
+        /// - RetryCount increments only on business retry
+        /// - RecoveryCount is never modified here
         /// </summary>
         public void MarkRetryOrFail(string? error, DateTime utcNow)
         {
+            if (Status != AiStepExecutionStatus.Running)
+                throw new InvalidOperationException(
+                    $"RetryOrFail is invalid for step '{StepName}' from status '{Status}'.");
+
+            if (RetryCount > MaxRetries)
+                throw new InvalidOperationException(
+                    $"Invalid retry state for step '{StepName}': RetryCount '{RetryCount}' > MaxRetries '{MaxRetries}'.");
+
             Error = error;
 
             if (RetryCount < MaxRetries)
             {
                 RetryCount++;
+
+                if (RetryCount > MaxRetries)
+                    throw new InvalidOperationException(
+                        $"Retry overflow detected for step '{StepName}'.");
 
                 var nextRetryAtUtc = utcNow.AddMilliseconds(
                     RetryDelayMs > 0 ? RetryDelayMs : 2000);

@@ -30,6 +30,12 @@ namespace Multiplexed.AI.Runtime.Execution
     /// - Global execution lifecycle is still represented by <see cref="AiExecutionRecord"/>
     /// - Per-step lifecycle is represented by <see cref="AiStepState"/>
     /// - RBAC context ownership belongs to the execution as a whole, not to individual steps
+    ///
+    /// DISTRIBUTED EXECUTION MODEL:
+    /// - The step-state snapshot is the source of truth
+    /// - The execution record is only a projected orchestration summary
+    /// - Terminal execution states must be finalized atomically
+    /// - Multi-worker safety is enforced through the DAG store
     /// </summary>
     public sealed class AiDagExecutionEngine : AiExecutionEngine
     {
@@ -212,6 +218,7 @@ namespace Multiplexed.AI.Runtime.Execution
         /// - This path does not use distributed claims
         /// - Synthetic local claim metadata is still used to keep step lifecycle shape aligned
         ///   with the distributed model
+        /// - Convergence is still evaluated through the shared DAG convergence evaluator
         /// </summary>
         private async Task<AiExecutionRecord> ExecuteNextLocalAsync(
             string executionId,
@@ -411,6 +418,15 @@ namespace Multiplexed.AI.Runtime.Execution
         /// <summary>
         /// Executes one DAG step using the distributed execution path.
         ///
+        /// DISTRIBUTED EXECUTION INVARIANT:
+        /// This method is safe to run concurrently across multiple workers.
+        ///
+        /// GUARANTEES:
+        /// - At most one worker executes a given step claim at a time
+        /// - Retry / timeout / recovery logic is delegated to the DAG store
+        /// - Global convergence remains deterministic regardless of worker ordering
+        /// - Terminal finalization remains atomic and monotonic
+        ///
         /// FLOW:
         /// - Load the execution record
         /// - Resolve the pipeline
@@ -425,6 +441,7 @@ namespace Multiplexed.AI.Runtime.Execution
         /// - Claim / retry / timeout logic belongs to the DAG store and its Redis/Lua layer
         /// - The execution record remains the global orchestration summary
         /// - The step state remains the source of truth for DAG lifecycle
+        /// - This method must remain side-effect safe outside of the store
         /// </summary>
         private async Task<AiExecutionRecord> ExecuteNextDistributedAsync(
             string executionId,
@@ -671,6 +688,11 @@ namespace Multiplexed.AI.Runtime.Execution
         /// IMPORTANT:
         /// The execution record is only a summary projection.
         /// The per-step state remains the source of truth for DAG lifecycle.
+        ///
+        /// IMPORTANT INVARIANT:
+        /// The execution record must always reflect the evaluated step-state truth.
+        /// Any divergence between record projection and authoritative step-state
+        /// will break deterministic distributed convergence.
         /// </summary>
         private static void ApplyConvergenceToRecord(
             AiExecutionRecord record,
@@ -816,6 +838,8 @@ namespace Multiplexed.AI.Runtime.Execution
             ArgumentException.ThrowIfNullOrWhiteSpace(expectedStepKey);
             ArgumentNullException.ThrowIfNull(state);
 
+            var utcNow = DateTime.UtcNow;
+
             // Fallback for local / non-distributed execution.
             if (_dagStore is null)
             {
@@ -837,7 +861,25 @@ namespace Multiplexed.AI.Runtime.Execution
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
 
-            // Terminal execution states are finalized atomically in the distributed store.
+            // ---------------------------------------------------------------------
+            // TERMINAL FINALIZATION (DISTRIBUTED)
+            //
+            // This is the ONLY place where an execution is allowed to transition
+            // into a terminal state in distributed mode.
+            //
+            // CRITICAL GUARANTEES:
+            // - Multi-worker safe (Redis Lua atomicity)
+            // - Idempotent (can be called multiple times safely)
+            // - Monotonic (cannot downgrade terminal state)
+            //
+            // IMPORTANT:
+            // - Convergence MUST be evaluated BEFORE entering this block
+            // - This method does NOT decide truth, it only persists it
+            // - Step-state remains the single source of truth
+            //
+            // FAILURE SCENARIO:
+            // - If this worker loses the race, we MUST reload the authoritative record
+            // ---------------------------------------------------------------------
             if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
             {
                 var request = new AiDagExecutionFinalizationRequest
@@ -845,7 +887,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     ExecutionId = record.ExecutionId,
                     ExpectedExecutionStepKey = expectedStepKey,
                     Status = convergence.Status,
-                    CompletedAtUtc = DateTime.UtcNow,
+                    CompletedAtUtc = utcNow,
                     CompletedSteps = completedSteps,
                     CurrentStep = string.Empty,
                     WorkerId = Environment.MachineName
@@ -864,13 +906,7 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     if (refreshed is not null)
                     {
-                        record.Status = refreshed.Status;
-                        record.CompletedSteps = refreshed.CompletedSteps;
-                        record.CurrentStep = refreshed.CurrentStep;
-                        record.ExecutionStepKey = refreshed.ExecutionStepKey;
-                        record.Version = refreshed.Version;
-                        record.UpdatedAtUtc = refreshed.UpdatedAtUtc;
-                        record.CompletedAtUtc = refreshed.CompletedAtUtc;
+                        ApplyAuthoritativeRecord(record, refreshed);
                     }
 
                     return;
@@ -883,13 +919,7 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (updated is not null)
                 {
-                    record.Status = updated.Status;
-                    record.CompletedSteps = updated.CompletedSteps;
-                    record.CurrentStep = updated.CurrentStep;
-                    record.ExecutionStepKey = updated.ExecutionStepKey;
-                    record.Version = updated.Version;
-                    record.UpdatedAtUtc = updated.UpdatedAtUtc;
-                    record.CompletedAtUtc = updated.CompletedAtUtc;
+                    ApplyAuthoritativeRecord(record, updated);
                 }
 
                 return;
@@ -956,6 +986,12 @@ namespace Multiplexed.AI.Runtime.Execution
 
             var steps = state.Steps.Values.ToList();
 
+            // SAFETY: no steps means no valid terminal projection
+            if (steps.Count == 0)
+            {
+                return false;
+            }
+
             // ---------------------------------------------------------------------
             // SAFETY GUARD:
             // Do NOT allow finalization if any step is still active, retryable,
@@ -976,7 +1012,7 @@ namespace Multiplexed.AI.Runtime.Execution
             // ---------------------------------------------------------------------
             if (targetStatus == AiExecutionStatus.Completed)
             {
-                return steps.Count > 0 && steps.All(x => x.IsCompleted);
+                return steps.All(x => x.IsCompleted);
             }
 
             // ---------------------------------------------------------------------
@@ -1005,6 +1041,34 @@ namespace Multiplexed.AI.Runtime.Execution
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Applies an authoritative persisted record snapshot onto the current
+        /// in-memory execution record projection.
+        ///
+        /// PURPOSE:
+        /// - Keep the caller's record instance aligned with the persisted truth
+        /// - Reuse the same update logic after both successful finalization and race loss
+        ///
+        /// IMPORTANT:
+        /// - The source record is assumed to be authoritative
+        /// - This method does not merge state; it replaces the projected fields
+        /// </summary>
+        private static void ApplyAuthoritativeRecord(
+            AiExecutionRecord target,
+            AiExecutionRecord source)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(source);
+
+            target.Status = source.Status;
+            target.CompletedSteps = source.CompletedSteps;
+            target.CurrentStep = source.CurrentStep;
+            target.ExecutionStepKey = source.ExecutionStepKey;
+            target.Version = source.Version;
+            target.UpdatedAtUtc = source.UpdatedAtUtc;
+            target.CompletedAtUtc = source.CompletedAtUtc;
         }
     }
 }
