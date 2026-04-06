@@ -29,6 +29,8 @@ namespace Multiplexed.AI.Stores.Cache
     /// - DateTime values are serialized as unix timestamps in this store only
     ///   so Lua scripts can safely compare numeric values
     /// - This version uses UNIX TIME IN MILLISECONDS for distributed retry timing
+    /// - Lease expiration is persisted explicitly through LeaseExpiresAtUtc
+    ///   so recovery does not need to recompute expiration from ClaimedAtUtc
     /// </summary>
     public sealed class RedisAiDagExecutionStore : IAiDagExecutionStore
     {
@@ -55,6 +57,8 @@ namespace Multiplexed.AI.Stores.Cache
         /// - When a retry-waiting step is claimed again, NextRetryAtUtc is cleared
         ///   because the retry window has already been consumed
         /// - nowUnix is expressed in milliseconds
+        /// - LeaseExpiresAtUtc is computed once at claim time and becomes the
+        ///   authoritative recovery boundary for this running claim
         /// </summary>
         private static readonly LuaScript ClaimPreparedScript = LuaScript.Prepare(
             """
@@ -138,6 +142,13 @@ namespace Multiplexed.AI.Stores.Cache
                         step.ClaimedAtUtc = nowUnix
                         step.NextRetryAtUtc = cjson.null
 
+                        local timeoutSeconds = tonumber(step.ClaimTimeoutSeconds)
+                        if timeoutSeconds ~= nil and timeoutSeconds > 0 then
+                            step.LeaseExpiresAtUtc = nowUnix + (timeoutSeconds * 1000)
+                        else
+                            step.LeaseExpiresAtUtc = cjson.null
+                        end
+
                         if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
                             step.StartedAtUtc = nowUnix
                         end
@@ -170,6 +181,7 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
+        /// - LeaseExpiresAtUtc is cleared because the running claim is terminated
         /// </summary>
         private static readonly LuaScript CompletePreparedScript = LuaScript.Prepare(
             """
@@ -216,6 +228,7 @@ namespace Multiplexed.AI.Stores.Cache
             step.ClaimedBy = cjson.null
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
+            step.LeaseExpiresAtUtc = cjson.null
             step.NextRetryAtUtc = cjson.null
             step.Version = (step.Version or 0) + 1
             step.DependsOn = normalize_array(step.DependsOn)
@@ -243,6 +256,8 @@ namespace Multiplexed.AI.Stores.Cache
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
         /// - RetryDelayMs is expressed in milliseconds
+        /// - LeaseExpiresAtUtc is cleared because the running claim is terminated
+        ///   regardless of whether the step becomes WaitingForRetry or Failed
         /// </summary>
         private static readonly LuaScript FailPreparedScript = LuaScript.Prepare(
             """
@@ -291,6 +306,7 @@ namespace Multiplexed.AI.Stores.Cache
             step.ClaimedBy = cjson.null
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
+            step.LeaseExpiresAtUtc = cjson.null
 
             if retryCount < maxRetries then
                 retryCount = retryCount + 1
@@ -319,14 +335,15 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// RULES:
         /// - only Running steps are considered
-        /// - ClaimedAtUtc + ClaimTimeoutSeconds must be in the past
+        /// - LeaseExpiresAtUtc must be in the past
         /// - recovered steps transition back to Ready
         /// - claim ownership is cleared
         /// - RecoveryCount is incremented
         ///
         /// IMPORTANT:
-        /// Infrastructure recovery must not consume business RetryCount.
-        /// ClaimedAtUtc is stored in milliseconds, so ClaimTimeoutSeconds is converted to milliseconds.
+        /// - Infrastructure recovery must not consume business RetryCount
+        /// - LeaseExpiresAtUtc is the authoritative recovery boundary
+        /// - Recovery no longer recomputes expiration from ClaimedAtUtc and ClaimTimeoutSeconds
         /// </summary>
         private static readonly LuaScript RecoverPreparedScript = LuaScript.Prepare(
             """
@@ -362,19 +379,15 @@ namespace Multiplexed.AI.Stores.Cache
                     local step = cjson.decode(raw)
 
                     if step.Status == "Running" or step.Status == 2 then
-                        local claimedAt = step.ClaimedAtUtc
-                        local timeoutSeconds = step.ClaimTimeoutSeconds
+                        local leaseExpiresAt = step.LeaseExpiresAtUtc
 
-                        if claimedAt ~= nil and claimedAt ~= cjson.null
-                            and timeoutSeconds ~= nil and timeoutSeconds ~= cjson.null then
-
-                            local expiresAt = tonumber(claimedAt) + (tonumber(timeoutSeconds) * 1000)
-
-                            if expiresAt <= nowUnix then
+                        if leaseExpiresAt ~= nil and leaseExpiresAt ~= cjson.null then
+                            if tonumber(leaseExpiresAt) <= nowUnix then
                                 step.Status = "Ready"
                                 step.ClaimedBy = cjson.null
                                 step.ClaimToken = cjson.null
                                 step.ClaimedAtUtc = cjson.null
+                                step.LeaseExpiresAtUtc = cjson.null
                                 step.UpdatedAtUtc = nowUnix
                                 step.RecoveryCount = (step.RecoveryCount or 0) + 1
                                 step.Version = (step.Version or 0) + 1
@@ -712,6 +725,8 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
+        /// - a new claim token is generated per claim attempt
+        /// - lease expiration is persisted atomically inside Lua
         /// </summary>
         public async Task<ClaimedAiStep?> TryClaimNextReadyStepAsync(
             string executionId,
@@ -763,6 +778,7 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
+        /// - the running lease is cleared atomically with completion
         /// </summary>
         public async Task<bool> TryCompleteStepAsync(
             string executionId,
@@ -812,6 +828,7 @@ namespace Multiplexed.AI.Stores.Cache
         /// depending on RetryCount / MaxRetries.
         ///
         /// - nowUnix is expressed in milliseconds
+        /// - the running lease is cleared atomically with failure handling
         /// </summary>
         public async Task<bool> TryFailStepAsync(
             string executionId,
@@ -857,15 +874,15 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// RECOVERY RULES:
         /// - only Running steps are considered
-        /// - ClaimedAtUtc + ClaimTimeoutSeconds must be in the past
+        /// - LeaseExpiresAtUtc must be in the past
         /// - recovered steps transition back to Ready
         /// - claim ownership is cleared
         /// - RecoveryCount is incremented
         ///
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
-        /// - ClaimedAtUtc is expressed in milliseconds
-        /// - ClaimTimeoutSeconds is converted to milliseconds inside Lua
+        /// - LeaseExpiresAtUtc is expressed in milliseconds
+        /// - this recovery path uses persisted lease expiration only
         /// </summary>
         public async Task<int> RecoverTimedOutStepsAsync(
             string executionId,

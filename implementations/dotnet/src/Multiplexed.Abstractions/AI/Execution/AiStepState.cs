@@ -8,18 +8,19 @@ namespace Multiplexed.Abstractions.AI.Execution
     ///
     /// PURPOSE:
     /// - This object is the source of truth for DAG step lifecycle
-    /// - It drives scheduling, retry eligibility, completion, and failure semantics
+    /// - It drives scheduling, retry eligibility, completion, failure, and recovery semantics
     /// - It is shared across local execution and distributed Redis/Lua coordination
     ///
     /// IMPORTANT:
     /// - This model stores durable execution state only
-    /// - Distributed retry behavior must be derived from this object
+    /// - Distributed retry and recovery behavior must be derived from this object
     /// - Local in-process attempt tracking must not replace or override this state
     ///
     /// DESIGN:
     /// - Each step is uniquely identified by <see cref="StepName"/>
     /// - State transitions should remain deterministic and monotonic
     /// - Computed helper properties are excluded from persistence
+    /// - Distributed ownership is modeled through explicit claim metadata and lease expiration
     /// </summary>
     public sealed class AiStepState
     {
@@ -75,14 +76,30 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Gets or sets the unique claim token used to validate ownership
         /// during distributed completion and failure operations.
+        ///
+        /// IMPORTANT:
+        /// - A new token should be generated for every claim or reclaim
+        /// - Completion or failure writes should only succeed when the expected token matches
+        /// - This prevents stale workers from persisting results after ownership has changed
         /// </summary>
         public string? ClaimToken { get; set; }
 
         /// <summary>
         /// Gets or sets the UTC timestamp at which the step was claimed.
-        /// Used for timeout detection and distributed recovery.
+        /// Used for ownership tracing, timeout analysis, and recovery diagnostics.
         /// </summary>
         public DateTime? ClaimedAtUtc { get; set; }
+
+        /// <summary>
+        /// Gets or sets the UTC timestamp when the current claim lease expires.
+        ///
+        /// IMPORTANT:
+        /// - This value is computed at claim time
+        /// - It is the authoritative source for reclaim eligibility
+        /// - Distributed workers must use this value instead of recomputing expiration
+        ///   from <see cref="ClaimedAtUtc"/> and <see cref="ClaimTimeoutSeconds"/>
+        /// </summary>
+        public DateTime? LeaseExpiresAtUtc { get; set; }
 
         // ---------------------------------------------------------------------
         // TIMING
@@ -191,7 +208,12 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Gets or sets the distributed claim timeout in seconds.
         ///
-        /// When exceeded, a running step may be recovered and requeued.
+        /// This value is a lease configuration input.
+        /// It is used when creating a claim to compute <see cref="LeaseExpiresAtUtc"/>.
+        ///
+        /// IMPORTANT:
+        /// - Recovery should not recompute expiration from this property
+        /// - The authoritative recovery boundary is <see cref="LeaseExpiresAtUtc"/>
         /// </summary>
         public int? ClaimTimeoutSeconds { get; set; }
 
@@ -270,6 +292,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
+            LeaseExpiresAtUtc = null;
             UpdatedAtUtc = DateTime.UtcNow;
             Version++;
         }
@@ -279,6 +302,11 @@ namespace Multiplexed.Abstractions.AI.Execution
         ///
         /// In distributed mode, the supplied claim token is later used to validate
         /// ownership for completion and failure transitions.
+        ///
+        /// LEASE SEMANTICS:
+        /// - Claim ownership starts immediately
+        /// - Lease expiration is computed once and persisted on the step state
+        /// - Recovery logic must use <see cref="LeaseExpiresAtUtc"/> as the authoritative boundary
         /// </summary>
         public void MarkRunning(string workerId, string claimToken)
         {
@@ -291,6 +319,9 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = workerId;
             ClaimToken = claimToken;
             ClaimedAtUtc = now;
+            LeaseExpiresAtUtc = ClaimTimeoutSeconds.HasValue && ClaimTimeoutSeconds.Value > 0
+                ? now.AddSeconds(ClaimTimeoutSeconds.Value)
+                : null;
             StartedAtUtc ??= now;
             UpdatedAtUtc = now;
             Version++;
@@ -322,6 +353,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
+            LeaseExpiresAtUtc = null;
 
             Version++;
         }
@@ -346,6 +378,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
+            LeaseExpiresAtUtc = null;
 
             Version++;
         }
@@ -367,6 +400,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
+            LeaseExpiresAtUtc = null;
 
             Version++;
         }
@@ -379,6 +413,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - This is NOT a business retry decision
         /// - <see cref="RecoveryCount"/> is incremented
         /// - <see cref="RetryCount"/> is not modified
+        /// - The current claim lease is fully cleared
         /// </summary>
         public void MarkRequeuedAfterTimeout()
         {
@@ -387,6 +422,7 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedBy = null;
             ClaimToken = null;
             ClaimedAtUtc = null;
+            LeaseExpiresAtUtc = null;
 
             UpdatedAtUtc = DateTime.UtcNow;
             RecoveryCount++;
@@ -504,5 +540,44 @@ namespace Multiplexed.Abstractions.AI.Execution
         public bool IsSchedulable =>
             Status == AiStepExecutionStatus.Ready ||
             Status == AiStepExecutionStatus.None;
+
+        /// <summary>
+        /// Determines whether the current running lease is expired at the supplied UTC time.
+        ///
+        /// IMPORTANT:
+        /// - This helper only returns true for running steps
+        /// - A missing lease expiration is treated as non-expired
+        /// - Recovery logic can use this helper to decide whether reclaim is legal
+        /// </summary>
+        public bool IsLeaseExpired(DateTime utcNow)
+        {
+            if (Status != AiStepExecutionStatus.Running)
+                return false;
+
+            if (!LeaseExpiresAtUtc.HasValue)
+                return false;
+
+            return LeaseExpiresAtUtc.Value <= utcNow;
+        }
+
+        /// <summary>
+        /// Determines whether the step currently has an active and valid running lease.
+        ///
+        /// IMPORTANT:
+        /// - This helper only returns true for running steps
+        /// - A missing lease expiration is treated as not valid
+        /// - Convergence and recovery logic can use this helper to distinguish
+        ///   between active work and reclaimable stale work
+        /// </summary>
+        public bool HasValidLease(DateTime utcNow)
+        {
+            if (Status != AiStepExecutionStatus.Running)
+                return false;
+
+            if (!LeaseExpiresAtUtc.HasValue)
+                return false;
+
+            return LeaseExpiresAtUtc.Value > utcNow;
+        }
     }
 }

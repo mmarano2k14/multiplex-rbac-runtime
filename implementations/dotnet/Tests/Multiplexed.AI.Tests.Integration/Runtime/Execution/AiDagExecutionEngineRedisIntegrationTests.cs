@@ -362,6 +362,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 ClaimedBy = "worker-old",
                 ClaimToken = "claim-old",
                 ClaimedAtUtc = DateTime.UtcNow.AddMinutes(-10),
+                LeaseExpiresAtUtc = DateTime.UtcNow.AddMinutes(-9),
                 ClaimTimeoutSeconds = 30
             };
 
@@ -382,6 +383,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(AiStepExecutionStatus.Ready, step.Status);
                 Assert.Null(step.ClaimedBy);
                 Assert.Null(step.ClaimToken);
+                Assert.Null(step.ClaimedAtUtc);
+                Assert.Null(step.LeaseExpiresAtUtc);
                 Assert.Equal(1, step.RecoveryCount);
             }
             finally
