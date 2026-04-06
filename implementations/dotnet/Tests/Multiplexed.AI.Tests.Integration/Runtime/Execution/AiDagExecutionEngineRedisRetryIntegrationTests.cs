@@ -13,6 +13,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
@@ -511,6 +512,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 SuppressCleanupExceptions = true
             });
 
+            var metrics = new AiRuntimeMetrics();
+
             return new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
@@ -521,6 +524,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 logger,
                 cleanupService,
                 cleanupOptions,
+                metrics,
                 dagStore);
         }
 
@@ -534,8 +538,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
         private IAiDagExecutionStore CreateDagStore()
         {
+            var logger = new NoopLogger();
             var keyBuilder = new AiExecutionKeyBuilder();
-            return new RedisAiDagExecutionStore(_connection, keyBuilder);
+            var metrics = new AiRuntimeMetrics();
+            return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics);
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(string fileName)

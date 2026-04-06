@@ -6,6 +6,60 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.4] - 2026-04-06
+
+### Added
+- Production-grade deterministic DAG runtime for distributed AI execution
+- Strict step state machine with enforced invariants
+- Distributed retry engine with:
+  - retry budget guarantees
+  - time-based retry scheduling (ms precision)
+- Lease-based recovery system:
+  - multi-worker safe
+  - non-destructive retry preservation
+- Deterministic convergence model ensuring consistent final state
+- Atomic execution finalization with optimistic concurrency (ExecutionStepKey)
+- Full test coverage:
+  - invariant validation
+  - multi-worker concurrency
+  - retry correctness
+  - recovery correctness
+  - chaos scenarios
+- Crash consistency model formally documented
+
+### Observability
+- IAiRuntimeMetrics interface with thread-safe in-memory implementation
+- Metrics coverage:
+  - retry_count (per step)
+  - recovery_count (per execution)
+  - claim_success / claim_miss
+  - finalize_attempts / finalize_success
+- Structured logging added across runtime:
+  - step claim (success/miss)
+  - recovery events
+  - finalization attempts and outcomes
+  - NOSCRIPT fallback scenarios
+
+### Updated
+- Redis DAG execution store enhanced with:
+  - metrics integration across critical execution paths
+  - structured logging for production debugging
+  - improved resilience for Lua script reload (NOSCRIPT)
+
+### Guarantees
+- Deterministic execution under concurrency (multi-worker safe)
+- No double execution or retry over-consumption
+- No premature failure during retry window
+- Safe recovery without corrupting retry state
+- Observability without impacting execution determinism
+
+### Notes
+- Metrics currently in-memory (single instance scope)
+- Designed for future integration with Prometheus / OpenTelemetry
+- Runtime architecture aligned with production-grade distributed systems (Temporal-like model)
+
+---
+
 ## [1.0.2.3] - 2026-04-06
 
 ### Added

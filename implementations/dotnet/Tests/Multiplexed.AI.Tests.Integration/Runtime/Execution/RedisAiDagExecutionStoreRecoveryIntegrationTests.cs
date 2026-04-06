@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using StackExchange.Redis;
@@ -34,6 +35,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// </summary>
         public async Task InitializeAsync()
         {
+            var logger = new NoopLogger();
             var redisConnectionString =
                 Environment.GetEnvironmentVariable("MULTIPLEXED_TEST_REDIS")
                 ?? "localhost:6379,abortConnect=false,allowAdmin=true";
@@ -43,7 +45,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             _testPrefix = $"test:dag:recovery:{Guid.NewGuid():N}";
             _keyBuilder = new TestAiExecutionKeyBuilder(_testPrefix);
-            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder);
+            var metrics = new AiRuntimeMetrics();
+            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics);
         }
 
         /// <summary>

@@ -13,6 +13,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
@@ -174,6 +175,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 SuppressCleanupExceptions = true
             });
 
+            var metrics = new AiRuntimeMetrics();
+
             return new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
@@ -181,7 +184,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 contextFactory,
                 CreateServiceProvider(accessor, executionStore),
                 pipelineExecutor,
-                logger,cleanupService, cleanupOptions);
+                logger,cleanupService, cleanupOptions, metrics);
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector()

@@ -1,6 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using StackExchange.Redis;
 using System.Text;
@@ -37,7 +39,9 @@ namespace Multiplexed.AI.Stores.Cache
         private readonly IConnectionMultiplexer _multiplexer;
         private readonly IDatabase _database;
         private readonly IAiExecutionKeyBuilder _keyBuilder;
+        private readonly IAiRuntimeLogger _logger;
         private readonly JsonSerializerOptions _jsonOptions;
+        private readonly IAiRuntimeMetrics _metrics;
 
         // ---------------------------------------------------------------------
         // LUA SCRIPTS
@@ -462,14 +466,20 @@ namespace Multiplexed.AI.Stores.Cache
         /// </summary>
         public RedisAiDagExecutionStore(
             IConnectionMultiplexer multiplexer,
-            IAiExecutionKeyBuilder keyBuilder)
+            IAiExecutionKeyBuilder keyBuilder,
+            IAiRuntimeLogger logger,
+            IAiRuntimeMetrics metrics)
         {
             ArgumentNullException.ThrowIfNull(multiplexer);
             ArgumentNullException.ThrowIfNull(keyBuilder);
+            ArgumentNullException.ThrowIfNull(logger);
+            ArgumentNullException.ThrowIfNull(metrics);
 
             _multiplexer = multiplexer;
             _database = multiplexer.GetDatabase();
             _keyBuilder = keyBuilder;
+            _logger = logger;
+            _metrics = metrics;
 
             _jsonOptions = new JsonSerializerOptions
             {
@@ -746,25 +756,53 @@ namespace Multiplexed.AI.Stores.Cache
 
             try
             {
-                return await ExecuteClaimAsync(
+                var claimed = await ExecuteClaimAsync(
                     stepIndexKey,
                     workerId,
                     nowUnix,
                     claimToken,
                     stepKeyPrefix,
                     executionId);
+
+                if (claimed is not null)
+                {
+                    _metrics.IncrementClaimSuccess(claimed.StepName);
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Step claimed. ExecutionId='{executionId}', StepName='{claimed.StepName}', WorkerId='{workerId}', ClaimToken='{claimed.ClaimToken}'.");
+                }
+                else
+                {
+                    _metrics.IncrementClaimMiss();
+                }
+
+                return claimed;
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
                 _claimLoadedScript = LoadScript(ClaimPreparedScript);
 
-                return await ExecuteClaimAsync(
+                var claimed = await ExecuteClaimAsync(
                     stepIndexKey,
                     workerId,
                     nowUnix,
                     claimToken,
                     stepKeyPrefix,
                     executionId);
+
+                if (claimed is not null)
+                {
+                    _metrics.IncrementClaimSuccess(claimed.StepName);
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Step claimed after NOSCRIPT reload. ExecutionId='{executionId}', StepName='{claimed.StepName}', WorkerId='{workerId}', ClaimToken='{claimed.ClaimToken}'.");
+                }
+                else
+                {
+                    _metrics.IncrementClaimMiss();
+                }
+
+                return claimed;
             }
         }
 
@@ -897,12 +935,33 @@ namespace Multiplexed.AI.Stores.Cache
 
             try
             {
-                return await ExecuteRecoverAsync(stepIndexKey, stepKeyPrefix, nowUnix);
+                var recovered = await ExecuteRecoverAsync(stepIndexKey, stepKeyPrefix, nowUnix);
+
+                if (recovered > 0)
+                {
+                    _metrics.IncrementRecovery(executionId, recovered);
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recovered}'.");
+                }
+
+                return recovered;
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
                 _recoverLoadedScript = LoadScript(RecoverPreparedScript);
-                return await ExecuteRecoverAsync(stepIndexKey, stepKeyPrefix, nowUnix);
+
+                var recovered = await ExecuteRecoverAsync(stepIndexKey, stepKeyPrefix, nowUnix);
+
+                if (recovered > 0)
+                {
+                    _metrics.IncrementRecovery(executionId, recovered);
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Timed-out steps recovered after NOSCRIPT reload. ExecutionId='{executionId}', RecoveredCount='{recovered}'.");
+                }
+
+                return recovered;
             }
         }
 
@@ -947,6 +1006,11 @@ namespace Multiplexed.AI.Stores.Cache
                 request.CompletedSteps ?? Array.Empty<string>(),
                 _jsonOptions);
 
+            _metrics.IncrementFinalizeAttempt();
+
+            _logger.Engine.LogInformation(
+                $"[AI DAG STORE] Finalization attempt. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+
             try
             {
                 var result = await _finalizeLoadedScript.EvaluateAsync(
@@ -961,7 +1025,22 @@ namespace Multiplexed.AI.Stores.Cache
                         newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
                     });
 
-                return (int)result! == 1;
+                var success = (int)result! == 1;
+
+                if (success)
+                {
+                    _metrics.IncrementFinalizeSuccess();
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization succeeded. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+                else
+                {
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization skipped or race lost. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+
+                return success;
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
@@ -979,7 +1058,22 @@ namespace Multiplexed.AI.Stores.Cache
                         newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
                     });
 
-                return (int)result! == 1;
+                var success = (int)result! == 1;
+
+                if (success)
+                {
+                    _metrics.IncrementFinalizeSuccess();
+
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization succeeded after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+                else
+                {
+                    _logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization skipped or race lost after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+
+                return success;
             }
         }
 

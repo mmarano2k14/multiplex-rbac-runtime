@@ -6,6 +6,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -42,6 +43,7 @@ namespace Multiplexed.AI.Runtime.Execution
         private readonly IAiDagExecutionStore? _dagStore;
         private readonly IAiExecutionCleanupService _cleanupService;
         private readonly AiExecutionCleanupOptions _cleanupOptions;
+        private readonly IAiRuntimeMetrics _metrics;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
@@ -56,6 +58,7 @@ namespace Multiplexed.AI.Runtime.Execution
             IAiRuntimeLogger logger,
             IAiExecutionCleanupService cleanupService,
             IOptions<AiExecutionCleanupOptions> cleanupOptions,
+            IAiRuntimeMetrics metrics,
             IAiDagExecutionStore? dagStore = null)
             : base(
                 store,
@@ -69,6 +72,7 @@ namespace Multiplexed.AI.Runtime.Execution
             _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
             _cleanupOptions = cleanupOptions?.Value ?? throw new ArgumentNullException(nameof(cleanupOptions));
             _dagStore = dagStore;
+            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
         }
 
         /// <inheritdoc />
@@ -160,6 +164,9 @@ namespace Multiplexed.AI.Runtime.Execution
 
             Logger.Engine.ExecutionCreated(record);
 
+            Logger.Engine.LogInformation(
+                $"[AI DAG] Execution created. ExecutionId='{record.ExecutionId}', Pipeline='{record.PipelineName}', Mode='{record.ExecutionMode}', StepCount='{preparedPipeline.Steps.Count}', ContextKey='{record.ContextKey}'.");
+
             return record;
         }
 
@@ -190,10 +197,16 @@ namespace Multiplexed.AI.Runtime.Execution
                 // - no further local progress can currently be made in this loop
                 if (record.Status == AiExecutionStatus.Waiting)
                 {
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] ExecuteAll stopped in Waiting. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
+
                     return record;
                 }
             }
             while (!record.IsTerminal);
+
+            Logger.Engine.LogInformation(
+                $"[AI DAG] ExecuteAll reached terminal state. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
 
             return record;
         }
@@ -274,9 +287,17 @@ namespace Multiplexed.AI.Runtime.Execution
                 // -------------------------------------------------------------
                 if (nextStep is null)
                 {
+                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                        resolvedPipeline,
+                        state,
+                        utcNow);
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] No local runnable step. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{convergence.Status}'.");
+
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(resolvedPipeline, state, utcNow),
+                        convergence,
                         state);
 
                     record.TouchVersion();
@@ -306,6 +327,9 @@ namespace Multiplexed.AI.Runtime.Execution
                 record.MarkRunning();
                 record.CurrentStep = nextStep.Name;
 
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Local step started. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', Worker='local-worker'.");
+
                 var stepContext = new AiStepExecutionContext(
                     executionContext,
                     nextStep);
@@ -325,10 +349,18 @@ namespace Multiplexed.AI.Runtime.Execution
                     // otherwise it becomes terminally Failed.
                     stepState.MarkRetryOrFail(ex.Message, DateTime.UtcNow);
 
+                    if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
+                    {
+                        _metrics.IncrementRetry(nextStep.Name);
+                    }
+
                     Logger.Engine.StepException(
                         record.ExecutionId,
                         nextStep.Name,
                         ex);
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Local step exception applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryCount}', NextRetryAtUtc='{stepState.NextRetryAtUtc}'.");
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
@@ -364,10 +396,18 @@ namespace Multiplexed.AI.Runtime.Execution
                     // business retry policy is applied through the step state itself.
                     stepState.MarkRetryOrFail(stepResult.Error, DateTime.UtcNow);
 
+                    if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
+                    {
+                        _metrics.IncrementRetry(nextStep.Name);
+                    }
+
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
                         nextStep.Name,
                         stepResult.Error);
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Local step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryCount}', NextRetryAtUtc='{stepState.NextRetryAtUtc}'.");
                 }
                 else
                 {
@@ -376,6 +416,9 @@ namespace Multiplexed.AI.Runtime.Execution
                     Logger.Engine.StepCompleted(
                         record,
                         nextStep.Name);
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Local step completed. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', DurationMs='{stepState.Duration?.TotalMilliseconds}'.");
                 }
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
@@ -474,7 +517,13 @@ namespace Multiplexed.AI.Runtime.Execution
                 cancellationToken);
 
             // Best-effort timeout recovery before any new distributed claim attempt.
-            await _dagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
+            var recoveredCount = await _dagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
+
+            if (recoveredCount > 0)
+            {
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
+            }
 
             var claimed = await _dagStore.TryClaimNextReadyStepAsync(
                 executionId,
@@ -512,6 +561,9 @@ namespace Multiplexed.AI.Runtime.Execution
                         state,
                         utcNow);
 
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] No distributed claim acquired. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{convergence.Status}', Worker='{Environment.MachineName}'.");
+
                     ApplyConvergenceToRecord(
                         record,
                         convergence,
@@ -534,6 +586,9 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     return record;
                 }
+
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Step claimed. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', Worker='{Environment.MachineName}', ClaimToken='{claimed.ClaimToken}'.");
 
                 // Resolve the claimed step against the resolved pipeline topology.
                 var claimedStep = resolvedPipeline.Steps
@@ -574,6 +629,17 @@ namespace Multiplexed.AI.Runtime.Execution
                         ex);
 
                     var failedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
+                        ? reloadedFailedStep
+                        : null;
+
+                    if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
+                    {
+                        _metrics.IncrementRetry(claimed.StepName);
+                    }
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Distributed step exception applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.NextRetryAtUtc}'.");
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
@@ -617,6 +683,22 @@ namespace Multiplexed.AI.Runtime.Execution
                         record.ExecutionId,
                         claimed.StepName,
                         stepResult.Error);
+
+                    var failedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
+                        ? reloadedFailedStep
+                        : null;
+
+                    if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
+                    {
+                        _metrics.IncrementRetry(claimed.StepName);
+                    }
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Distributed step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.NextRetryAtUtc}'.");
+
+                    // Keep final authoritative state aligned with what was just persisted.
+                    state = failedState;
                 }
                 else
                 {
@@ -636,6 +718,17 @@ namespace Multiplexed.AI.Runtime.Execution
                     Logger.Engine.StepCompleted(
                         record,
                         claimed.StepName);
+
+                    var completedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var completedStepState = completedState.Steps.TryGetValue(claimed.StepName, out var reloadedCompletedStep)
+                        ? reloadedCompletedStep
+                        : null;
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Distributed step completed. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', DurationMs='{completedStepState?.Duration?.TotalMilliseconds}'.");
+
+                    // Keep final authoritative state aligned with what was just persisted.
+                    state = completedState;
                 }
 
                 // Reload final authoritative distributed state snapshot
@@ -648,6 +741,9 @@ namespace Multiplexed.AI.Runtime.Execution
                     resolvedPipeline,
                     finalState,
                     DateTime.UtcNow);
+
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Distributed convergence evaluated. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{finalConvergence.Status}'.");
 
                 ApplyConvergenceToRecord(
                     record,
@@ -882,6 +978,9 @@ namespace Multiplexed.AI.Runtime.Execution
             // ---------------------------------------------------------------------
             if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
             {
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
+
                 var request = new AiDagExecutionFinalizationRequest
                 {
                     ExecutionId = record.ExecutionId,
@@ -899,6 +998,9 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (!success)
                 {
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Finalization race lost. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
+
                     // Another worker won the finalization race -> reload authoritative record.
                     var refreshed = await _dagStore.GetRecordAsync(
                         record.ExecutionId,
@@ -907,10 +1009,16 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (refreshed is not null)
                     {
                         ApplyAuthoritativeRecord(record, refreshed);
+
+                        Logger.Engine.LogInformation(
+                            $"[AI DAG] Finalization authoritative record reloaded. ExecutionId='{record.ExecutionId}', Status='{record.Status}', Version='{record.Version}'.");
                     }
 
                     return;
                 }
+
+                Logger.Engine.LogInformation(
+                    $"[AI DAG] Finalization succeeded. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
 
                 // Reload final authoritative record after successful finalization.
                 var updated = await _dagStore.GetRecordAsync(
@@ -920,6 +1028,9 @@ namespace Multiplexed.AI.Runtime.Execution
                 if (updated is not null)
                 {
                     ApplyAuthoritativeRecord(record, updated);
+
+                    Logger.Engine.LogInformation(
+                        $"[AI DAG] Final authoritative record loaded. ExecutionId='{record.ExecutionId}', Status='{record.Status}', Version='{record.Version}', CompletedSteps='{record.CompletedSteps.Count}'.");
                 }
 
                 return;

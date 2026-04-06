@@ -13,6 +13,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
@@ -118,6 +119,11 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>();
             services.AddScoped<IAiStepExecutorLogger, AiStepExecutorLogger>();
             services.AddScoped<IAiRuntimeLogger, AiRuntimeLogger>();
+
+            // ------------------------------------------------------------
+            // Metrics
+            // ------------------------------------------------------------
+            services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
 
             // ------------------------------------------------------------
             // Execution runtime
