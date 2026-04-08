@@ -113,5 +113,21 @@ namespace Multiplexed.AI.Stores
         Task DeleteStateAsync(
             string executionId,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Restores an execution record and state without concurrency checks.
+        /// 
+        /// PURPOSE:
+        /// - Used by replay systems to rehydrate execution state after crash/restart
+        /// - Bypasses optimistic concurrency mechanisms
+        /// 
+        /// BEHAVIOR:
+        /// - Must overwrite existing record/state if present
+        /// - Must be idempotent
+        /// </summary>
+        Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default);
     }
 }

@@ -1,12 +1,15 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
@@ -20,6 +23,7 @@ using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.Realtime.Context;
 
 namespace Multiplexed.AI.DI
 {
@@ -29,7 +33,7 @@ namespace Multiplexed.AI.DI
     public static class ServiceCollectionExtensions
     {
         /// <summary>
-        /// Adds the AI runtime module to the service collection.
+        /// Adds the AI runtime module to the service collection from application configuration.
         /// </summary>
         /// <param name="services">Target service collection.</param>
         /// <param name="configuration">Application configuration.</param>
@@ -41,14 +45,36 @@ namespace Multiplexed.AI.DI
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configuration);
 
+            var aiEngineOptions = new AiEngineOptions();
+            configuration.GetSection("AiEngine").Bind(aiEngineOptions);
+
+            var cleanupOptions = new AiExecutionCleanupOptions();
+            configuration.GetSection("AiExecutionCleanup").Bind(cleanupOptions);
+
+            aiEngineOptions.Cleanup = cleanupOptions;
+
+            return services.AddMultiplexAI(aiEngineOptions);
+        }
+
+        /// <summary>
+        /// Adds the AI runtime module to the service collection from strongly typed options.
+        /// </summary>
+        /// <param name="services">Target service collection.</param>
+        /// <param name="options">Strongly typed AI engine options.</param>
+        /// <returns>The same service collection instance.</returns>
+        public static IServiceCollection AddMultiplexAI(
+            this IServiceCollection services,
+            AiEngineOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(options);
+
             // ------------------------------------------------------------
             // Options
             // ------------------------------------------------------------
-            services.Configure<AiEngineOptions>(
-                configuration.GetSection("AiEngine"));
-
-            services.Configure<AiExecutionCleanupOptions>(
-                configuration.GetSection("AiExecutionCleanup"));
+            services.AddSingleton<IOptions<AiEngineOptions>>(Options.Create(options));
+            services.AddSingleton<IOptions<AiExecutionCleanupOptions>>(
+                Options.Create(options.Cleanup ?? new AiExecutionCleanupOptions()));
 
             // ------------------------------------------------------------
             // Retry / step execution infrastructure
@@ -75,17 +101,16 @@ namespace Multiplexed.AI.DI
 
             services.AddScoped<JsonAiPipelineDefinitionProvider>(sp =>
             {
-                var options = sp.GetRequiredService<
-                    Microsoft.Extensions.Options.IOptions<AiEngineOptions>>().Value;
+                var resolvedOptions = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
 
-                if (string.IsNullOrWhiteSpace(options.JsonPipelineDefinitionFilePath))
+                if (string.IsNullOrWhiteSpace(resolvedOptions.JsonPipelineDefinitionFilePath))
                 {
                     throw new InvalidOperationException(
-                        "AiEngine:JsonPipelineDefinitionFilePath must be configured when using the Json pipeline definition source.");
+                        "AiEngineOptions.JsonPipelineDefinitionFilePath must be configured when using the Json pipeline definition source.");
                 }
 
                 return new JsonAiPipelineDefinitionProvider(
-                    options.JsonPipelineDefinitionFilePath);
+                    resolvedOptions.JsonPipelineDefinitionFilePath);
             });
 
             services.AddScoped<IAiPipelineDefinitionSourceSelector, DefaultAiPipelineDefinitionSourceSelector>();
@@ -114,6 +139,7 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Logger
             // ------------------------------------------------------------
+            services.AddScoped<IRuntimeEventContext, RealtimeEventContext>();
             services.AddScoped<IAiExecutionEngineLogger, AiExecutionEngineLogger>();
             services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
             services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>();

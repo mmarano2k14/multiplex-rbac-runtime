@@ -294,5 +294,28 @@ namespace Multiplexed.AI.Stores
                 throw primaryException;
             }
         }
+
+        public async Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            try
+            {
+                // 🔹 Primary overwrite
+                await _primary.RestoreAsync(record, state, cancellationToken);
+
+                // 🔹 Mirror to fallback
+                await _fallback.CreateAsync(record, state, cancellationToken);
+            }
+            catch
+            {
+                // 🔹 Fallback only (resilience mode)
+                await _fallback.CreateAsync(record, state, cancellationToken);
+            }
+        }
     }
 }

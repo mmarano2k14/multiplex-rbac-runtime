@@ -131,6 +131,35 @@ namespace Multiplexed.AI.Stores.Memory
         }
 
         /// <summary>
+        /// Restores an execution record and state in memory without concurrency checks.
+        ///
+        /// This method is intended for replay and recovery flows.
+        /// Existing values are overwritten with defensive copies.
+        /// </summary>
+        public Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (string.IsNullOrWhiteSpace(record.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(record));
+
+            if (string.IsNullOrWhiteSpace(state.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(state));
+
+            if (!string.Equals(record.ExecutionId, state.ExecutionId, StringComparison.Ordinal))
+                throw new ArgumentException("Record and State must share the same ExecutionId.");
+
+            _records[record.ExecutionId] = CloneRecord(record);
+            _states[state.ExecutionId] = CloneState(state);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Deletes an execution record from memory.
         /// 
         /// This operation is idempotent. If the record does not exist,

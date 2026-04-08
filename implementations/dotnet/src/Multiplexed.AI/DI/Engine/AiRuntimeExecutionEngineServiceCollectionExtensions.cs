@@ -2,7 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.AI.Runtime.Execution;
 
-namespace Multiplexed.AI.Runtime.DependencyInjection
+namespace Multiplexed.AI.DI.Engine
 {
     /// <summary>
     /// Registers AI execution engines.

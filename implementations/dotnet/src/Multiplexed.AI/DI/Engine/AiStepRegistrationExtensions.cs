@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Pipeline.Registry;
 
-namespace Multiplexed.AI.DI
+namespace Multiplexed.AI.DI.Engine
 {
     /// <summary>
     /// Registers AI steps discovered through assembly scanning.

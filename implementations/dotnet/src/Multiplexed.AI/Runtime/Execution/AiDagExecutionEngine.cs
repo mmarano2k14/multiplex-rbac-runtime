@@ -1,7 +1,10 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Convergence;
@@ -10,6 +13,7 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
+using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Runtime.Execution
 {
@@ -42,8 +46,9 @@ namespace Multiplexed.AI.Runtime.Execution
     {
         private readonly IAiDagExecutionStore? _dagStore;
         private readonly IAiExecutionCleanupService _cleanupService;
-        private readonly AiExecutionCleanupOptions _cleanupOptions;
+        private readonly AiEngineOptions _aiOptions;
         private readonly IAiRuntimeMetrics _metrics;
+        private readonly IAiExecutionSnapshotService<ExecutionContextSnapshot>? _snapshotService;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
@@ -57,9 +62,10 @@ namespace Multiplexed.AI.Runtime.Execution
             IAiSequentialPipelineExecutor pipelineExecutor,
             IAiRuntimeLogger logger,
             IAiExecutionCleanupService cleanupService,
-            IOptions<AiExecutionCleanupOptions> cleanupOptions,
+            IOptions<AiEngineOptions> aiOptions,
             IAiRuntimeMetrics metrics,
-            IAiDagExecutionStore? dagStore = null)
+            IAiDagExecutionStore? dagStore = null,
+            IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
             : base(
                 store,
                 contextStore,
@@ -70,9 +76,10 @@ namespace Multiplexed.AI.Runtime.Execution
                 logger)
         {
             _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
-            _cleanupOptions = cleanupOptions?.Value ?? throw new ArgumentNullException(nameof(cleanupOptions));
+            _aiOptions = aiOptions?.Value ?? throw new ArgumentNullException(nameof(aiOptions));
             _dagStore = dagStore;
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+            _snapshotService = snapshotService;
         }
 
         /// <inheritdoc />
@@ -312,6 +319,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
 
@@ -384,6 +392,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
 
@@ -443,6 +452,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
+                    await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
 
@@ -581,6 +591,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
 
@@ -661,6 +672,12 @@ namespace Multiplexed.AI.Runtime.Execution
                         expectedStepKey,
                         failedState,
                         cancellationToken);
+
+                    if (record.IsTerminal)
+                    {
+                        Logger.Engine.ExecutionCompleted(record);
+                        await TryPersistTerminalSnapshotAsync(record, failedState, cancellationToken);
+                    }
 
                     await TryCleanupIfNeededAsync(record, cancellationToken);
 
@@ -762,6 +779,7 @@ namespace Multiplexed.AI.Runtime.Execution
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
+                    await TryPersistTerminalSnapshotAsync(record, finalState, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
 
@@ -841,6 +859,75 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
+        /// Attempts to persist a durable execution snapshot for terminal executions.
+        ///
+        /// SNAPSHOT BEHAVIOR:
+        /// - Snapshot persistence is optional and controlled through <see cref="AiEngineOptions"/>
+        /// - Snapshot persistence is best-effort and must not interfere with execution flow
+        /// - The current authoritative execution state is persisted only after terminal convergence
+        ///
+        /// IMPORTANT:
+        /// - The distributed execution store remains the source of truth
+        /// - The snapshot store is only used for audit, replay support, and post-mortem inspection
+        /// - This method must be called before cleanup so the execution can still be inspected
+        /// </summary>
+        /// <param name="record">The terminal execution record.</param>
+        /// <param name="state">The authoritative execution state snapshot.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task TryPersistTerminalSnapshotAsync(
+         AiExecutionRecord record,
+         AiExecutionState state,
+         CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (!record.IsTerminal)
+            {
+                return;
+            }
+
+            if (!_aiOptions.Snapshots.Enabled)
+            {
+                return;
+            }
+
+            if (_snapshotService is null)
+            {
+                return;
+            }
+
+            try
+            {
+                ExecutionContextSnapshot? contextSnapshot = null;
+
+                if (Accessor.Current is not null)
+                {
+                    contextSnapshot = ContextFactory.CreateSnapshot(Accessor.Current);
+                }
+
+                await _snapshotService.TryPersistAsync(
+                    record,
+                    state,
+                    record.ContextKey,
+                    contextSnapshot,
+                    cancellationToken);
+
+                Logger.Engine.LogInformation(
+                    $"[AI SNAPSHOT] Persisted terminal snapshot for execution '{record.ExecutionId}' with status '{record.Status}'.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Engine.LogError(
+                    ex,
+                    $"[AI SNAPSHOT] Failed for execution '{record.ExecutionId}'.");
+
+                // Snapshot persistence is best-effort and must never interfere
+                // with runtime finalization or cleanup behavior.
+            }
+        }
+
+        /// <summary>
         /// Attempts automatic cleanup only when configured and only when the execution is terminal.
         ///
         /// Cleanup remains optional so completed / failed executions can still be inspected
@@ -861,8 +948,8 @@ namespace Multiplexed.AI.Runtime.Execution
             }
 
             var shouldCleanup =
-                (record.Status == AiExecutionStatus.Completed && _cleanupOptions.AutoCleanupOnCompleted) ||
-                (record.Status == AiExecutionStatus.Failed && _cleanupOptions.AutoCleanupOnFailed);
+                (record.Status == AiExecutionStatus.Completed && _aiOptions.Cleanup.AutoCleanupOnCompleted) ||
+                (record.Status == AiExecutionStatus.Failed && _aiOptions.Cleanup.AutoCleanupOnFailed);
 
             if (!shouldCleanup)
             {
@@ -890,7 +977,7 @@ namespace Multiplexed.AI.Runtime.Execution
                     ex,
                     $"[AI CLEANUP] Failed for execution '{record.ExecutionId}'.");
 
-                if (!_cleanupOptions.SuppressCleanupExceptions)
+                if (!_aiOptions.Cleanup.SuppressCleanupExceptions)
                 {
                     throw;
                 }

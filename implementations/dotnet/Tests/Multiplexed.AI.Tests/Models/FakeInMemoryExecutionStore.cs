@@ -182,4 +182,9 @@ public sealed class FakeInMemoryExecutionStore : IAiExecutionStore
     {
         throw new NotImplementedException();
     }
+
+    public Task RestoreAsync(AiExecutionRecord record, AiExecutionState state, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
 }

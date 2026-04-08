@@ -7,7 +7,7 @@ using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
@@ -168,12 +168,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var cleanupService = new NoOpAiExecutionCleanupService();
 
-            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+            var aiOptions = new AiEngineOptions();
+
+            aiOptions.Cleanup = new AiExecutionCleanupOptions
             {
                 AutoCleanupOnCompleted = false,
                 AutoCleanupOnFailed = false,
                 SuppressCleanupExceptions = true
-            });
+            };
 
             var metrics = new AiRuntimeMetrics();
 
@@ -184,7 +186,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 contextFactory,
                 CreateServiceProvider(accessor, executionStore),
                 pipelineExecutor,
-                logger,cleanupService, cleanupOptions, metrics);
+                logger,cleanupService, Options.Create(aiOptions), metrics);
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector()

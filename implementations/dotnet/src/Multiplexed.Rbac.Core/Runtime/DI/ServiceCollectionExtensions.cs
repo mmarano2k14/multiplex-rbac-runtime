@@ -99,8 +99,9 @@ namespace Multiplexed.Rbac.Core.Runtime.DI
 
             services.AddSingleton<IConnectionMultiplexer>(_ =>
             {
+                // NEED FIX LATER
                 var cs = configuration.GetConnectionString("Redis")
-                         ?? throw new InvalidOperationException("Missing Redis connection string.");
+                         ?? "localhost:6379";
                 return ConnectionMultiplexer.Connect(cs);
             });
 

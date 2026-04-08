@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;

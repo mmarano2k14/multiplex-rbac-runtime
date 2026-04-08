@@ -1,0 +1,51 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
+using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.Execution.Persistence.Mongo;
+using Multiplexed.AI.Runtime.Persistence;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Multiplexed.AI.Runtime.DependencyInjection
+{
+    /// <summary>
+    /// Provides initialization helpers for MongoDB-backed AI execution snapshot persistence.
+    /// </summary>
+    public static class AiExecutionSnapshotMongoInitializationExtensions
+    {
+        /// <summary>
+        /// Ensures required MongoDB indexes exist for AI execution snapshots.
+        /// </summary>
+        /// <typeparam name="TContextSnapshot">
+        /// The serializable external context snapshot type associated with the execution.
+        /// </typeparam>
+        /// <param name="serviceProvider">The root service provider.</param>
+        /// <param name="options">The Mongo snapshot options.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        public static async Task EnsureMongoAiExecutionSnapshotIndexesAsync<TContextSnapshot>(
+            this IServiceProvider serviceProvider,
+            AiExecutionSnapshotMongoOptions options,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(serviceProvider);
+            ArgumentNullException.ThrowIfNull(options);
+
+            if (string.IsNullOrWhiteSpace(options.CollectionName))
+            {
+                throw new InvalidOperationException(
+                    "AI execution snapshot Mongo collection name cannot be null or empty.");
+            }
+
+            var database = serviceProvider.GetRequiredService<IMongoDatabase>();
+
+            var collection = database.GetCollection<AiExecutionSnapshotDocument<TContextSnapshot>>(
+                options.CollectionName);
+
+            await MongoAiExecutionSnapshotIndexes.EnsureCreatedAsync(
+                collection,
+                cancellationToken);
+        }
+    }
+}

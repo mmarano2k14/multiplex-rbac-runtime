@@ -3,7 +3,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 
-namespace Multiplexed.AI.Runtime.DependencyInjection
+namespace Multiplexed.AI.DI.Cleanup
 {
     /// <summary>
     /// Registers AI execution cleanup services and options.

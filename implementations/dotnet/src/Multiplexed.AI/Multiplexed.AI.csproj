@@ -12,11 +12,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.4" />
+    <PackageReference Include="MongoDB.Driver" Version="3.7.1" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Multiplexed.Abstractions\Multiplexed.Abstractions.csproj" />
     <ProjectReference Include="..\Multiplexed.Rbac.Core\Multiplexed.Rbac.Core.csproj" />
+    <ProjectReference Include="..\Multiplexed.Realtime\Multiplexed.Realtime.csproj" />
   </ItemGroup>
     <ItemGroup>
 	    <Content Include="Config\**\*.json">

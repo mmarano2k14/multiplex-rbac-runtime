@@ -282,6 +282,45 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
+        /// Restores an execution record and state without optimistic concurrency checks.
+        ///
+        /// PURPOSE:
+        /// - Used by replay / recovery flows
+        /// - Overwrites the persisted record and state directly
+        ///
+        /// BEHAVIOR:
+        /// - Record and state must share the same execution identifier
+        /// - Existing values are replaced atomically from the caller perspective
+        /// - No expected step key is required
+        /// </summary>
+        public async Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (string.IsNullOrWhiteSpace(record.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(record));
+
+            if (string.IsNullOrWhiteSpace(state.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(state));
+
+            if (!string.Equals(record.ExecutionId, state.ExecutionId, StringComparison.Ordinal))
+                throw new ArgumentException("Record and State must share the same ExecutionId.");
+
+            var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stateKey = _keyBuilder.GetExecutionStateKey(state.ExecutionId);
+
+            var recordPayload = JsonSerializer.Serialize(record, _jsonOptions);
+            var statePayload = JsonSerializer.Serialize(state, _jsonOptions);
+
+            await _database.StringSetAsync(recordKey, recordPayload);
+            await _database.StringSetAsync(stateKey, statePayload);
+        }
+
+        /// <summary>
         /// Loads the Lua script into Redis and returns the SHA-bound instance.
         /// </summary>
         private LoadedLuaScript LoadTryUpdateScript()

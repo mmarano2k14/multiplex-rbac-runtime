@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.AI.Configuration
+﻿using Multiplexed.AI.Runtime.Configuration;
+
+namespace Multiplexed.AI.Configuration
 {
     /// <summary>
     /// Defines configuration options for the AI runtime engine.
@@ -6,12 +8,13 @@
     /// Responsibilities:
     /// - Select the default pipeline definition source
     /// - Provide source-specific settings
+    /// - Group runtime-related option sections
     /// - Prepare the runtime for future extensibility
     ///
     /// Notes:
-    /// - The execution engine does not consume these options directly.
-    /// - These options are primarily used by pipeline preparation components,
-    ///   such as source selection and provider wiring.
+    /// - The execution engine does not consume every option directly.
+    /// - Some sections are primarily used by pipeline preparation components,
+    ///   persistence wiring, cleanup behavior, and future runtime services.
     /// </summary>
     public sealed class AiEngineOptions
     {
@@ -35,5 +38,15 @@
         /// Gets or sets the optional default pipeline name used when no explicit pipeline name is provided.
         /// </summary>
         public string? DefaultPipelineName { get; set; }
+
+        /// <summary>
+        /// Gets or sets cleanup-related runtime options.
+        /// </summary>
+        public AiExecutionCleanupOptions Cleanup { get; set; } = new();
+
+        /// <summary>
+        /// Gets or sets durable execution snapshot options.
+        /// </summary>
+        public AiExecutionSnapshotOptions Snapshots { get; set; } = new();
     }
 }

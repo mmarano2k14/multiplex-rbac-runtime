@@ -7,7 +7,7 @@ using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
@@ -505,14 +505,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var cleanupService = new NoOpAiExecutionCleanupService();
 
-            var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
+
+            var metrics = new AiRuntimeMetrics();
+
+            var aiOptions = new AiEngineOptions();
+
+            aiOptions.Cleanup = new AiExecutionCleanupOptions
             {
                 AutoCleanupOnCompleted = false,
                 AutoCleanupOnFailed = false,
                 SuppressCleanupExceptions = true
-            });
-
-            var metrics = new AiRuntimeMetrics();
+            };
 
             return new AiDagExecutionEngine(
                 executionStore,
@@ -523,7 +526,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 pipelineExecutor,
                 logger,
                 cleanupService,
-                cleanupOptions,
+                Options.Create(aiOptions),
                 metrics,
                 dagStore);
         }
