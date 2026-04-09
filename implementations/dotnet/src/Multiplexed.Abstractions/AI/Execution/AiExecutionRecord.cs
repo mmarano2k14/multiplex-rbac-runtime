@@ -95,14 +95,14 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// but it must not be treated as the authoritative active step
         /// in DAG-based execution.
         /// </summary>
-        public string CurrentStep { get; set; } = string.Empty;
+        public string? CurrentStep { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the execution-level step transition key.
         /// This key can be renewed after each successful step transition
         /// to support optimistic concurrency and duplicate transition protection.
         /// </summary>
-        public string ExecutionStepKey { get; set; } = Guid.NewGuid().ToString("N");
+        public string? ExecutionStepKey { get; set; } = Guid.NewGuid().ToString("N");
 
         /// <summary>
         /// Gets or sets the UTC creation timestamp.

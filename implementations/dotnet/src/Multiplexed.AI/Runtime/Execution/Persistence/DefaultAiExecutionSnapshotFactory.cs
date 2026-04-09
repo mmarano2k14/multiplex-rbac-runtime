@@ -39,7 +39,7 @@ namespace Multiplexed.AI.Runtime.Persistence
             return new AiExecutionSnapshotDocument<TContextSnapshot>
             {
                 ExecutionId = record.ExecutionId,
-                PipelineName = record.PipelineName,
+                PipelineName = record.PipelineName ?? throw new InvalidOperationException( $"Execution '{record.ExecutionId}' has no PipelineName."),
                 Status = record.Status.ToString(),
                 ContextKey = contextKey,
                 ContextSnapshot = contextSnapshot,

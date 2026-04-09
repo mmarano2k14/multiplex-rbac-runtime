@@ -14,15 +14,13 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         /// <summary>
         /// Normalizes the provided snapshot in place.
         /// </summary>
-        public static AiExecutionSnapshotDocument<TContext>? Normalize<TContext>(AiExecutionSnapshotDocument<TContext>? snapshot)
+        public static AiExecutionSnapshotDocument<TContext> Normalize<TContext>(AiExecutionSnapshotDocument<TContext>? snapshot)
         {
-            if (snapshot is  not null)
-            {
-                NormalizeState(snapshot.State);
-            }
+            var normalizedSnapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
 
-            
-            return snapshot;
+            NormalizeState(normalizedSnapshot.State);
+
+            return normalizedSnapshot;
         }
 
         private static void NormalizeState(AiExecutionState? state)

@@ -437,7 +437,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         nextStep.Name);
 
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] Local step completed. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', DurationMs='{stepState.Duration?.TotalMilliseconds}'.");
+                        $"[AI DAG] Local step completed. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', DurationMs='{stepState.ElapsedDuration?.TotalMilliseconds}'.");
                 }
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();

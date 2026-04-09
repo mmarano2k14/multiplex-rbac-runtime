@@ -19,7 +19,7 @@ namespace Multiplexed.Abstractions.AI.Execution
     /// DESIGN:
     /// - Each step is uniquely identified by <see cref="StepName"/>
     /// - State transitions remain deterministic and monotonic
-    /// - Computed helper properties are excluded from persistence
+    /// - Computed helper properties are excluded from persistence where appropriate
     /// - Distributed ownership is modeled through explicit claim metadata and lease expiration
     ///
     /// INVARIANT MODEL:
@@ -131,7 +131,14 @@ namespace Multiplexed.Abstractions.AI.Execution
         public DateTime? CompletedAtUtc { get; set; }
 
         /// <summary>
-        /// Gets or sets the total execution duration once the step reaches a terminal state.
+        /// Gets or sets the final serialized execution duration once the step reaches a terminal state.
+        ///
+        /// SEMANTICS:
+        /// - Null while the step has not yet reached a terminal state
+        /// - Set when the step transitions to Completed or Failed
+        /// - Represents total logical step lifetime from first <see cref="StartedAtUtc"/>
+        ///   to terminal <see cref="CompletedAtUtc"/>
+        /// - This value is intended for persistence, replay, audit, and snapshot serialization
         /// </summary>
         public TimeSpan? Duration { get; set; }
 
@@ -296,6 +303,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// GUARANTEES:
         /// - Clears all distributed claim metadata
         /// - Does not modify retry counters
+        /// - Clears terminal timestamps and persisted final duration
         /// </summary>
         public void MarkReady()
         {
@@ -305,6 +313,9 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimToken = null;
             ClaimedAtUtc = null;
             LeaseExpiresAtUtc = null;
+
+            CompletedAtUtc = null;
+            Duration = null;
 
             UpdatedAtUtc = DateTime.UtcNow;
             Version++;
@@ -366,15 +377,17 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - Stores the final result
         /// - Clears retry timing
         /// - Clears claim ownership
-        /// - Computes final duration when possible
+        /// - Computes and persists final duration when possible
         /// </summary>
         public void MarkCompleted(AiStepResult result)
         {
             ArgumentNullException.ThrowIfNull(result);
 
             if (Status != AiStepExecutionStatus.Running)
+            {
                 throw new InvalidOperationException(
                     $"Step '{StepName}' cannot complete from status '{Status}'.");
+            }
 
             var now = DateTime.UtcNow;
 
@@ -384,7 +397,9 @@ namespace Multiplexed.Abstractions.AI.Execution
             NextRetryAtUtc = null;
             CompletedAtUtc = now;
             UpdatedAtUtc = now;
-            Duration = StartedAtUtc.HasValue ? now - StartedAtUtc.Value : null;
+            Duration = StartedAtUtc.HasValue && now >= StartedAtUtc.Value
+                ? now - StartedAtUtc.Value
+                : TimeSpan.Zero;
 
             ClaimedBy = null;
             ClaimToken = null;
@@ -401,6 +416,11 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - The step must currently be Running or WaitingForRetry
         /// - This should only be used when retry budget is exhausted
         ///   or the failure is considered non-retriable
+        ///
+        /// GUARANTEES:
+        /// - Persists the terminal timestamp
+        /// - Persists the final duration
+        /// - Clears claim ownership
         /// </summary>
         public void MarkFailed(string? error)
         {
@@ -418,7 +438,9 @@ namespace Multiplexed.Abstractions.AI.Execution
             NextRetryAtUtc = null;
             CompletedAtUtc = now;
             UpdatedAtUtc = now;
-            Duration = StartedAtUtc.HasValue ? now - StartedAtUtc.Value : null;
+            Duration = StartedAtUtc.HasValue && now >= StartedAtUtc.Value
+                ? now - StartedAtUtc.Value
+                : TimeSpan.Zero;
 
             ClaimedBy = null;
             ClaimToken = null;
@@ -444,12 +466,16 @@ namespace Multiplexed.Abstractions.AI.Execution
         public void MarkWaitingForRetry(string? error, DateTime nextRetryAtUtc)
         {
             if (Status != AiStepExecutionStatus.Running)
+            {
                 throw new InvalidOperationException(
                     $"Step '{StepName}' cannot enter WaitingForRetry from status '{Status}'.");
+            }
 
             if (RetryCount > MaxRetries)
+            {
                 throw new InvalidOperationException(
                     $"RetryCount '{RetryCount}' exceeds MaxRetries '{MaxRetries}' for step '{StepName}'.");
+            }
 
             Status = AiStepExecutionStatus.WaitingForRetry;
             Error = error;
@@ -480,8 +506,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         public void MarkRequeuedAfterTimeout()
         {
             if (Status != AiStepExecutionStatus.Running)
+            {
                 throw new InvalidOperationException(
                     $"Step '{StepName}' cannot be recovered from status '{Status}'.");
+            }
 
             Status = AiStepExecutionStatus.Ready;
 
@@ -539,12 +567,16 @@ namespace Multiplexed.Abstractions.AI.Execution
         public void MarkRetryOrFail(string? error, DateTime utcNow)
         {
             if (Status != AiStepExecutionStatus.Running)
+            {
                 throw new InvalidOperationException(
                     $"RetryOrFail is invalid for step '{StepName}' from status '{Status}'.");
+            }
 
             if (RetryCount > MaxRetries)
+            {
                 throw new InvalidOperationException(
                     $"Invalid retry state for step '{StepName}': RetryCount '{RetryCount}' > MaxRetries '{MaxRetries}'.");
+            }
 
             Error = error;
 
@@ -553,8 +585,10 @@ namespace Multiplexed.Abstractions.AI.Execution
                 RetryCount++;
 
                 if (RetryCount > MaxRetries)
+                {
                     throw new InvalidOperationException(
                         $"Retry overflow detected for step '{StepName}'.");
+                }
 
                 var nextRetryAtUtc = utcNow.AddMilliseconds(
                     RetryDelayMs > 0 ? RetryDelayMs : 2000);
@@ -626,6 +660,35 @@ namespace Multiplexed.Abstractions.AI.Execution
         public bool IsSchedulable =>
             Status == AiStepExecutionStatus.Ready ||
             Status == AiStepExecutionStatus.None;
+
+        /// <summary>
+        /// Gets the live elapsed duration of the step.
+        ///
+        /// SEMANTICS:
+        /// - Null if the step has never started
+        /// - For running steps, returns the live elapsed time from <see cref="StartedAtUtc"/> to now
+        /// - For terminal steps, returns the persisted <see cref="Duration"/> when available
+        ///
+        /// This helper is intended for logs, diagnostics, metrics, and live observability.
+        /// It is intentionally excluded from persisted JSON.
+        /// </summary>
+        [JsonIgnore]
+        public TimeSpan? ElapsedDuration
+        {
+            get
+            {
+                if (Duration.HasValue)
+                    return Duration;
+
+                if (!StartedAtUtc.HasValue)
+                    return null;
+
+                var now = DateTime.UtcNow;
+                return now >= StartedAtUtc.Value
+                    ? now - StartedAtUtc.Value
+                    : TimeSpan.Zero;
+            }
+        }
 
         /// <summary>
         /// Determines whether the current running lease is expired at the supplied UTC time.
