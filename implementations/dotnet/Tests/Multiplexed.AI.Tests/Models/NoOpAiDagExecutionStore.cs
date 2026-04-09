@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Stores;
 
 namespace Multiplexed.AI.Tests.Fakes
@@ -101,6 +101,16 @@ namespace Multiplexed.AI.Tests.Fakes
         }
 
         public Task<bool> TryFinalizeExecutionAsync(AiDagExecutionFinalizationRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task DeleteStateAsync(string executionId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task RestoreAsync(AiExecutionRecord record, AiExecutionState state, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(true);
         }

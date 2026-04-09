@@ -49,6 +49,93 @@ namespace Multiplexed.AI.Tests.Integration.Models
             public void LogError(string message)
             {
             }
+
+            void IAiExecutionEngineLogger.ExecutionCreated(AiExecutionRecord record)
+            {
+            }
+
+            void IAiExecutionEngineLogger.ExecutionLoaded(AiExecutionRecord record)
+            {
+            }
+
+            void IAiExecutionEngineLogger.ExecutionCompleted(AiExecutionRecord record)
+            {
+            }
+
+            void IAiExecutionEngineLogger.ExecutionAlreadyCompleted(AiExecutionRecord record)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepCompleted(AiExecutionRecord record, string stepName)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepFailed(string executionId, string stepName, string? error)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepException(string executionId, string stepName, Exception exception)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepClaimed(string executionId, string stepName, string workerId, string claimToken)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepRetryScheduled(string executionId, string stepName, int retryCount, DateTime? nextRetryAtUtc)
+            {
+            }
+
+            void IAiExecutionEngineLogger.StepsRecovered(string executionId, int recoveredCount)
+            {
+            }
+
+            void IAiExecutionEngineLogger.ExecutionReplayRestored(string executionId, AiExecutionStatus status, int stepsCount)
+            {
+            }
+
+            void IAiExecutionEngineLogger.ExecutionReplaySkipped(string executionId, string reason)
+            {
+            }
+
+            void IAiExecutionEngineLogger.SnapshotPersisted(string executionId, AiExecutionStatus status)
+            {
+            }
+
+            void IAiExecutionEngineLogger.FinalizationSucceeded(string executionId, AiExecutionStatus status)
+            {
+            }
+
+            void IAiExecutionEngineLogger.FinalizationRaceLost(string executionId, AiExecutionStatus status)
+            {
+            }
+
+            void IAiExecutionEngineLogger.CleanupStarted(string executionId, AiExecutionStatus status)
+            {
+            }
+            void IAiExecutionEngineLogger.CleanupCompleted(string executionId)
+            {
+            }
+
+            void IAiExecutionEngineLogger.CleanupSkipped(string executionId, string reason)
+            {
+            }
+
+            void IAiExecutionEngineLogger.LogInformation(string message)
+            {
+            }
+
+            void IAiExecutionEngineLogger.LogWarning(string message)
+            {
+            }
+
+            void IAiExecutionEngineLogger.LogError(Exception exception, string message)
+            {
+            }
+
+            void IAiExecutionEngineLogger.LogError(string message)
+            {
+            }
         }
 
         private sealed class NoopPipelineLogger : IAiPipelineLogger

@@ -10,7 +10,7 @@ using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
-namespace Multiplexed.AI.Runtime.Execution
+namespace Multiplexed.AI.Runtime.Execution.Engine
 {
     /// <summary>
     /// Executes AI pipelines using strict sequential orchestration.

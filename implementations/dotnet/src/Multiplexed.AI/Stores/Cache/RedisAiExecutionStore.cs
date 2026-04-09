@@ -10,6 +10,7 @@ namespace Multiplexed.AI.Stores.Cache
     /// This store provides:
     /// - Primary persistence for execution records and states
     /// - Atomic compare-and-swap updates using Redis Lua scripting
+    /// - Atomic restore for replay / recovery flows
     ///
     /// Key design goals:
     /// - Ensure consistency under concurrency
@@ -55,9 +56,30 @@ namespace Multiplexed.AI.Stores.Cache
             """);
 
         /// <summary>
+        /// Prepared Lua script used to restore record and state atomically.
+        ///
+        /// PURPOSE:
+        /// - Used by replay / recovery flows
+        /// - Ensures record and state are restored together
+        /// - Avoids partial restore if a process crashes between two writes
+        /// </summary>
+        private static readonly LuaScript RestorePreparedScript = LuaScript.Prepare(
+            """
+            redis.call('SET', @recordKey, @recordJson)
+            redis.call('SET', @stateKey, @stateJson)
+
+            return 1
+            """);
+
+        /// <summary>
         /// Loaded script bound to Redis server (executed via SHA).
         /// </summary>
         private LoadedLuaScript _tryUpdateLoadedScript;
+
+        /// <summary>
+        /// Loaded restore script bound to Redis server (executed via SHA).
+        /// </summary>
+        private LoadedLuaScript _restoreLoadedScript;
 
         /// <summary>
         /// Initializes a new instance of the Redis execution store.
@@ -80,6 +102,7 @@ namespace Multiplexed.AI.Stores.Cache
             };
 
             _tryUpdateLoadedScript = LoadTryUpdateScript();
+            _restoreLoadedScript = LoadRestoreScript();
         }
 
         /// <summary>
@@ -191,7 +214,6 @@ namespace Multiplexed.AI.Stores.Cache
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
-                // Redis lost script cache → reload + retry
                 _tryUpdateLoadedScript = LoadTryUpdateScript();
 
                 var result = await _database.ScriptEvaluateAsync(
@@ -282,7 +304,7 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Restores an execution record and state without optimistic concurrency checks.
+        /// Restores an execution record and state atomically without optimistic concurrency checks.
         ///
         /// PURPOSE:
         /// - Used by replay / recovery flows
@@ -290,7 +312,7 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// BEHAVIOR:
         /// - Record and state must share the same execution identifier
-        /// - Existing values are replaced atomically from the caller perspective
+        /// - Existing values are replaced atomically inside Redis
         /// - No expected step key is required
         /// </summary>
         public async Task RestoreAsync(
@@ -316,8 +338,44 @@ namespace Multiplexed.AI.Stores.Cache
             var recordPayload = JsonSerializer.Serialize(record, _jsonOptions);
             var statePayload = JsonSerializer.Serialize(state, _jsonOptions);
 
-            await _database.StringSetAsync(recordKey, recordPayload);
-            await _database.StringSetAsync(stateKey, statePayload);
+            try
+            {
+                var result = await _database.ScriptEvaluateAsync(
+                    _restoreLoadedScript,
+                    new
+                    {
+                        recordKey = (RedisKey)recordKey,
+                        stateKey = (RedisKey)stateKey,
+                        recordJson = (RedisValue)recordPayload,
+                        stateJson = (RedisValue)statePayload
+                    });
+
+                if ((int)result! != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Redis restore script returned unexpected result for execution '{record.ExecutionId}'.");
+                }
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _restoreLoadedScript = LoadRestoreScript();
+
+                var result = await _database.ScriptEvaluateAsync(
+                    _restoreLoadedScript,
+                    new
+                    {
+                        recordKey = (RedisKey)recordKey,
+                        stateKey = (RedisKey)stateKey,
+                        recordJson = (RedisValue)recordPayload,
+                        stateJson = (RedisValue)statePayload
+                    });
+
+                if ((int)result! != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Redis restore script returned unexpected result for execution '{record.ExecutionId}' after script reload.");
+                }
+            }
         }
 
         /// <summary>
@@ -329,6 +387,17 @@ namespace Multiplexed.AI.Stores.Cache
             var server = _multiplexer.GetServer(endpoint);
 
             return TryUpdatePreparedScript.Load(server);
+        }
+
+        /// <summary>
+        /// Loads the restore Lua script into Redis and returns the SHA-bound instance.
+        /// </summary>
+        private LoadedLuaScript LoadRestoreScript()
+        {
+            var endpoint = _multiplexer.GetEndPoints().First();
+            var server = _multiplexer.GetServer(endpoint);
+
+            return RestorePreparedScript.Load(server);
         }
     }
 }

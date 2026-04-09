@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
@@ -559,7 +559,16 @@ namespace Multiplexed.AI.Stores.Cache
 
         /// <summary>
         /// Reconstructs execution state by loading all indexed step keys.
-        /// Repairs legacy/corrupted DependsOn payloads before deserializing.
+        ///
+        /// IMPORTANT:
+        /// - In distributed DAG mode, step keys + step index are the authoritative state
+        /// - There is no single serialized "state blob" key for normal DAG execution
+        /// - This method reconstructs the state from the distributed step entries
+        ///
+        /// RETURN SEMANTICS:
+        /// - Returns <c>null</c> when no distributed DAG state exists for the execution
+        /// - Returns a populated <see cref="AiExecutionState"/> only when at least one step
+        ///   could be reconstructed from the authoritative DAG storage
         /// </summary>
         public async Task<AiExecutionState?> GetStateAsync(
             string executionId,
@@ -570,6 +579,13 @@ namespace Multiplexed.AI.Stores.Cache
 
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var stepNames = await _database.SetMembersAsync(stepIndexKey);
+
+            // If the step index does not exist or contains no members,
+            // there is no distributed DAG state to reconstruct.
+            if (stepNames.Length == 0)
+            {
+                return null;
+            }
 
             var state = new AiExecutionState
             {
@@ -597,6 +613,14 @@ namespace Multiplexed.AI.Stores.Cache
                     step.DependsOn ??= new List<string>();
                     state.Steps[step.StepName] = step;
                 }
+            }
+
+            // Defensive guard:
+            // if the index existed but no step payloads could be reconstructed,
+            // treat the distributed DAG state as missing.
+            if (state.Steps.Count == 0)
+            {
+                return null;
             }
 
             return state;
@@ -677,6 +701,24 @@ namespace Multiplexed.AI.Stores.Cache
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
             await _database.KeyDeleteAsync(_keyBuilder.GetExecutionRecordKey(executionId));
+        }
+
+        /// <summary>
+        /// Deletes the authoritative distributed DAG state for an execution.
+        ///
+        /// IMPORTANT:
+        /// - In DAG mode, state is represented by step keys + step index
+        /// - Deleting only a generic execution state key is not sufficient
+        /// - This method therefore delegates to <see cref="DeleteStepsAsync"/>
+        /// </summary>
+        public async Task DeleteStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            await DeleteStepsAsync(executionId, cancellationToken);
         }
 
         /// <summary>
@@ -1074,6 +1116,73 @@ namespace Multiplexed.AI.Stores.Cache
                 }
 
                 return success;
+            }
+        }
+
+        /// <summary>
+        /// Restores an execution record and distributed DAG state.
+        ///
+        /// PURPOSE:
+        /// - Used by replay / recovery flows
+        /// - Rebuilds the authoritative DAG record and step state
+        /// - Restores the step index so distributed scanning can resume
+        ///
+        /// IMPORTANT:
+        /// - In DAG mode, restoring only a generic "state blob" key is incorrect
+        /// - The authoritative DAG state is composed of:
+        ///   - the record key
+        ///   - one key per step
+        ///   - the step index set
+        /// - This method therefore restores the full distributed DAG layout
+        /// </summary>
+        public async Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (string.IsNullOrWhiteSpace(record.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(record));
+
+            if (string.IsNullOrWhiteSpace(state.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(state));
+
+            if (!string.Equals(record.ExecutionId, state.ExecutionId, StringComparison.Ordinal))
+                throw new ArgumentException("Record and State must share the same ExecutionId.");
+
+            var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(record.ExecutionId);
+
+            // Remove any previous distributed DAG state so restore becomes authoritative.
+            await DeleteStepsAsync(record.ExecutionId, cancellationToken);
+
+            var transaction = _database.CreateTransaction();
+
+            _ = transaction.StringSetAsync(
+                recordKey,
+                JsonSerializer.Serialize(record, _jsonOptions));
+
+            foreach (var step in state.Steps.Values)
+            {
+                step.DependsOn ??= new List<string>();
+
+                var stepKey = _keyBuilder.GetDagStepKey(record.ExecutionId, step.StepName);
+
+                _ = transaction.StringSetAsync(
+                    stepKey,
+                    JsonSerializer.Serialize(step, _jsonOptions));
+
+                _ = transaction.SetAddAsync(stepIndexKey, step.StepName);
+            }
+
+            var committed = await transaction.ExecuteAsync();
+
+            if (!committed)
+            {
+                throw new InvalidOperationException(
+                    $"Distributed DAG restore transaction failed for execution '{record.ExecutionId}'.");
             }
         }
 

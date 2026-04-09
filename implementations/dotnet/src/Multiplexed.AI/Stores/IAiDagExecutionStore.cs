@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Engine;
 
 namespace Multiplexed.AI.Stores
 {
@@ -57,6 +57,15 @@ namespace Multiplexed.AI.Stores
         /// This operation should be idempotent.
         /// </summary>
         Task DeleteRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes the global execution state.
+        ///
+        /// This operation should be idempotent.
+        /// </summary>
+        Task DeleteStateAsync(
             string executionId,
             CancellationToken cancellationToken = default);
 
@@ -126,6 +135,22 @@ namespace Multiplexed.AI.Stores
         /// <returns>True if finalization succeeded; otherwise false.</returns>
         Task<bool> TryFinalizeExecutionAsync(
             AiDagExecutionFinalizationRequest request,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Restores an execution record and state without concurrency checks.
+        /// 
+        /// PURPOSE:
+        /// - Used by replay systems to rehydrate execution state after crash/restart
+        /// - Bypasses optimistic concurrency mechanisms
+        /// 
+        /// BEHAVIOR:
+        /// - Must overwrite existing record/state if present
+        /// - Must be idempotent
+        /// </summary>
+        Task RestoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
             CancellationToken cancellationToken = default);
     }
 }

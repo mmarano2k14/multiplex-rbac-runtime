@@ -7,8 +7,15 @@ namespace Multiplexed.AI.Runtime.Logging
     /// <summary>
     /// Emits structured runtime events for the AI execution engine.
     ///
-    /// This implementation centralizes event categories and payload formats
-    /// so the execution engine can remain focused on orchestration behavior.
+    /// PURPOSE:
+    /// - Centralize execution and step lifecycle observability
+    /// - Emit structured realtime events through the runtime event context
+    /// - Keep the execution engine focused on orchestration, not payload formatting
+    ///
+    /// DESIGN:
+    /// - Important orchestration milestones use dedicated structured methods
+    /// - Generic log methods remain available for detailed tracing and fallback diagnostics
+    /// - Event categories are intentionally stable so UI timelines and sinks can rely on them
     /// </summary>
     public sealed class AiExecutionEngineLogger : IAiExecutionEngineLogger
     {
@@ -96,21 +103,21 @@ namespace Multiplexed.AI.Runtime.Logging
         }
 
         /// <inheritdoc />
-        public void StepException(string executionId, string stepName, Exception exception)
+        public void StepCompleted(AiExecutionRecord record, string stepName)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(record);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
-            ArgumentNullException.ThrowIfNull(exception);
 
-            _realtime.LogError(
-                message: $"Step '{stepName}' threw an exception.",
-                category: "ai.step.exception",
+            _realtime.LogInfo(
+                message: $"Step '{stepName}' completed.",
+                category: "ai.step.completed",
                 data: new
                 {
-                    ExecutionId = executionId,
+                    record.ExecutionId,
                     Step = stepName,
-                    ExceptionType = exception.GetType().FullName,
-                    Exception = exception.Message
+                    record.CurrentStep,
+                    record.Status,
+                    record.ExecutionMode
                 });
         }
 
@@ -132,21 +139,196 @@ namespace Multiplexed.AI.Runtime.Logging
         }
 
         /// <inheritdoc />
-        public void StepCompleted(AiExecutionRecord record, string stepName)
+        public void StepException(string executionId, string stepName, Exception exception)
         {
-            ArgumentNullException.ThrowIfNull(record);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentNullException.ThrowIfNull(exception);
 
-            _realtime.LogInfo(
-                message: $"Step '{stepName}' completed.",
-                category: "ai.step.completed",
+            _realtime.LogError(
+                message: $"Step '{stepName}' threw an exception.",
+                category: "ai.step.exception",
                 data: new
                 {
-                    record.ExecutionId,
+                    ExecutionId = executionId,
                     Step = stepName,
-                    record.CurrentStep,
-                    record.Status,
-                    record.ExecutionMode
+                    ExceptionType = exception.GetType().FullName,
+                    Exception = exception.Message
+                });
+        }
+
+        /// <inheritdoc />
+        public void StepClaimed(string executionId, string stepName, string workerId, string claimToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(claimToken);
+
+            _realtime.LogInfo(
+                message: $"Step '{stepName}' claimed by worker '{workerId}'.",
+                category: "ai.step.claimed",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Step = stepName,
+                    WorkerId = workerId,
+                    ClaimToken = claimToken
+                });
+        }
+
+        /// <inheritdoc />
+        public void StepRetryScheduled(string executionId, string stepName, int retryCount, DateTime? nextRetryAtUtc)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+
+            _realtime.LogWarning(
+                message: $"Step '{stepName}' scheduled for retry.",
+                category: "ai.step.retry.scheduled",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Step = stepName,
+                    RetryCount = retryCount,
+                    NextRetryAtUtc = nextRetryAtUtc
+                });
+        }
+
+        /// <inheritdoc />
+        public void StepsRecovered(string executionId, int recoveredCount)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogWarning(
+                message: $"Recovered timed-out steps for execution '{executionId}'.",
+                category: "ai.execution.steps.recovered",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    RecoveredCount = recoveredCount
+                });
+        }
+
+        /// <inheritdoc />
+        public void ExecutionReplayRestored(string executionId, AiExecutionStatus status, int stepsCount)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogInfo(
+                message: "AI execution restored from snapshot.",
+                category: "ai.execution.replay.restored",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Status = status,
+                    StepsCount = stepsCount
+                });
+        }
+
+        /// <inheritdoc />
+        public void ExecutionReplaySkipped(string executionId, string reason)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+            _realtime.LogInfo(
+                message: "AI execution replay skipped.",
+                category: "ai.execution.replay.skipped",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Reason = reason
+                });
+        }
+
+        /// <inheritdoc />
+        public void SnapshotPersisted(string executionId, AiExecutionStatus status)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogInfo(
+                message: "AI execution snapshot persisted.",
+                category: "ai.snapshot.persisted",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Status = status
+                });
+        }
+
+        /// <inheritdoc />
+        public void FinalizationSucceeded(string executionId, AiExecutionStatus status)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogInfo(
+                message: "AI execution finalization succeeded.",
+                category: "ai.execution.finalization.succeeded",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Status = status
+                });
+        }
+
+        /// <inheritdoc />
+        public void FinalizationRaceLost(string executionId, AiExecutionStatus status)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogWarning(
+                message: "AI execution finalization race lost.",
+                category: "ai.execution.finalization.race.lost",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Status = status
+                });
+        }
+
+        /// <inheritdoc />
+        public void CleanupStarted(string executionId, AiExecutionStatus status)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogInfo(
+                message: "AI execution cleanup started.",
+                category: "ai.execution.cleanup.started",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Status = status
+                });
+        }
+
+        /// <inheritdoc />
+        public void CleanupCompleted(string executionId)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _realtime.LogInfo(
+                message: "AI execution cleanup completed.",
+                category: "ai.execution.cleanup.completed",
+                data: new
+                {
+                    ExecutionId = executionId
+                });
+        }
+
+        /// <inheritdoc />
+        public void CleanupSkipped(string executionId, string reason)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+            _realtime.LogInfo(
+                message: "AI execution cleanup skipped.",
+                category: "ai.execution.cleanup.skipped",
+                data: new
+                {
+                    ExecutionId = executionId,
+                    Reason = reason
                 });
         }
 

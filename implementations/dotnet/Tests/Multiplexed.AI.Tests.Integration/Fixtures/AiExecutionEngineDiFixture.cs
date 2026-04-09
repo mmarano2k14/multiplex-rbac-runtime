@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Driver;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
@@ -10,7 +11,7 @@ using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.DependencyInjection;
-using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime.DI;
@@ -72,6 +73,40 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 rootProvider,
                 scope,
                 engine);
+        }
+
+        public static string DumpState(AiExecutionRecord? record, AiExecutionState? state)
+        {
+            if (record is null && state is null)
+            {
+                return "Record=null, State=null";
+            }
+
+            var lines = new List<string>
+            {
+                $"RecordStatus={record?.Status}",
+                $"CurrentStep={record?.CurrentStep}",
+                $"ExecutionStepKey={record?.ExecutionStepKey}",
+                $"CompletedSteps=[{string.Join(", ", record?.CompletedSteps ?? new List<string>())}]"
+            };
+
+            if (state?.Steps is not null)
+            {
+                foreach (var step in state.Steps.Values.OrderBy(x => x.StepName, StringComparer.Ordinal))
+                {
+                    lines.Add(
+                        $"Step={step.StepName}, " +
+                        $"Status={step.Status}, " +
+                        $"RetryCount={step.RetryCount}, " +
+                        $"MaxRetries={step.MaxRetries}, " +
+                        $"NextRetryAtUtc={step.NextRetryAtUtc}, " +
+                        $"ClaimedBy={step.ClaimedBy}, " +
+                        $"ClaimToken={step.ClaimToken}, " +
+                        $"DependsOn=[{string.Join(", ", step.DependsOn ?? new List<string>())}]");
+                }
+            }
+
+            return string.Join(Environment.NewLine, lines);
         }
 
         /// <summary>

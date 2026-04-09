@@ -1,0 +1,32 @@
+{
+  "pipelines": [
+    {
+      "name": "dag-with-retry",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "step-1",
+          "stepKey": "hello-world",
+          "order": 1,
+          "config": { "delayMs": 50 }
+        },
+        {
+          "name": "step-2",
+          "stepKey": "fail-once-then-succeed",
+          "order": 2,
+          "dependsOn": [ "step-1" ],
+          "maxRetries": 2,
+          "retryDelayMs": 50
+        },
+        {
+          "name": "step-3",
+          "stepKey": "hello-world",
+          "order": 3,
+          "dependsOn": [ "step-2" ],
+          "config": { "delayMs": 50 }
+        }
+      ]
+    }
+  ]
+}

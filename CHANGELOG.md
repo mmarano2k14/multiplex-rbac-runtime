@@ -6,6 +6,49 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.5] - 2026-04-09
+
+feat(ai-runtime): add optional MongoDB snapshot persistence and execution replay support
+
+- Added MongoDB-backed execution snapshot persistence
+- Added configuration flags to enable or disable snapshot persistence
+- Added execution replay service for restoring runtime state from snapshots
+- Added replay preparation to clear transient runtime claim data before restore
+- Added integration tests for snapshot persistence, replay, and resume flows
+
+fix(ai-runtime): correct distributed DAG restore and replay consistency
+
+- Fixed RestoreAsync to rebuild full distributed DAG state (record, step keys, step index)
+- Fixed DeleteStateAsync to properly remove distributed DAG steps and index
+- Fixed DeleteExecutionBundleAsync to ensure full DAG cleanup before restore
+- Fixed GetStateAsync to return null when no DAG state exists instead of empty state
+- Fixed mismatch between distributed DAG store and generic execution store
+
+fix(ai-runtime): make replay service DAG-aware and idempotent
+
+- Replay now detects existing executions using IAiDagExecutionStore when available
+- Fixed replay incorrectly restoring over existing compatible executions
+- Ensured replay idempotence across distributed and non-distributed modes
+- Improved compatibility validation between snapshot and existing runtime execution
+
+test(ai-runtime): add and stabilize distributed chaos test coverage
+
+- Added retry chaos tests validating retry budget and concurrent execution safety
+- Added recovery chaos tests validating step uniqueness and state consistency
+- Added replay chaos tests validating idempotence under concurrent replay pressure
+- Added execute-all chaos tests validating state integrity under concurrent orchestration
+- Fixed test assertions to rely on authoritative distributed DAG store instead of generic store
+- Improved reliability of terminal convergence assertions under retry timing
+
+improvement(ai-runtime): strengthen distributed convergence guarantees
+
+- Stabilized convergence behavior under multi-worker retry and recovery conditions
+- Ensured no inconsistent intermediate state leaks into final execution result
+- Improved alignment between record projection and authoritative step state
+- Hardened runtime behavior under high concurrency and timing variability
+
+---
+
 ## [1.0.2.4] - 2026-04-06
 
 ### Added

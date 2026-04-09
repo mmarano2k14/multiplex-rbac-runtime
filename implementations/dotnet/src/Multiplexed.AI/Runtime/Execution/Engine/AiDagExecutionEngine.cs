@@ -5,7 +5,6 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Logging;
@@ -13,9 +12,8 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
-using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
-namespace Multiplexed.AI.Runtime.Execution
+namespace Multiplexed.AI.Runtime.Execution.Engine
 {
     /// <summary>
     /// Executes AI pipelines using DAG-based orchestration.
@@ -360,6 +358,12 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
                         _metrics.IncrementRetry(nextStep.Name);
+
+                        Logger.Engine.StepRetryScheduled(
+                            record.ExecutionId,
+                            nextStep.Name,
+                            stepState.RetryCount,
+                            stepState.NextRetryAtUtc);
                     }
 
                     Logger.Engine.StepException(
@@ -408,6 +412,12 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
                         _metrics.IncrementRetry(nextStep.Name);
+
+                        Logger.Engine.StepRetryScheduled(
+                            record.ExecutionId,
+                            nextStep.Name,
+                            stepState.RetryCount,
+                            stepState.NextRetryAtUtc);
                     }
 
                     Logger.Engine.StepFailed(
@@ -531,6 +541,8 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (recoveredCount > 0)
             {
+                Logger.Engine.StepsRecovered(executionId, recoveredCount);
+
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
             }
@@ -539,6 +551,15 @@ namespace Multiplexed.AI.Runtime.Execution
                 executionId,
                 workerId: Environment.MachineName,
                 cancellationToken: cancellationToken);
+
+            if (claimed is not null)
+            {
+                Logger.Engine.StepClaimed(
+                    record.ExecutionId,
+                    claimed.StepName,
+                    Environment.MachineName,
+                    claimed.ClaimToken);
+            }
 
             // Reload fresh distributed state after recovery / claim attempt.
             var state = await _dagStore.GetStateAsync(executionId, cancellationToken)
@@ -647,6 +668,12 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
                         _metrics.IncrementRetry(claimed.StepName);
+
+                        Logger.Engine.StepRetryScheduled(
+                            record.ExecutionId,
+                            claimed.StepName,
+                            failedStepState.RetryCount,
+                            failedStepState.NextRetryAtUtc);
                     }
 
                     Logger.Engine.LogInformation(
@@ -709,6 +736,12 @@ namespace Multiplexed.AI.Runtime.Execution
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
                         _metrics.IncrementRetry(claimed.StepName);
+
+                        Logger.Engine.StepRetryScheduled(
+                            record.ExecutionId,
+                            claimed.StepName,
+                            failedStepState.RetryCount,
+                            failedStepState.NextRetryAtUtc);
                     }
 
                     Logger.Engine.LogInformation(
@@ -913,6 +946,8 @@ namespace Multiplexed.AI.Runtime.Execution
                     contextSnapshot,
                     cancellationToken);
 
+                Logger.Engine.SnapshotPersisted(record.ExecutionId, record.Status);
+
                 Logger.Engine.LogInformation(
                     $"[AI SNAPSHOT] Persisted terminal snapshot for execution '{record.ExecutionId}' with status '{record.Status}'.");
             }
@@ -941,6 +976,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (!record.IsTerminal)
             {
+                Logger.Engine.CleanupSkipped(
+                    record.ExecutionId,
+                    "Execution is not terminal.");
+
                 Logger.Engine.LogInformation(
                     $"[AI CLEANUP] Skipped for execution '{record.ExecutionId}' because the execution is not terminal.");
 
@@ -953,11 +992,17 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (!shouldCleanup)
             {
+                Logger.Engine.CleanupSkipped(
+                    record.ExecutionId,
+                    "Automatic cleanup is disabled for the current terminal status.");
+
                 Logger.Engine.LogInformation(
                     $"[AI CLEANUP] Skipped for execution '{record.ExecutionId}' with status '{record.Status}' because automatic cleanup is disabled.");
 
                 return;
             }
+
+            Logger.Engine.CleanupStarted(record.ExecutionId, record.Status);
 
             Logger.Engine.LogInformation(
                 $"[AI CLEANUP] Starting for execution '{record.ExecutionId}' with status '{record.Status}'.");
@@ -967,6 +1012,8 @@ namespace Multiplexed.AI.Runtime.Execution
                 await _cleanupService.DeleteExecutionBundleAsync(
                     record.ExecutionId,
                     cancellationToken);
+
+                Logger.Engine.CleanupCompleted(record.ExecutionId);
 
                 Logger.Engine.LogInformation(
                     $"[AI CLEANUP] Completed for execution '{record.ExecutionId}'.");
@@ -1085,6 +1132,8 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (!success)
                 {
+                    Logger.Engine.FinalizationRaceLost(record.ExecutionId, convergence.Status);
+
                     Logger.Engine.LogInformation(
                         $"[AI DAG] Finalization race lost. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
 
@@ -1103,6 +1152,8 @@ namespace Multiplexed.AI.Runtime.Execution
 
                     return;
                 }
+
+                Logger.Engine.FinalizationSucceeded(record.ExecutionId, convergence.Status);
 
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Finalization succeeded. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
@@ -1123,15 +1174,20 @@ namespace Multiplexed.AI.Runtime.Execution
                 return;
             }
 
-            // Non-terminal state -> standard optimistic persistence.
+            // ---------------------------------------------------------------------
+            // NON-TERMINAL PERSISTENCE (DISTRIBUTED)
+            //
+            // IMPORTANT:
+            // - In distributed mode, the step-state snapshot is already persisted
+            //   through step-level claim / complete / fail / recovery operations
+            // - We must NOT rewrite the full state here, otherwise we risk overwriting
+            //   authoritative concurrent step mutations
+            // - Only the execution record projection is updated here
+            // ---------------------------------------------------------------------
             record.TouchVersion();
             record.RenewExecutionStepKey();
 
-            await PersistAsync(
-                record,
-                expectedStepKey,
-                state,
-                cancellationToken);
+            await _dagStore.SaveRecordAsync(record, cancellationToken);
         }
 
         /// <summary>
