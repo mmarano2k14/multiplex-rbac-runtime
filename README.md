@@ -58,7 +58,7 @@ forming a unified model for building **reliable, observable, and scalable runtim
 
 This repository provides a **reference implementation across multiple runtimes**, demonstrating how to build **observable, high-performance authorization layers**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.2.5-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.2.6-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ![Status](https://img.shields.io/badge/Status-active%20development-orange)

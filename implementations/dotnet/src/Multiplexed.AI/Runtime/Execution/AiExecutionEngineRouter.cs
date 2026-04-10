@@ -133,5 +133,11 @@ namespace Multiplexed.AI.Runtime.Execution
                     $"Unsupported execution mode '{record.ExecutionMode}'.")
             };
         }
+
+        public Task<AiExecutionRecord> CreateAsync(string pipelineName, IDictionary<string, object?> input, CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException(
+                "CreateAsync(pipelineName, input) should be handled by the appropriate engine based on pipeline configuration.");
+        }
     }
 }

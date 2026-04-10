@@ -18,6 +18,7 @@ namespace Multiplexed.AI.Stores.Cache
     ///
     /// Key responsibilities:
     /// - Persist execution record (global metadata)
+    /// - Persist the full execution state blob (Data, Metadata, etc.)
     /// - Persist each step as an independent Redis key
     /// - Persist a step index per execution for deterministic DAG scanning
     /// - Allow workers to claim steps safely using Lua
@@ -33,6 +34,8 @@ namespace Multiplexed.AI.Stores.Cache
     /// - This version uses UNIX TIME IN MILLISECONDS for distributed retry timing
     /// - Lease expiration is persisted explicitly through LeaseExpiresAtUtc
     ///   so recovery does not need to recompute expiration from ClaimedAtUtc
+    /// - Step keys remain the authoritative truth for DAG lifecycle
+    /// - The state blob complements step storage and preserves global state bags
     /// </summary>
     public sealed class RedisAiDagExecutionStore : IAiDagExecutionStore
     {
@@ -503,6 +506,7 @@ namespace Multiplexed.AI.Stores.Cache
         ///
         /// This will:
         /// - store the execution record
+        /// - store the full execution state blob
         /// - create one Redis key per step
         /// - register each step name in the execution step index
         /// </summary>
@@ -518,11 +522,16 @@ namespace Multiplexed.AI.Stores.Cache
                 throw new ArgumentException("Record and state must share the same ExecutionId.");
 
             var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stateKey = GetStateBlobKey(record.ExecutionId);
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(record.ExecutionId);
 
             await _database.StringSetAsync(
                 recordKey,
                 JsonSerializer.Serialize(record, _jsonOptions));
+
+            await _database.StringSetAsync(
+                stateKey,
+                JsonSerializer.Serialize(state, _jsonOptions));
 
             foreach (var step in state.Steps.Values)
             {
@@ -558,17 +567,19 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Reconstructs execution state by loading all indexed step keys.
+        /// Reconstructs execution state by loading the persisted state blob
+        /// and then overlaying all indexed step keys.
         ///
         /// IMPORTANT:
         /// - In distributed DAG mode, step keys + step index are the authoritative state
-        /// - There is no single serialized "state blob" key for normal DAG execution
-        /// - This method reconstructs the state from the distributed step entries
+        ///   for step lifecycle
+        /// - The state blob preserves global bags such as Data and Metadata
+        /// - This method combines both representations
         ///
         /// RETURN SEMANTICS:
-        /// - Returns <c>null</c> when no distributed DAG state exists for the execution
-        /// - Returns a populated <see cref="AiExecutionState"/> only when at least one step
-        ///   could be reconstructed from the authoritative DAG storage
+        /// - Returns <c>null</c> when no state blob and no distributed DAG state exist
+        /// - Returns a populated <see cref="AiExecutionState"/> when either the blob
+        ///   or at least one step payload exists
         /// </summary>
         public async Task<AiExecutionState?> GetStateAsync(
             string executionId,
@@ -577,20 +588,35 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
+            var stateKey = GetStateBlobKey(executionId);
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
-            var stepNames = await _database.SetMembersAsync(stepIndexKey);
 
-            // If the step index does not exist or contains no members,
-            // there is no distributed DAG state to reconstruct.
-            if (stepNames.Length == 0)
+            AiExecutionState? state = null;
+
+            var stateBlob = await _database.StringGetAsync(stateKey);
+            if (stateBlob.HasValue)
             {
-                return null;
+                state = JsonSerializer.Deserialize<AiExecutionState>((string)stateBlob!, _jsonOptions);
             }
 
-            var state = new AiExecutionState
+            var stepNames = await _database.SetMembersAsync(stepIndexKey);
+
+            if (stepNames.Length == 0)
+            {
+                if (state is not null)
+                {
+                    state.ExecutionId = executionId;
+                }
+
+                return state;
+            }
+
+            state ??= new AiExecutionState
             {
                 ExecutionId = executionId
             };
+
+            state.ExecutionId = executionId;
 
             foreach (var stepNameValue in stepNames)
             {
@@ -615,12 +641,9 @@ namespace Multiplexed.AI.Stores.Cache
                 }
             }
 
-            // Defensive guard:
-            // if the index existed but no step payloads could be reconstructed,
-            // treat the distributed DAG state as missing.
             if (state.Steps.Count == 0)
             {
-                return null;
+                return stateBlob.HasValue ? state : null;
             }
 
             return state;
@@ -643,8 +666,8 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Saves the full distributed DAG state by overwriting indexed step entries
-        /// and rebuilding the step index for the execution.
+        /// Saves the full distributed DAG state by overwriting the persisted state blob,
+        /// indexed step entries, and rebuilding the step index for the execution.
         ///
         /// This method is intended for administrative persistence paths and recovery flows,
         /// not for normal concurrent step claim / complete / fail progression.
@@ -659,8 +682,13 @@ namespace Multiplexed.AI.Stores.Cache
 
             ArgumentNullException.ThrowIfNull(state);
 
+            var stateKey = GetStateBlobKey(executionId);
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var existingStepNames = await _database.SetMembersAsync(stepIndexKey);
+
+            await _database.StringSetAsync(
+                stateKey,
+                JsonSerializer.Serialize(state, _jsonOptions));
 
             foreach (var stepNameValue in existingStepNames)
             {
@@ -704,12 +732,14 @@ namespace Multiplexed.AI.Stores.Cache
         }
 
         /// <summary>
-        /// Deletes the authoritative distributed DAG state for an execution.
+        /// Deletes the full persisted execution state for an execution.
         ///
         /// IMPORTANT:
-        /// - In DAG mode, state is represented by step keys + step index
-        /// - Deleting only a generic execution state key is not sufficient
-        /// - This method therefore delegates to <see cref="DeleteStepsAsync"/>
+        /// - In DAG mode, state is represented by:
+        ///   - the global state blob
+        ///   - step keys
+        ///   - the step index
+        /// - Deleting only step keys is not sufficient
         /// </summary>
         public async Task DeleteStateAsync(
             string executionId,
@@ -718,6 +748,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
+            await _database.KeyDeleteAsync(GetStateBlobKey(executionId));
             await DeleteStepsAsync(executionId, cancellationToken);
         }
 
@@ -751,7 +782,7 @@ namespace Multiplexed.AI.Stores.Cache
 
         /// <summary>
         /// Deletes the full distributed DAG execution bundle owned by this store:
-        /// the global execution record, all indexed step keys, and the step index.
+        /// the global execution record, the state blob, all indexed step keys, and the step index.
         ///
         /// This operation is idempotent and safe to call multiple times.
         /// </summary>
@@ -762,7 +793,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (string.IsNullOrWhiteSpace(executionId))
                 throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
 
-            await DeleteStepsAsync(executionId, cancellationToken);
+            await DeleteStateAsync(executionId, cancellationToken);
             await DeleteRecordAsync(executionId, cancellationToken);
         }
 
@@ -1125,12 +1156,14 @@ namespace Multiplexed.AI.Stores.Cache
         /// PURPOSE:
         /// - Used by replay / recovery flows
         /// - Rebuilds the authoritative DAG record and step state
+        /// - Restores the state blob so global bags survive
         /// - Restores the step index so distributed scanning can resume
         ///
         /// IMPORTANT:
         /// - In DAG mode, restoring only a generic "state blob" key is incorrect
         /// - The authoritative DAG state is composed of:
         ///   - the record key
+        ///   - the state blob
         ///   - one key per step
         ///   - the step index set
         /// - This method therefore restores the full distributed DAG layout
@@ -1153,16 +1186,21 @@ namespace Multiplexed.AI.Stores.Cache
                 throw new ArgumentException("Record and State must share the same ExecutionId.");
 
             var recordKey = _keyBuilder.GetExecutionRecordKey(record.ExecutionId);
+            var stateKey = GetStateBlobKey(record.ExecutionId);
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(record.ExecutionId);
 
-            // Remove any previous distributed DAG state so restore becomes authoritative.
             await DeleteStepsAsync(record.ExecutionId, cancellationToken);
+            await _database.KeyDeleteAsync(stateKey);
 
             var transaction = _database.CreateTransaction();
 
             _ = transaction.StringSetAsync(
                 recordKey,
                 JsonSerializer.Serialize(record, _jsonOptions));
+
+            _ = transaction.StringSetAsync(
+                stateKey,
+                JsonSerializer.Serialize(state, _jsonOptions));
 
             foreach (var step in state.Steps.Values)
             {
@@ -1280,6 +1318,17 @@ namespace Multiplexed.AI.Stores.Cache
         /// </summary>
         private string GetStepKeyPrefix(string executionId)
             => _keyBuilder.GetDagStepKeyPrefix(executionId);
+
+        /// <summary>
+        /// Builds the Redis key used to persist the full execution state blob.
+        ///
+        /// IMPORTANT:
+        /// - This key preserves global state bags such as Data and Metadata
+        /// - Step keys remain the authoritative distributed DAG truth for step lifecycle
+        /// - The state blob complements step storage and must not replace it
+        /// </summary>
+        private string GetStateBlobKey(string executionId)
+            => _keyBuilder.GetExecutionRecordKey(executionId) + ":state";
 
         /// <summary>
         /// Returns the current UTC time as a Unix timestamp in milliseconds.

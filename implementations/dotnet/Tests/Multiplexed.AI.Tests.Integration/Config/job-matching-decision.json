@@ -1,0 +1,40 @@
+{
+  "pipelines": [
+    {
+      "name": "job-matching-decision",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "step-1",
+          "stepKey": "ai.prompt",
+          "order": 1,
+          "input": {
+            "cv": "state.cv",
+            "job": "state.job"
+          },
+          "config": {
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "template": "Analyze the following CV against the following JOB description. Return ONLY valid JSON with: summary, score, strengths, weaknesses.\n\nCV:\n{{cv}}\n\nJOB:\n{{job}}",
+            "responseFormat": "json",
+            "promptVersion": "v1"
+          }
+        },
+        {
+          "name": "step-2",
+          "stepKey": "decision.score",
+          "order": 2,
+          "dependsOn": [ "step-1" ],
+          "input": {
+            "score": "steps.step-1.result.data.parsedResult.score"
+          },
+          "config": {
+            "shortlistThreshold": 80,
+            "rejectThreshold": 50
+          }
+        }
+      ]
+    }
+  ]
+}

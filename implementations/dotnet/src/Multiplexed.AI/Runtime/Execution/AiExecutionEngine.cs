@@ -111,6 +111,14 @@ namespace Multiplexed.AI.Runtime.Execution
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Creates a new execution for the specified pipeline.
+        /// Must be implem
+        public abstract Task<AiExecutionRecord> CreateAsync(
+            string pipelineName,
+            IDictionary<string, object?> input,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Executes the next unit of work for the specified execution.
         /// Must be implemented by the derived engine.
         /// </summary>

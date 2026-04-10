@@ -1,0 +1,35 @@
+{
+  "pipelines": [
+    {
+      "name": "dag-with-ai-prompt",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "step-1",
+          "stepKey": "hello-world",
+          "order": 1,
+          "input": {
+            "text": "state.input"
+          }
+        },
+        {
+          "name": "step-2",
+          "stepKey": "ai.prompt",
+          "order": 2,
+          "dependsOn": [ "step-1" ],
+          "input": {
+            "text": "Marco"
+          },
+          "config": {
+            "provider": "fake",
+            "model": "fake-model-v1",
+            "template": "Summarize this content: {{text}}",
+            "responseFormat": "text",
+            "promptVersion": "v1"
+          }
+        }
+      ]
+    }
+  ]
+}

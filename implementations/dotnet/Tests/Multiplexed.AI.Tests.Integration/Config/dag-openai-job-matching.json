@@ -1,0 +1,27 @@
+{
+  "pipelines": [
+    {
+      "name": "openai-job-matching",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "step-1",
+          "stepKey": "ai.prompt",
+          "order": 1,
+          "input": {
+            "cv": "state.cv",
+            "job": "state.job"
+          },
+          "config": {
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "template": "Analyze the candidate CV and the job description.\n\nCV:\n{{cv}}\n\nJOB:\n{{job}}\n\nReturn a JSON object with:\n- summary\n- score (0 to 100)\n- strengths (array)\n- weaknesses (array)",
+            "responseFormat": "json",
+            "promptVersion": "v1"
+          }
+        }
+      ]
+    }
+  ]
+}

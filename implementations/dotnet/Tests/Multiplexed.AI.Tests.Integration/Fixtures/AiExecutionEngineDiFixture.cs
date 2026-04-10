@@ -7,11 +7,14 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.AI;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Providers.Llm.OpenAI.DI;
 using Multiplexed.AI.Runtime.DependencyInjection;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Prompt;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime.DI;
@@ -191,7 +194,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                         rbacOptions.RotationOverlapWindow = TimeSpan.FromMilliseconds(10000);
                     })
                 .AddMultiplexedRbacHttp()
-                .AddMultiplexedRbacNServiceBus();
+                .AddMultiplexedRbacNServiceBus()
+                .AddAiPromptRuntime(typeof(AiRuntimeAssemblyMarker).Assembly)
+                .AddOpenAiPromptProvider(options =>
+                 {
+                     options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+                         ?? throw new InvalidOperationException("OPENAI_API_KEY is required.");
+                 });
 
             // Use the same fake accessor strategy already used by other engine tests.
             services.Replace(ServiceDescriptor.Singleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>());
@@ -216,6 +225,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 services.AddAiExecutionSnapshots(options);
                 services.AddAiExecutionReplay();
                 services.AddAiStepsFromAssemblies(typeof(AiRuntimeAssemblyMarker).Assembly);
+                
+ 
             }
         }
     }

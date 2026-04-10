@@ -42,6 +42,18 @@
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Creates a new durable AI execution for the specified pipeline.
+        /// </summary>
+        /// <param name="pipelineName">The unique pipeline name associated with the execution.</param>
+        /// <param name="input">The initial workflow input.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The newly created execution record.</returns>
+        public abstract Task<AiExecutionRecord> CreateAsync(
+            string pipelineName,
+            IDictionary<string, object?> input,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Executes the next step of an existing AI execution.
         /// </summary>
         /// <param name="executionId">The unique execution identifier.</param>

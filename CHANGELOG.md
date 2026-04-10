@@ -6,6 +6,44 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.6] - 2026-04-10
+
+feat(ai-runtime): integrate declarative prompt step with OpenAI provider and shared variable resolution
+
+- Added provider-agnostic `ai.prompt` pipeline step for declarative AI prompt execution
+- Added OpenAI provider integration using injected `OpenAIClient` and provider discovery via attribute scanning
+- Added prompt runtime DI registration for executor, renderer, parser, and providers
+- Added shared declared input composition in `AiStepExecutionContext`
+- Added cached variable bag resolution with typed access helpers:
+  - `ResolveDeclaredInputs`
+  - `GetVariable`
+  - `TryGetVariable`
+  - `GetRequiredVariable`
+- Added support for JSON-originated declared inputs represented as `JsonElement`
+- Refactored `AiPromptStep` to rely on execution-context variable composition instead of local variable resolution logic
+- Added structured prompt result persistence including:
+  - `rawText`
+  - `parsedResult`
+  - token usage
+  - finish reason
+  - rendered prompt hash
+  - provider metadata
+- Added deterministic `decision.score` step using shared variable resolution from the execution context
+- Extended Redis DAG store to persist the full execution state blob alongside distributed step state
+- Fixed DAG state reconstruction so global state bags such as `Data` and `Metadata` survive reload and replay
+- Added end-to-end integration support for JSON pipelines using:
+  - declarative prompt input binding
+  - OpenAI execution
+  - JSON parsing
+  - score-based decision routing
+
+  ---
+
+### Notes
+- Prompt and decision steps now share the same declarative variable resolution model
+- Global state persistence is now preserved in DAG mode, not only step state
+- This lays the foundation for upcoming RAG, rerank, tool-calling, and agent orchestration steps
+
 ## [1.0.2.5] - 2026-04-09
 
 feat(ai-runtime): add optional MongoDB snapshot persistence and execution replay support

@@ -56,7 +56,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         }
 
         /// <inheritdoc />
-        public override async Task<AiExecutionRecord> CreateAsync(
+        public override Task<AiExecutionRecord> CreateAsync(
             string pipelineName,
             string input,
             CancellationToken cancellationToken = default)
@@ -67,6 +67,86 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             {
                 throw new ArgumentException("Input cannot be null or empty.", nameof(input));
             }
+
+            return CreateInternalAsync(
+                pipelineName,
+                state => state.Set(AiExecutionKeys.Input, input),
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Creates a new sequential execution using a structured input payload.
+        ///
+        /// PURPOSE:
+        /// - Supports modern pipeline inputs where multiple named values must be seeded
+        ///   into the execution state
+        /// - Preserves backward compatibility with the string input overload
+        /// - Allows declarative bindings such as:
+        ///   state.cv, state.job, state.language, etc.
+        ///
+        /// IMPORTANT:
+        /// - Values are written directly into the execution state root
+        /// - Existing pipelines using <see cref="AiExecutionKeys.Input"/> remain supported
+        ///   through the string overload
+        /// </summary>
+        /// <param name="pipelineName">The pipeline name to execute.</param>
+        /// <param name="input">The structured input values to seed into execution state.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The created execution record.</returns>
+        public override Task<AiExecutionRecord> CreateAsync(
+            string pipelineName,
+            IDictionary<string, object?> input,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+            ArgumentNullException.ThrowIfNull(input);
+
+            return CreateInternalAsync(
+                pipelineName,
+                state =>
+                {
+                    foreach (var pair in input)
+                    {
+                        if (string.IsNullOrWhiteSpace(pair.Key))
+                        {
+                            throw new ArgumentException(
+                                "Structured input contains an empty or whitespace key.",
+                                nameof(input));
+                        }
+
+                        state.Set(pair.Key, pair.Value);
+                    }
+                },
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Shared sequential execution creation logic used by all public CreateAsync overloads.
+        ///
+        /// PURPOSE:
+        /// - Centralizes record and state initialization
+        /// - Avoids duplicating sequential creation logic across input overloads
+        /// - Preserves existing behavior while allowing new input shapes
+        ///
+        /// IMPORTANT:
+        /// - The provided <paramref name="seedState"/> callback is the only variable part
+        ///   between overloads
+        /// - RBAC context copy, pipeline preparation, and durable state initialization
+        ///   remain identical for all create paths
+        /// </summary>
+        /// <param name="pipelineName">The pipeline name to execute.</param>
+        /// <param name="seedState">
+        /// Callback used to seed initial values into the execution state.
+        /// </param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The created execution record.</returns>
+        private async Task<AiExecutionRecord> CreateInternalAsync(
+            string pipelineName,
+            Action<AiExecutionState> seedState,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+            ArgumentNullException.ThrowIfNull(seedState);
 
             var current = Accessor.Current
                 ?? throw new InvalidOperationException("No active RBAC context is available.");
@@ -113,7 +193,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 PipelineName = pipelineName
             };
 
-            state.Set(AiExecutionKeys.Input, input);
+            seedState(state);
 
             await Store.CreateAsync(record, state, cancellationToken);
 
