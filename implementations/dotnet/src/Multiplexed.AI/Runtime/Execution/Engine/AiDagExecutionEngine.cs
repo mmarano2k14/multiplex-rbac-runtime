@@ -391,6 +391,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     record.TouchVersion();
                     record.RenewExecutionStepKey();
 
+                    if (string.IsNullOrWhiteSpace(expectedStepKey))
+                    {
+                        throw new InvalidOperationException(
+                            "ExecutionStepKey must be set before persisting execution state.");
+                    }
+
                     await PersistAsync(
                         record,
                         expectedStepKey,
@@ -470,6 +476,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     record.TouchVersion();
                     record.RenewExecutionStepKey();
 
+                    if (string.IsNullOrWhiteSpace(expectedStepKey))
+                    {
+                        throw new InvalidOperationException(
+                            "ExecutionStepKey must be set before persisting execution state.");
+                    }
+
                     await PersistAsync(
                         record,
                         expectedStepKey,
@@ -535,6 +547,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 record.TouchVersion();
                 record.RenewExecutionStepKey();
+
+                if (string.IsNullOrWhiteSpace(expectedStepKey))
+                {
+                    throw new InvalidOperationException(
+                        "ExecutionStepKey must be set before persisting execution state.");
+                }
 
                 await PersistAsync(
                     record,
@@ -685,6 +703,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     var expectedStepKey = record.ExecutionStepKey;
 
+                    if (string.IsNullOrWhiteSpace(expectedStepKey))
+                    {
+                        throw new InvalidOperationException(
+                            "ExecutionStepKey must be set before persisting execution state.");
+                    }
+
                     await PersistDistributedConvergedRecordAsync(
                         record,
                         convergence,
@@ -775,6 +799,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         failedState);
 
                     var expectedStepKey = record.ExecutionStepKey;
+
+                    if (string.IsNullOrWhiteSpace(expectedStepKey))
+                    {
+                        throw new InvalidOperationException(
+                            "ExecutionStepKey must be set before persisting execution state.");
+                    }
 
                     await PersistDistributedConvergedRecordAsync(
                         record,
@@ -884,6 +914,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     finalState);
 
                 var expectedStepKeyFinal = record.ExecutionStepKey;
+
+                if (string.IsNullOrWhiteSpace(expectedStepKeyFinal))
+                {
+                    throw new InvalidOperationException(
+                        "ExecutionStepKey must be set before persisting execution state.");
+                }
 
                 await PersistDistributedConvergedRecordAsync(
                     record,
