@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;

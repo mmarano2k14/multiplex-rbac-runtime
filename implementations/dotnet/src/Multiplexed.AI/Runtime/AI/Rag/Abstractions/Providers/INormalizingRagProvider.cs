@@ -1,5 +1,6 @@
 ﻿using System.Threading;
 using System.Threading.Tasks;
+using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers

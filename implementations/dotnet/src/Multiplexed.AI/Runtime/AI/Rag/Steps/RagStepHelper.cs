@@ -1,9 +1,14 @@
-﻿using System;
+﻿// File: RagStepHelper.cs
+
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Rag.Enums;
+using Multiplexed.Abstractions.AI.Rag.Models;
+using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 
@@ -33,6 +38,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         /// PURPOSE:
         /// - Creates a normalized RAG execution envelope from the current DAG step.
         /// - Preserves query, correlation, declared inputs, and execution metadata.
+        ///
+        /// IMPORTANT:
+        /// - This helper is intended for provider-oriented steps such as:
+        ///   - rag.vector
+        ///   - rag.sql
+        ///   - rag.runtime
+        /// - It should NOT be used by strongly typed plugin-based retrieval execution
+        ///   where the real runtime execution context must be preserved.
         /// </summary>
         public static RagExecutionContext BuildRagExecutionContext(AiStepExecutionContext context)
         {
@@ -68,6 +81,80 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
 
             return provider;
+        }
+
+        /// <summary>
+        /// Reads the required operation key from the current step configuration.
+        ///
+        /// PURPOSE:
+        /// - Used by generic retrieval steps such as rag.retrieval
+        /// - Keeps config extraction logic consistent with other helper methods
+        /// </summary>
+        public static string GetRequiredOperation(AiStepExecutionContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            if (!context.TryGetStepConfigValue<string>("operation", out var operation) ||
+                string.IsNullOrWhiteSpace(operation))
+            {
+                throw new InvalidOperationException(
+                    "The current step configuration is missing required field 'operation'.");
+            }
+
+            return operation;
+        }
+
+        /// <summary>
+        /// Resolves all declared step inputs, including reserved runtime variables.
+        ///
+        /// PURPOSE:
+        /// - Provides a single consistent entry point for steps that need
+        ///   all resolved runtime inputs.
+        /// - Keeps retrieval/composition steps small and consistent.
+        /// </summary>
+        public static IReadOnlyDictionary<string, object?> GetResolvedInputs(AiStepExecutionContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            return context.ResolveDeclaredInputs(includeReservedVariables: true);
+        }
+
+        /// <summary>
+        /// Gets the required RBAC execution context snapshot captured at execution creation time.
+        ///
+        /// IMPORTANT:
+        /// - This is the persisted RBAC/runtime snapshot stored on the execution record.
+        /// - This is NOT the live RBAC context.
+        /// - This is NOT the AI execution context object used during orchestration.
+        /// - This helper is intended for plugin-based flows that need access to
+        ///   the persisted RBAC execution snapshot.
+        /// </summary>
+        public static ExecutionContextSnapshot GetRequiredExecutionContextSnapshot(AiStepExecutionContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            var snapshot = context.Execution.Record.ExecutionContextSnapshot;
+            if (snapshot is null)
+            {
+                throw new InvalidOperationException(
+                    "The current execution does not contain an RBAC execution context snapshot.");
+            }
+
+            return snapshot;
+        }
+
+        /// <summary>
+        /// Gets the RBAC execution context snapshot captured at execution creation time, if available.
+        ///
+        /// IMPORTANT:
+        /// - This returns the persisted snapshot from the execution record.
+        /// - This may be null depending on the execution lifecycle or test setup.
+        /// </summary>
+        public static ExecutionContextSnapshot? GetExecutionContextSnapshot(AiStepExecutionContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            return context.Execution.Record.ExecutionContextSnapshot;
         }
 
         /// <summary>
@@ -165,11 +252,11 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         /// </summary>
         public static Dictionary<string, object?> BuildRetrievalStepResultData(
             RagRetrievalBatch batch,
-            string providerKey)
+            string providerOrOperationKey)
         {
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["providerKey"] = providerKey,
+                ["providerKey"] = providerOrOperationKey,
                 ["itemCount"] = batch.Items.Count,
                 ["batch"] = batch,
                 ["diagnostics"] = batch.Diagnostics
@@ -217,13 +304,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         // CONVERSION HELPERS
         // ---------------------------------------------------------------------
 
-        /// <summary>
-        /// Attempts to convert a runtime value into a <see cref="RagRetrievalBatch"/>.
-        ///
-        /// PURPOSE:
-        /// - Shields RAG steps from serialization boundary differences.
-        /// - Accepts both strongly typed and loosely typed runtime representations.
-        /// </summary>
         private static bool TryConvertToRetrievalBatch(
             object raw,
             out RagRetrievalBatch batch)
@@ -250,9 +330,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             return false;
         }
 
-        /// <summary>
-        /// Attempts to convert a JSON representation into a retrieval batch.
-        /// </summary>
         private static bool TryConvertJsonElementToRetrievalBatch(
             JsonElement json,
             out RagRetrievalBatch batch)
@@ -298,9 +375,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
         }
 
-        /// <summary>
-        /// Attempts to convert a dictionary representation into a retrieval batch.
-        /// </summary>
         private static bool TryConvertDictionaryToRetrievalBatch(
             IDictionary<string, object?> dict,
             out RagRetrievalBatch batch)
@@ -365,9 +439,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
         }
 
-        /// <summary>
-        /// Attempts to convert a runtime value into <see cref="RagRetrievalDiagnostics"/>.
-        /// </summary>
         private static bool TryConvertDiagnostics(
             object raw,
             out RagRetrievalDiagnostics diagnostics)
@@ -410,9 +481,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             return false;
         }
 
-        /// <summary>
-        /// Attempts to convert a JSON item representation into a normalized item.
-        /// </summary>
         private static bool TryConvertJsonElementToNormalizedItem(
             JsonElement json,
             out RagNormalizedItem item)
@@ -443,9 +511,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
         }
 
-        /// <summary>
-        /// Attempts to convert a dictionary item representation into a normalized item.
-        /// </summary>
         private static bool TryConvertDictionaryToNormalizedItem(
             IDictionary<string, object?> dict,
             out RagNormalizedItem item)
@@ -476,9 +541,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
         }
 
-        /// <summary>
-        /// Converts JSON diagnostics into a typed diagnostics object.
-        /// </summary>
         private static RagRetrievalDiagnostics ConvertJsonElementToDiagnostics(JsonElement json)
         {
             var providers = new List<RagProviderExecutionDiagnostics>();
@@ -514,9 +576,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             };
         }
 
-        /// <summary>
-        /// Converts dictionary diagnostics into a typed diagnostics object.
-        /// </summary>
         private static RagRetrievalDiagnostics ConvertDictionaryToDiagnostics(
             IDictionary<string, object?> dict)
         {
@@ -575,10 +634,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 Providers = providers
             };
         }
-
-        // ---------------------------------------------------------------------
-        // JSON HELPERS
-        // ---------------------------------------------------------------------
 
         private static string? GetJsonString(JsonElement json, string propertyName)
         {
@@ -743,10 +798,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             };
         }
 
-        // ---------------------------------------------------------------------
-        // DICTIONARY HELPERS
-        // ---------------------------------------------------------------------
-
         private static bool TryGetDictionaryValue(
             IDictionary<string, object?> dict,
             string key,
@@ -757,7 +808,6 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 return true;
             }
 
-            // Runtime serializers sometimes change casing.
             foreach (var entry in dict)
             {
                 if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))

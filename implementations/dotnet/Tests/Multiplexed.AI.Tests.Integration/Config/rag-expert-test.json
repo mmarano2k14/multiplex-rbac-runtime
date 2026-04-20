@@ -1,0 +1,49 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-expert-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "getCandidate",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "inputs": {
+            "query": "state.query"
+          },
+          "config": {
+            "operation": "getCandidate"
+          }
+        },
+        {
+          "name": "getJob",
+          "stepKey": "rag.retrieval",
+          "order": 2,
+          "inputs": {
+            "query": "state.query"
+          },
+          "config": {
+            "operation": "getJob"
+          }
+        },
+        {
+          "name": "merge",
+          "stepKey": "custom.merge",
+          "order": 3,
+          "dependsOn": [ "getCandidate", "getJob" ]
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 4,
+          "dependsOn": [ "merge" ],
+          "config": {
+            "composer": "deterministic",
+            "sourceStep": "merge"
+          }
+        }
+      ]
+    }
+  ]
+}

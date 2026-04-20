@@ -86,7 +86,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         /// - Exposes the retrieval batch and diagnostics to downstream steps.
         /// </summary>
         private static Dictionary<string, object?> BuildStepResultData(
-            Abstractions.Models.RagRetrievalBatch batch,
+            Multiplexed.Abstractions.AI.Rag.Models.RagRetrievalBatch batch,
             string retrievalKey)
         {
             return new Dictionary<string, object?>(StringComparer.Ordinal)

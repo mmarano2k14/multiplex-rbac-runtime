@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums
+﻿namespace Multiplexed.Abstractions.AI.Rag.Enums
 {
     /// <summary>
     /// Describes the concrete implementation / source.

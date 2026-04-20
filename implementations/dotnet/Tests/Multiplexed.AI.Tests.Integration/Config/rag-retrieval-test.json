@@ -1,0 +1,19 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-retrieval-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "retrieve",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "config": {
+            "operation": "test.operation"
+          }
+        }
+      ]
+    }
+  ]
+}

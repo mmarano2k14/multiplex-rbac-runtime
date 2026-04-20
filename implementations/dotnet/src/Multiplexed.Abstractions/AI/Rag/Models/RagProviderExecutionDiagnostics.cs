@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models
+namespace Multiplexed.Abstractions.AI.Rag.Models
 {
     /// <summary>
     /// Represents the execution diagnostics of a single RAG provider.

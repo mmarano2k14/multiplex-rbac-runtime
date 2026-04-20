@@ -1,5 +1,6 @@
 ﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.Abstractions.Runtime;
+using Multiplexed.Abstractions.AI.Rag.Models;
 
 namespace Multiplexed.AI.Runtime.Logging
 {

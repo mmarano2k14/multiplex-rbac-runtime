@@ -1,7 +1,7 @@
-﻿using System.Collections.Generic;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
+﻿
+using Multiplexed.Abstractions.AI.Rag.Enums;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models
+namespace Multiplexed.Abstractions.AI.Rag.Models
 {
     /// <summary>
     /// Normalized item used AFTER retrieval.
@@ -41,7 +41,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models
         /// <summary>
         /// Deterministic ordering anchor.
         /// </summary>
-        public int StableOrder { get; init; }
+        public int StableOrder { get; set; }
 
         public IReadOnlyDictionary<string, object?> Metadata { get; init; }
             = new Dictionary<string, object?>();

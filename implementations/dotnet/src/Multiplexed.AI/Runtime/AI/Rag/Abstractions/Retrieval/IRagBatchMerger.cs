@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval

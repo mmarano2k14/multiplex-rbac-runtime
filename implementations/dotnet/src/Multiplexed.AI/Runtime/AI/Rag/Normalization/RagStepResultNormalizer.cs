@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using System.Text.Json;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Rag.Enums;
+using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.Execution.Normalization;

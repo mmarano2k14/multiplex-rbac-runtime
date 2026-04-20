@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.Rag.Runtime;
+using Multiplexed.Abstractions.AI.Rag.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
@@ -99,6 +101,10 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             services.TryAddSingleton<IAiRagRetrievalLogger, AiRagRetrievalLogger>();
             services.TryAddSingleton<IAiRagCompositionLogger, AiRagCompositionLogger>();
             services.TryAddSingleton<IAiRagLogger, AiRagLogger>();
+
+            services.TryAddTransient<IRagStepResultNormalizer, DefaultRagStepResultNormalizer>();
+
+            services.TryAddTransient<IRagRetrievalStepDispatcher, RagRetrievalStepDispatcher>();
 
             // -----------------------------------------------------------------
             // Steps

@@ -1,6 +1,9 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Rag.Enums;
+using Multiplexed.Abstractions.AI.Rag.Models;
+using Multiplexed.Abstractions.AI.Rag.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
@@ -19,6 +22,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Retrieval.MultiProvider;
 using Multiplexed.AI.Runtime.AI.Rag.Steps;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
+using StackExchange.Redis;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -275,6 +279,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services =>
                 {
                     services.AddRagCore();
+                    services.AddRagOperationsFromAssemblies(typeof(TestOperation).Assembly);
                     RegisterRagTestServices(services);
                 });
         }

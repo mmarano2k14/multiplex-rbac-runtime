@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models
+namespace Multiplexed.Abstractions.AI.Rag.Models
 {
     /// <summary>
     /// Represents the result of a retrieval execution.

@@ -1,4 +1,5 @@
-﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
+﻿using Multiplexed.Abstractions.AI.Rag.Enums;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors
