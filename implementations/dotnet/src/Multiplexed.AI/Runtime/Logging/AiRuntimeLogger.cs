@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.AI.Runtime.Logging
+﻿using MongoDB.Driver;
+
+namespace Multiplexed.AI.Runtime.Logging
 {
     /// <summary>
     /// Default implementation of <see cref="IAiRuntimeLogger"/>.
@@ -19,12 +21,14 @@
             IAiExecutionEngineLogger engine,
             IAiPipelineLogger pipeline,
             IAiPipelineServiceLogger pipelineService,
-            IAiStepExecutorLogger stepExecutor)
+            IAiStepExecutorLogger stepExecutor,
+            IAiRagLogger rag)
         {
             Engine = engine ?? throw new ArgumentNullException(nameof(engine));
             Pipeline = pipeline ?? throw new ArgumentNullException(nameof(pipeline));
             PipelineService = pipelineService ?? throw new ArgumentNullException(nameof(pipelineService));
             StepExecutor = stepExecutor ?? throw new ArgumentNullException(nameof(stepExecutor));
+            Rag = rag ?? throw new ArgumentNullException(nameof(rag));
         }
 
         /// <inheritdoc />
@@ -38,5 +42,8 @@
 
         /// <inheritdoc />
         public IAiStepExecutorLogger StepExecutor { get; }
+
+        /// <inheritdoc />
+        public IAiRagLogger Rag { get; }
     }
 }

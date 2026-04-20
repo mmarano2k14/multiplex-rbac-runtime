@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
@@ -12,10 +13,12 @@ using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -146,6 +149,9 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiPipelineServiceLogger, AiPipelineServiceLogger>();
             services.AddScoped<IAiStepExecutorLogger, AiStepExecutorLogger>();
             services.AddScoped<IAiRuntimeLogger, AiRuntimeLogger>();
+            services.AddScoped<IAiRagCompositionLogger, AiRagCompositionLogger>();
+            services.AddScoped<IAiRagRetrievalLogger, AiRagRetrievalLogger>();
+            services.AddScoped<IAiRagLogger, AiRagLogger>();
 
             // ------------------------------------------------------------
             // Metrics
@@ -161,6 +167,11 @@ namespace Multiplexed.AI.DI
             // Legacy-compatible default engine registration.
             // Keep this if the default IAiExecutionEngine must remain sequential.
             services.AddScoped<IAiExecutionEngine, AiSequentialExecutionEngine>();
+
+            // Step result normalization
+            services.TryAddSingleton<IAiStepResultNormalizerPipeline, DefaultAiStepResultNormalizerPipeline>();
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IAiStepResultNormalizer, RagStepResultNormalizer>());
 
             return services;
         }

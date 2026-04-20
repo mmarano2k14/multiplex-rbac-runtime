@@ -9,10 +9,12 @@ using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -545,7 +547,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var logger = new NoopLogger();
             var keyBuilder = new AiExecutionKeyBuilder();
             var metrics = new AiRuntimeMetrics();
-            return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics);
+            var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
+            return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics, normalizers);
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(string fileName)

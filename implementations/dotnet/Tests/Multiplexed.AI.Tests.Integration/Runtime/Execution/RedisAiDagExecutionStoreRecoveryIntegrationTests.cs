@@ -1,10 +1,14 @@
 ﻿using FluentAssertions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.AI.Rag.Normalization;
+using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using StackExchange.Redis;
+using System.Data.Common;
+using System.Reflection.PortableExecutable;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
@@ -46,7 +50,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             _testPrefix = $"test:dag:recovery:{Guid.NewGuid():N}";
             _keyBuilder = new TestAiExecutionKeyBuilder(_testPrefix);
             var metrics = new AiRuntimeMetrics();
-            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics);
+            var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
+            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics, normalizers);
         }
 
         /// <summary>

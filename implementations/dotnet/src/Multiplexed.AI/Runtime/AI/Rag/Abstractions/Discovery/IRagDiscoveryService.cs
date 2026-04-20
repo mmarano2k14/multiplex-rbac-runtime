@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
+using System.Collections.Generic;
 using System.Reflection;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery

@@ -39,43 +39,44 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             string? mongoDatabaseName = null,
             string? redisConnectionString = null)
         {
-            ArgumentNullException.ThrowIfNull(options);
-
-            var services = new ServiceCollection();
-
-            RegisterProductionServices(
-                services,
+            return await CreateInternalAsync(
                 options,
+                configureServices: null,
                 mongoConnectionString,
                 mongoDatabaseName,
                 redisConnectionString);
+        }
 
-            var rootProvider = services.BuildServiceProvider();
-            var scope = rootProvider.CreateScope();
-            var serviceProvider = scope.ServiceProvider;
+        /// <summary>
+        /// Creates a fully wired DAG execution engine integration test host and allows
+        /// additional service registrations for specialized test scenarios.
+        ///
+        /// PURPOSE:
+        /// - Preserves the existing fixture entry point without breaking callers.
+        /// - Enables targeted test-only registrations such as RAG providers,
+        ///   retrievals, composers, or custom registries.
+        ///
+        /// IMPORTANT:
+        /// - This overload is additive and does not change existing behavior.
+        /// - The base production graph is always registered first.
+        /// - The caller hook runs after production registration and before the
+        ///   service provider is built.
+        /// </summary>
+        public static async Task<AiDagExecutionEngineTestHost> CreateAsync(
+            AiEngineOptions options,
+            Action<IServiceCollection> configureServices,
+            string? mongoConnectionString = null,
+            string? mongoDatabaseName = null,
+            string? redisConnectionString = null)
+        {
+            ArgumentNullException.ThrowIfNull(configureServices);
 
-            var accessor = serviceProvider.GetRequiredService<IExecutionContextAccessor>();
-
-            if (accessor is not FakeInMemoryContextAccessor fakeAccessor)
-            {
-                throw new InvalidOperationException(
-                    $"Resolved IExecutionContextAccessor is '{accessor.GetType().FullName}', expected '{typeof(FakeInMemoryContextAccessor).FullName}'.");
-            }
-
-            fakeAccessor.Set(CreateRuntimeContext());
-
-            if (options.Snapshots.Enabled && options.Snapshots.Mongo.Enabled)
-            {
-                await serviceProvider.EnsureMongoAiExecutionSnapshotIndexesAsync<ExecutionContextSnapshot>(
-                    options.Snapshots.Mongo);
-            }
-
-            var engine = serviceProvider.GetRequiredService<AiDagExecutionEngine>();
-
-            return new AiDagExecutionEngineTestHost(
-                rootProvider,
-                scope,
-                engine);
+            return await CreateInternalAsync(
+                options,
+                configureServices,
+                mongoConnectionString,
+                mongoDatabaseName,
+                redisConnectionString);
         }
 
         public static string DumpState(AiExecutionRecord? record, AiExecutionState? state)
@@ -139,6 +140,65 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 },
                 TtlSeconds = 300
             };
+        }
+
+        /// <summary>
+        /// Shared fixture creation pipeline used by all public overloads.
+        ///
+        /// PURPOSE:
+        /// - Avoids duplication between the legacy and extended CreateAsync overloads.
+        /// - Preserves the existing host construction behavior.
+        /// - Adds an optional post-registration hook for test-specific services.
+        /// </summary>
+        private static async Task<AiDagExecutionEngineTestHost> CreateInternalAsync(
+            AiEngineOptions options,
+            Action<IServiceCollection>? configureServices,
+            string? mongoConnectionString,
+            string? mongoDatabaseName,
+            string? redisConnectionString)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+
+            var services = new ServiceCollection();
+
+            RegisterProductionServices(
+                services,
+                options,
+                mongoConnectionString,
+                mongoDatabaseName,
+                redisConnectionString);
+
+            // Optional additive test registrations.
+            // This runs after the standard production graph is registered,
+            // allowing specialized tests to add or replace services safely.
+            configureServices?.Invoke(services);
+
+            var rootProvider = services.BuildServiceProvider();
+            var scope = rootProvider.CreateScope();
+            var serviceProvider = scope.ServiceProvider;
+
+            var accessor = serviceProvider.GetRequiredService<IExecutionContextAccessor>();
+
+            if (accessor is not FakeInMemoryContextAccessor fakeAccessor)
+            {
+                throw new InvalidOperationException(
+                    $"Resolved IExecutionContextAccessor is '{accessor.GetType().FullName}', expected '{typeof(FakeInMemoryContextAccessor).FullName}'.");
+            }
+
+            fakeAccessor.Set(CreateRuntimeContext());
+
+            if (options.Snapshots.Enabled && options.Snapshots.Mongo.Enabled)
+            {
+                await serviceProvider.EnsureMongoAiExecutionSnapshotIndexesAsync<ExecutionContextSnapshot>(
+                    options.Snapshots.Mongo);
+            }
+
+            var engine = serviceProvider.GetRequiredService<AiDagExecutionEngine>();
+
+            return new AiDagExecutionEngineTestHost(
+                rootProvider,
+                scope,
+                engine);
         }
 
         /// <summary>
@@ -225,15 +285,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 services.AddAiExecutionSnapshots(options);
                 services.AddAiExecutionReplay();
                 services.AddAiStepsFromAssemblies(typeof(AiRuntimeAssemblyMarker).Assembly);
-                
- 
             }
         }
     }
 
-    /// <summary>
-    /// Represents a fully built DAG execution engine integration test host.
-    /// </summary>
     public sealed class AiDagExecutionEngineTestHost : IAsyncDisposable, IDisposable
     {
         public AiDagExecutionEngineTestHost(

@@ -1,0 +1,30 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-compact",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "retrieve",
+          "stepKey": "rag.multi",
+          "order": 1,
+          "config": {
+            "retrieval": "multi-provider",
+            "query": "state.query"
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 2,
+          "dependsOn": [ "retrieve" ],
+          "config": {
+            "composer": "deterministic",
+            "sourceStep": "retrieve"
+          }
+        }
+      ]
+    }
+  ]
+}

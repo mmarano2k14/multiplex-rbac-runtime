@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="NServiceBus" Version="9.2.9" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.3" />
   </ItemGroup>
 
   <ItemGroup>

@@ -33,5 +33,10 @@
         /// Gets the logger dedicated to single-step executor events.
         /// </summary>
         IAiStepExecutorLogger StepExecutor { get; }
+
+        /// <summary>
+        /// Gets the logger dedicated to RAG runtime events.
+        /// </summary>
+        IAiRagLogger Rag { get; }
     }
 }

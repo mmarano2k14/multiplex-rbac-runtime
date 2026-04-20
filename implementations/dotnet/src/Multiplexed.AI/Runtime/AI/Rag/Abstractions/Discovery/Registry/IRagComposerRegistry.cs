@@ -1,6 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
+using System.Collections.Generic;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery
+namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Registry
 {
     /// <summary>
     /// Defines a registry for RAG composer descriptors.

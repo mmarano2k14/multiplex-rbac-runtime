@@ -1,6 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
@@ -45,6 +46,7 @@ namespace Multiplexed.AI.Stores.Cache
         private readonly IAiRuntimeLogger _logger;
         private readonly JsonSerializerOptions _jsonOptions;
         private readonly IAiRuntimeMetrics _metrics;
+        private readonly IAiStepResultNormalizerPipeline _stepResultNormalizerPipeline;
 
         // ---------------------------------------------------------------------
         // LUA SCRIPTS
@@ -471,18 +473,21 @@ namespace Multiplexed.AI.Stores.Cache
             IConnectionMultiplexer multiplexer,
             IAiExecutionKeyBuilder keyBuilder,
             IAiRuntimeLogger logger,
-            IAiRuntimeMetrics metrics)
+            IAiRuntimeMetrics metrics,
+            IAiStepResultNormalizerPipeline stepResultNormalizerPipeline)
         {
             ArgumentNullException.ThrowIfNull(multiplexer);
             ArgumentNullException.ThrowIfNull(keyBuilder);
             ArgumentNullException.ThrowIfNull(logger);
             ArgumentNullException.ThrowIfNull(metrics);
+            ArgumentNullException.ThrowIfNull(stepResultNormalizerPipeline);
 
             _multiplexer = multiplexer;
             _database = multiplexer.GetDatabase();
             _keyBuilder = keyBuilder;
             _logger = logger;
             _metrics = metrics;
+            _stepResultNormalizerPipeline = stepResultNormalizerPipeline;
 
             _jsonOptions = new JsonSerializerOptions
             {
@@ -645,6 +650,9 @@ namespace Multiplexed.AI.Stores.Cache
             {
                 return stateBlob.HasValue ? state : null;
             }
+
+            // CRITICAL: normalize AFTER full state reconstruction
+            _stepResultNormalizerPipeline.Normalize(state);
 
             return state;
         }

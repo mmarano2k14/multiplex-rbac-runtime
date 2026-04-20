@@ -1,5 +1,7 @@
 ﻿using System.Reflection;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Discovery
 {

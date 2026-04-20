@@ -6,6 +6,193 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.2.8] - 2026-04-19
+
+### feat(rag): complete deterministic RAG runtime integration (steps + normalization + providers)
+
+---
+
+### ⚙️ DAG Runtime Integration (MAJOR)
+
+- Implemented full **DAG-native RAG step system**:
+
+  - `RagComposeStep`
+  - `RagMergeStep`
+  - `RagMultiStep`
+  - `RagRuntimeStep`
+  - `RagSqlStep`
+  - `RagVectorStep`
+
+- Added:
+  - `RagStepHelper` for shared step logic
+
+- Enables:
+  - step-level orchestration of RAG pipelines
+  - full integration with:
+    - `AiStepState`
+    - `AiStepResult`
+    - input/output bindings (`steps.step-id.result.data`)
+  - retry / recovery / replay compatibility
+
+---
+
+### 🔄 Retrieval Layer (Extended)
+
+- Added retrieval orchestration components:
+
+  - `DefaultRagRetrievalResolver`
+  - `DefaultRagBatchMerger`
+  - `MultiProvider` retrieval support
+
+- Supports:
+  - multi-provider aggregation
+  - deterministic merging of results
+  - extensible retrieval strategies
+
+---
+
+### 🧩 Provider Resolution
+
+- Introduced provider resolution layer:
+
+  - `DefaultNormalizingRagProviderResolver`
+
+- Enables:
+  - dynamic provider resolution
+  - separation between provider lookup and execution
+  - clean integration with normalization pipeline
+
+---
+
+### 🧱 Composition Layer
+
+- Introduced deterministic composition system:
+
+  - `IRagComposer<TContext>`
+  - `DefaultRagComposerResolver`
+  - `Composition/Deterministic` pipeline
+
+- Supports:
+  - multiple composition strategies (compact / expert ready)
+  - fragment-based deterministic context construction
+
+---
+
+### 🔁 Normalization Layer (CRITICAL)
+
+- Introduced step result normalization:
+
+  - `RagStepResultNormalizer`
+
+- Solves:
+  - `JsonElement` vs strong type issues
+  - structured context degradation during execution/replay
+
+- Ensures:
+  - typed output preservation (`RagStructuredContext`)
+  - replay-safe data reconstruction
+  - consistent runtime data shape
+
+---
+
+### 🧠 Execution Context
+
+- Introduced:
+  - `RagExecutionContext`
+  - `RagExecutionContext<TContextSnapshot>`
+
+- Enables:
+  - typed snapshot access
+  - compatibility with persistence and replay
+  - structured runtime inputs
+
+---
+
+### 📦 Core Models (from 1.0.2.7)
+
+- `RagNormalizedItem`
+- `RagRetrievalBatch`
+- `RagContextFragment`
+- `RagComposedContext<TContext>`
+
+- Remain the foundation for:
+  - provider normalization
+  - composition pipeline
+  - prompt context construction
+
+---
+
+### 🧠 Architecture Evolution
+
+RAG is now fully executable inside the runtime:
+
+ExecutionContext  
+↓  
+RagRuntimeStep / RagSqlStep / RagVectorStep  
+↓  
+RagMultiStep / RagMergeStep  
+↓  
+RagComposeStep  
+↓  
+RagComposedContext<TContext>  
+↓  
+ai.prompt  
+
+---
+
+### 📚 Documentation
+
+- Added full documentation set:
+
+  - architecture overview
+  - deep implementation guide
+  - developer handbook
+  - internal repo guide
+
+- Includes:
+  - compact vs expert modes
+  - JSON pipeline examples
+  - pseudo-code for retrieval/composition
+  - debugging workflows
+  - extension patterns
+
+---
+
+### 🧪 Key Learnings
+
+- Identified critical runtime issue:
+  - structured context degraded to `JsonElement`
+
+- Introduced normalization layer to:
+  - restore strong typing
+  - ensure replay readability
+  - prevent dynamic JSON drift
+
+---
+
+### 🚀 Positioning
+
+This release upgrades RAG from a foundation to a **fully integrated runtime subsystem**:
+
+- DAG-executable
+- deterministic
+- replay-safe
+- provider-agnostic
+- fragment-based context pipeline
+
+👉 RAG is now part of the execution engine, not an external helper.
+
+---
+
+### 🔜 Next Steps
+
+- ranking & scoring layer (V2)
+- hybrid retrieval strategies
+- token-aware composition
+- agent loop integration
+
+---
+
 ## [1.0.2.6] - 2026-04-10
 
 feat(ai-runtime): integrate declarative prompt step with OpenAI provider and shared variable resolution

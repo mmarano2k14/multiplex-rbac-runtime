@@ -1,0 +1,65 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-expert",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "vector-search",
+          "stepKey": "rag.vector",
+          "order": 1,
+          "config": {
+            "provider": "redis-vector",
+            "query": "state.query"
+          }
+        },
+        {
+          "name": "sql-search",
+          "stepKey": "rag.sql",
+          "order": 2,
+          "config": {
+            "provider": "hr-sql",
+            "query": "state.query"
+          }
+        },
+        {
+          "name": "runtime-search",
+          "stepKey": "rag.runtime",
+          "order": 3,
+          "config": {
+            "provider": "runtime-state",
+            "query": "state.query"
+          }
+        },
+        {
+          "name": "merge",
+          "stepKey": "rag.merge",
+          "order": 4,
+          "dependsOn": [
+            "vector-search",
+            "sql-search",
+            "runtime-search"
+          ],
+          "config": {
+            "sourceSteps": [
+              "vector-search",
+              "sql-search",
+              "runtime-search"
+            ]
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 5,
+          "dependsOn": [ "merge" ],
+          "config": {
+            "composer": "deterministic",
+            "sourceStep": "merge"
+          }
+        }
+      ]
+    }
+  ]
+}

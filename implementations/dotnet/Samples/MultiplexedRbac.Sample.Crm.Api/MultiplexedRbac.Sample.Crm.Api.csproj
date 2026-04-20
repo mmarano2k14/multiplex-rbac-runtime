@@ -11,6 +11,7 @@
     <PackageReference Include="NServiceBus" Version="9.2.9" />
     <PackageReference Include="NServiceBus.RabbitMQ" Version="9.2.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.3" />
   </ItemGroup>
 
   <ItemGroup>

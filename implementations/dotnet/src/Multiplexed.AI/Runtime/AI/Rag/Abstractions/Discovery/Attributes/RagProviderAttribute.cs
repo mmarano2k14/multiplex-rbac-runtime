@@ -1,6 +1,6 @@
 ﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery
+namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes
 {
     /// <summary>
     /// Marks a class as a discoverable RAG provider implementation.

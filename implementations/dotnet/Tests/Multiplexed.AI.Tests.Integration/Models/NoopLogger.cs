@@ -17,6 +17,8 @@ namespace Multiplexed.AI.Tests.Integration.Models
 
         public IAiStepExecutorLogger StepExecutor { get; } = new NoopStepExecutorLogger();
 
+        public IAiRagLogger Rag => throw new NotImplementedException();
+
         private sealed class NoopEngineLogger : IAiExecutionEngineLogger
         {
             public void ExecutionCreated(AiExecutionRecord record) { }

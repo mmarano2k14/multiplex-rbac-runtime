@@ -1,6 +1,7 @@
-﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
+﻿using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery
+namespace Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors
 {
     /// <summary>
     /// Represents the discovered metadata for a RAG composer implementation.
