@@ -11,6 +11,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery
     /// - supports partial type loading
     /// - validates concrete operation implementations
     /// - extracts execution context type from IRagOperation&lt;TExecutionContext&gt;
+    /// - extracts provider metadata from <see cref="RagOperationAttribute"/>
     /// - returns deterministic results
     /// </summary>
     public sealed class DefaultRagOperationDiscoveryService : IRagOperationDiscoveryService
@@ -60,7 +61,9 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery
                     {
                         Key = attribute.Key,
                         ImplementationType = type,
-                        ExecutionContextType = executionContextType
+                        ExecutionContextType = executionContextType,
+                        ProviderKey = attribute.ProviderKey,
+                        UseProviderExecution = attribute.UseProviderExecution
                     });
                 }
             }

@@ -3,43 +3,35 @@ using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Rag.Operations;
 using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
 using Multiplexed.Abstractions.AI.Rag.Runtime;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Plugins;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 {
-    /// <summary>
-    /// Strongly typed RAG retrieval step.
-    ///
-    /// DESIGN:
-    /// - The runtime execution context is the TExecutionContext
-    /// - The step remains infrastructure only
-    /// - Business retrieval logic stays in external IRagOperation implementations
-    /// - When the execution context is an <see cref="AiExecutionContext"/>,
-    ///   the persisted RBAC execution snapshot is propagated to the plugin context
-    /// </summary>
-    /// <typeparam name="TExecutionContext">
-    /// The strongly typed execution context used by this step.
-    /// </typeparam>
     public sealed class RagRetrievalStep<TExecutionContext>
     {
         private readonly IRagOperationResolver _operationResolver;
+        private readonly IRagOperationRegistry _operationRegistry;
+        private readonly INormalizingRagProviderResolver _providerResolver;
         private readonly IRagStepResultNormalizer _stepResultNormalizer;
         private readonly IAiRuntimeLogger _logger;
 
         public RagRetrievalStep(
             IRagOperationResolver operationResolver,
+            IRagOperationRegistry operationRegistry,
+            INormalizingRagProviderResolver providerResolver,
             IRagStepResultNormalizer stepResultNormalizer,
             IAiRuntimeLogger logger)
         {
             _operationResolver = operationResolver ?? throw new ArgumentNullException(nameof(operationResolver));
+            _operationRegistry = operationRegistry ?? throw new ArgumentNullException(nameof(operationRegistry));
+            _providerResolver = providerResolver ?? throw new ArgumentNullException(nameof(providerResolver));
             _stepResultNormalizer = stepResultNormalizer ?? throw new ArgumentNullException(nameof(stepResultNormalizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        /// <summary>
-        /// Executes a RAG retrieval operation using a strongly typed execution context.
-        /// </summary>
         public async Task<RagRetrievalBatch> ExecuteAsync(
             TExecutionContext executionContext,
             IReadOnlyDictionary<string, object?> inputs,
@@ -58,18 +50,86 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             _logger.Engine.LogInformation($"Resolving RAG operation '{config.Operation}'.");
 
             var operation = _operationResolver.Resolve(config.Operation);
+            var descriptor = _operationRegistry.Get(operation.Key);
 
+            _logger.Engine.LogInformation(
+                $"RAG operation '{operation.Key}' uses provider '{descriptor.ProviderKey}' (UseProviderExecution={descriptor.UseProviderExecution}).");
+
+            RagRetrievalBatch result;
+
+            if (descriptor.UseProviderExecution)
+            {
+                _logger.Engine.LogInformation($"Executing provider mode for '{operation.Key}'.");
+
+                try
+                {
+                    var provider = _providerResolver.Resolve(descriptor.ProviderKey);
+
+                    var ragContext = new RagExecutionContext
+                    {
+                        QueryKey = operation.Key,
+                        Inputs = inputs,
+                        Metadata = new Dictionary<string, object?>
+                        {
+                            ["operation"] = operation.Key
+                        }
+                    };
+
+                    result = await provider
+                        .RetrieveNormalizedAsync(ragContext, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Engine.LogError(
+                        $"Provider execution failed for '{operation.Key}', falling back to operation mode. Error: {ex.Message}");
+
+                    result = await ExecuteOperationFallback(
+                        operation,
+                        executionContext,
+                        inputs,
+                        cancellationToken);
+                }
+            }
+            else
+            {
+                result = await ExecuteOperationFallback(
+                    operation,
+                    executionContext,
+                    inputs,
+                    cancellationToken);
+            }
+
+            var normalized = _stepResultNormalizer.Normalize(result);
+
+            if (normalized is not RagRetrievalBatch normalizedBatch)
+            {
+                throw new InvalidOperationException(
+                    $"RAG operation '{operation.Key}' returned invalid normalized result.");
+            }
+
+            _logger.Engine.LogInformation(
+                $"RAG operation '{operation.Key}' completed with {normalizedBatch.Items?.Count ?? 0} item(s).");
+
+            return normalizedBatch;
+        }
+
+        private async Task<RagRetrievalBatch> ExecuteOperationFallback(
+            IRagOperation operation,
+            TExecutionContext executionContext,
+            IReadOnlyDictionary<string, object?> inputs,
+            CancellationToken cancellationToken)
+        {
             if (operation.ExecutionContextType != typeof(TExecutionContext))
             {
                 throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' expects execution context type '{operation.ExecutionContextType.FullName}', " +
-                    $"but step was instantiated with '{typeof(TExecutionContext).FullName}'.");
+                    $"RAG operation '{operation.Key}' expects '{operation.ExecutionContextType.Name}' but got '{typeof(TExecutionContext).Name}'.");
             }
 
             if (operation is not IRagOperation<TExecutionContext> typedOperation)
             {
                 throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' does not implement IRagOperation<{typeof(TExecutionContext).Name}>.");
+                    $"RAG operation '{operation.Key}' does not implement expected typed interface.");
             }
 
             var executionContextSnapshot = executionContext is AiExecutionContext aiExecutionContext
@@ -81,42 +141,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 executionContextSnapshot,
                 inputs);
 
-            _logger.Engine.LogInformation($"Executing RAG operation '{operation.Key}'.");
-
-            RagRetrievalBatch result;
-
-            try
-            {
-                result = await typedOperation.ExecuteAsync(pluginContext, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.Engine.LogError(
-                    $"RAG operation '{operation.Key}' failed: {ex.GetType().Name}: {ex.Message}");
-                throw;
-            }
-
-            if (result == null)
-            {
-                throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' returned null '{nameof(RagRetrievalBatch)}'.");
-            }
-
-            var normalized = _stepResultNormalizer.Normalize(result);
-
-            if (normalized is not RagRetrievalBatch normalizedBatch)
-            {
-                throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' returned a normalized result of type " +
-                    $"'{normalized?.GetType().FullName ?? "null"}' instead of '{typeof(RagRetrievalBatch).FullName}'.");
-            }
-
-            _logger.Engine.LogInformation(
-                $"RAG operation '{operation.Key}' completed successfully with " +
-                $"{normalizedBatch.Items?.Count ?? 0} normalized item(s).");
-
-            return normalizedBatch;
+            return await typedOperation.ExecuteAsync(pluginContext, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 }

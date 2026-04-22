@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
 using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.Abstractions.AI.Rag.Steps;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
 using Multiplexed.AI.Runtime.Logging;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -28,10 +29,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
     /// IMPORTANT:
     /// - The public runtime input is always <see cref="AiExecutionContext"/>
     /// - Strong typing is applied internally against the operation contract
+    /// - The dispatcher forwards both operation metadata and provider resolution
+    ///   dependencies to the typed retrieval step
     /// </summary>
     public sealed class RagRetrievalStepDispatcher : IRagRetrievalStepDispatcher
     {
         private readonly IRagOperationResolver _operationResolver;
+        private readonly IRagOperationRegistry _operationRegistry;
+        private readonly INormalizingRagProviderResolver _providerResolver;
         private readonly IRagStepResultNormalizer _normalizer;
         private readonly IAiRuntimeLogger _logger;
 
@@ -40,10 +45,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 
         public RagRetrievalStepDispatcher(
             IRagOperationResolver operationResolver,
+            IRagOperationRegistry operationRegistry,
+            INormalizingRagProviderResolver providerResolver,
             IRagStepResultNormalizer normalizer,
             IAiRuntimeLogger logger)
         {
             _operationResolver = operationResolver ?? throw new ArgumentNullException(nameof(operationResolver));
+            _operationRegistry = operationRegistry ?? throw new ArgumentNullException(nameof(operationRegistry));
+            _providerResolver = providerResolver ?? throw new ArgumentNullException(nameof(providerResolver));
             _normalizer = normalizer ?? throw new ArgumentNullException(nameof(normalizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
@@ -106,6 +115,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 
             var step = new RagRetrievalStep<TExecutionContext>(
                 _operationResolver,
+                _operationRegistry,
+                _providerResolver,
                 _normalizer,
                 _logger);
 

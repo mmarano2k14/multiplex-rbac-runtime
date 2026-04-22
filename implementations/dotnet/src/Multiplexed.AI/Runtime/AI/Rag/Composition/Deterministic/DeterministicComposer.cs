@@ -1,15 +1,16 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Rag.Enums;
+using Multiplexed.Abstractions.AI.Rag.Models;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using Multiplexed.AI.Runtime.Logging;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Rag.Enums;
-using Multiplexed.Abstractions.AI.Rag.Models;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
-using Multiplexed.AI.Runtime.Logging;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Composition.Deterministic
 {
@@ -31,6 +32,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Composition.Deterministic
     /// - No non-deterministic ordering is allowed.
     /// - Fragment generation must remain stable and inspectable.
     /// </summary>
+    [RagComposer("deterministic", RagComposerKind.Structured, DisplayName = "Deterministic Composer", IsDefault = true)]
     public sealed class DeterministicComposer : IRagComposer<RagStructuredContext>
     {
         private readonly IAiRagCompositionLogger _logger;

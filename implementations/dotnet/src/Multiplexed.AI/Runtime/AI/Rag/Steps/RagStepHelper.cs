@@ -1,6 +1,4 @@
-﻿// File: RagStepHelper.cs
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -73,6 +71,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         /// </summary>
         public static string GetRequiredProviderKey(AiStepExecutionContext context)
         {
+            ArgumentNullException.ThrowIfNull(context);
+
             if (!context.TryGetStepConfigValue<string>("provider", out var provider) ||
                 string.IsNullOrWhiteSpace(provider))
             {
@@ -120,6 +120,44 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         }
 
         /// <summary>
+        /// Resolves the full argument bag that should be passed to a RAG operation.
+        ///
+        /// PURPOSE:
+        /// - Merges declared step inputs with selected resolved step configuration values.
+        /// - Ensures generic retrieval operations can access argument-like config values
+        ///   such as providerKey and executionMode when they are configured on the step.
+        ///
+        /// DESIGN:
+        /// - Declared inputs always win over config values when the same key exists.
+        /// - Structural config keys such as 'operation' are intentionally excluded.
+        /// - Only argument-like config fields are merged to avoid surprising behavior.
+        ///
+        /// IMPORTANT:
+        /// - This method is additive and does not change the behavior of
+        ///   <see cref="GetResolvedInputs(AiStepExecutionContext)"/>.
+        /// - Existing callers of <see cref="GetResolvedInputs(AiStepExecutionContext)"/>
+        ///   remain unaffected.
+        /// </summary>
+        public static IReadOnlyDictionary<string, object?> GetResolvedOperationArguments(
+            AiStepExecutionContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            var merged = new Dictionary<string, object?>(
+                context.ResolveDeclaredInputs(includeReservedVariables: true),
+                StringComparer.Ordinal);
+
+            AddResolvedStepConfigValueIfPresent(context, merged, "provider");
+            AddResolvedStepConfigValueIfPresent(context, merged, "providerKey");
+            AddResolvedStepConfigValueIfPresent(context, merged, "executionMode");
+            AddResolvedStepConfigValueIfPresent(context, merged, "query");
+            AddResolvedStepConfigValueIfPresent(context, merged, "sourceStep");
+            AddResolvedStepConfigValueIfPresent(context, merged, "composer");
+
+            return merged;
+        }
+
+        /// <summary>
         /// Gets the required RBAC execution context snapshot captured at execution creation time.
         ///
         /// IMPORTANT:
@@ -162,6 +200,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         /// </summary>
         public static IReadOnlyList<string> GetRequiredSourceSteps(AiStepExecutionContext context)
         {
+            ArgumentNullException.ThrowIfNull(context);
+
             if (!context.TryGetStepConfigValue<object>("sourceSteps", out var raw) || raw is null)
             {
                 throw new InvalidOperationException(
@@ -254,6 +294,9 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             RagRetrievalBatch batch,
             string providerOrOperationKey)
         {
+            ArgumentNullException.ThrowIfNull(batch);
+            ArgumentException.ThrowIfNullOrWhiteSpace(providerOrOperationKey);
+
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["providerKey"] = providerOrOperationKey,
@@ -269,6 +312,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         public static Dictionary<string, object?> BuildCompositionStepResultData(
             RagComposedContext<RagStructuredContext> composed)
         {
+            ArgumentNullException.ThrowIfNull(composed);
+
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["context"] = composed.Context,
@@ -298,6 +343,121 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
 
             return string.Empty;
+        }
+
+        /// <summary>
+        /// Adds a resolved config value to the merged operation argument bag when present.
+        ///
+        /// RULES:
+        /// - Existing input values are never overwritten.
+        /// - Missing config keys are ignored.
+        /// - Config references such as 'state.providerKey' are resolved through the step context.
+        /// </summary>
+        private static void AddResolvedStepConfigValueIfPresent(
+            AiStepExecutionContext context,
+            IDictionary<string, object?> target,
+            string key)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(target);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (target.ContainsKey(key))
+            {
+                return;
+            }
+
+            if (!context.TryGetStepConfigValue<object>(key, out var rawValue))
+            {
+                return;
+            }
+
+            target[key] = ResolveConfigValue(context, rawValue);
+        }
+
+        /// <summary>
+        /// Resolves a config value when it is expressed as a path-like string such as
+        /// 'state.providerKey' or 'steps.someStep.result...'.
+        ///
+        /// PURPOSE:
+        /// - Allows operation arguments to come from step config while still supporting
+        ///   runtime path resolution.
+        ///
+        /// IMPORTANT:
+        /// - If the value is a JSON string, it is treated the same way as a normal string
+        ///   and is allowed to flow through path resolution first.
+        /// - If the value does not look like a resolvable path, it is returned as-is.
+        /// - If path resolution fails, the original raw value is returned to preserve
+        ///   backward compatibility and avoid unexpected runtime failures.
+        /// </summary>
+        private static object? ResolveConfigValue(
+            AiStepExecutionContext context,
+            object? rawValue)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            if (rawValue is null)
+            {
+                return null;
+            }
+
+            if (rawValue is JsonElement json)
+            {
+                if (json.ValueKind == JsonValueKind.String)
+                {
+                    return ResolveStringConfigValue(context, json.GetString(), rawValue);
+                }
+
+                return ConvertJsonValue(json);
+            }
+
+            if (rawValue is string text)
+            {
+                return ResolveStringConfigValue(context, text, rawValue);
+            }
+
+            return rawValue;
+        }
+
+        /// <summary>
+        /// Resolves one string config value, attempting runtime path resolution first
+        /// and falling back to the original value when no path match is available.
+        /// </summary>
+        private static object? ResolveStringConfigValue(
+            AiStepExecutionContext context,
+            string? text,
+            object? rawValue)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            if (!LooksLikeResolvablePath(text))
+            {
+                return text;
+            }
+
+            if (context.TryResolvePath<object?>(text, out var resolved))
+            {
+                return resolved;
+            }
+
+            return rawValue is JsonElement json && json.ValueKind == JsonValueKind.String
+                ? json.GetString()
+                : rawValue;
+        }
+
+        /// <summary>
+        /// Determines whether the supplied text looks like a runtime-resolvable path.
+        /// </summary>
+        private static bool LooksLikeResolvablePath(string text)
+        {
+            return text.StartsWith("state.", StringComparison.Ordinal) ||
+                   text.StartsWith("steps.", StringComparison.Ordinal) ||
+                   text.StartsWith("execution.", StringComparison.Ordinal);
         }
 
         // ---------------------------------------------------------------------

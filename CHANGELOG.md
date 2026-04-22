@@ -5,8 +5,155 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+## [1.0.2.9] - 2026-04-22
+
+### 🚀 Added
+
+#### Multi-Provider Relational RAG (Major Feature)
+
+- Introduced **provider-mode execution** for relational RAG retrieval
+- Added support for **multiple relational providers**:
+  - SQL Server
+  - PostgreSQL
+- Enabled dynamic provider selection via:
+  - `provider = relational`
+  - `providerKey = state.providerKey`
+
+---
+
+#### Runtime Connectors (Provider Layer)
+
+- Added:
+  - `SqlServerRelationalRagConnector`
+  - `PostgresRelationalRagConnector`
+
+- Connectors:
+  - Resolve queries dynamically using `IRelationalRagQuery`
+  - Filter by:
+    - `ConnectorKey`
+    - `EntityType`
+  - Remain **fully generic** (no domain coupling)
+
+---
+
+#### Plugin-Based Query Model
+
+- Introduced `IRelationalRagQuery` abstraction
+- Implemented external queries for:
+
+  **Candidate**
+  - SQL Server
+  - PostgreSQL
+
+  **Job**
+  - SQL Server
+  - PostgreSQL
+
+- Queries:
+  - Encapsulate provider-specific logic
+  - Delegate to external stores
+  - Return structured rows only
+
+---
+
+#### Dual Execution Mode Support
+
+Datasources now support:
+
+- **Direct Mode**
+  - Calls store directly (InMemory / EF)
+- **Provider Mode**
+  - Delegates to runtime connector
+  - Uses `providerKey` to select backend
+
+---
+
+#### Dynamic Config Resolution
+
+- Enhanced `RagStepHelper` to support:
+  - `state.*`
+  - `steps.*`
+  - runtime path resolution inside config
+
+Example:
+
+```json
+"providerKey": "state.providerKey"
+```
+
+- Added safe fallback behavior when resolution fails
+
+---
+
+### 🧪 Testing
+
+Added full integration coverage for:
+
+- **InMemory**
+  - Direct mode
+  - Provider mode
+
+- **SQL Server (EF)**
+  - Direct mode
+  - Provider mode
+
+- **PostgreSQL (EF)**
+  - Direct mode
+  - Provider mode
+
+- Verified:
+  - Multi-provider execution correctness
+  - Runtime connector resolution
+  - Entity-type based query routing
+
+---
+
+### 🛠 Fixed
+
+- Fixed config resolution issue where `JsonElement` strings were not resolved as runtime paths
+- Fixed provider mode not receiving resolved `providerKey`
+- Fixed PostgreSQL connection configuration (incorrect SQL Server credentials usage)
+
+---
+
+### 🧠 Architecture Improvements
+
+- Enforced strict separation of concerns:
+
+  - **Runtime**
+    - Orchestration (DAG engine)
+    - Connectors (generic routing)
+
+  - **External Plugins**
+    - Datasources
+    - Queries (`IRelationalRagQuery`)
+    - Operations
+
+  - **Infrastructure**
+    - Stores (EF / InMemory)
+    - Database contexts
+
+- Ensured:
+  - No domain knowledge inside runtime connectors
+  - Full extensibility for future providers:
+    - Vector DB
+    - APIs
+    - Hybrid sources
+
+---
+
+### ⚡ Result
+
+- Fully operational **multi-provider RAG retrieval layer**
+- Deterministic, testable, and extensible architecture
+- Ready for:
+  - multi-source merge (`rag.merge`)
+  - context composition (`rag.compose`)
+  - hybrid RAG pipelines
 
 ## [1.0.2.8] - 2026-04-19
+
+---
 
 ### feat(rag): complete deterministic RAG runtime integration (steps + normalization + providers)
 

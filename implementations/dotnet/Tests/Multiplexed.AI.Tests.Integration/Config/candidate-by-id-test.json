@@ -1,0 +1,25 @@
+{
+  "pipelines": [
+    {
+      "name": "candidate-by-id-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "candidate.byId",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "input": {
+            "candidateId": "state.candidateId"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "state.providerKey",
+            "executionMode": "state.executionMode"
+          }
+        }
+      ]
+    }
+  ]
+}

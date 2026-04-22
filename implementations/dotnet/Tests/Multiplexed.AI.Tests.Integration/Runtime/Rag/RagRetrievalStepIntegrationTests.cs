@@ -71,7 +71,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services =>
                 {
                     services.AddRagCore();
-                    services.AddRagOperationsFromAssemblies(typeof(TestOperation).Assembly);
+                    services.AddRagFromAssemblies(typeof(TestOperation).Assembly);
                 });
         }
 

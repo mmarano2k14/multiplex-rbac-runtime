@@ -6,9 +6,16 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery
     /// <summary>
     /// Default DI-backed RAG operation resolver.
     ///
-    /// Uses:
+    /// USES:
     /// - <see cref="IRagOperationRegistry"/> for deterministic metadata lookup
     /// - <see cref="IServiceProvider"/> for instance creation/resolution
+    ///
+    /// IMPORTANT:
+    /// - The registry is the source of truth for operation metadata.
+    /// - This includes the operation key, execution context type,
+    ///   and provider key associated with the operation.
+    /// - This resolver is responsible only for resolving the operation instance.
+    /// - It does not execute provider resolution directly.
     /// </summary>
     public sealed class DefaultRagOperationResolver : IRagOperationResolver
     {

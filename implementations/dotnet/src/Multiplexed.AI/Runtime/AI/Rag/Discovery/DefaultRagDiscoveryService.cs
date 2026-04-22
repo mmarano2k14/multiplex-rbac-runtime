@@ -57,7 +57,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Discovery
                     SourceType = x.Attribute.SourceType,
                     DisplayName = x.Attribute.DisplayName,
                     IsDefault = x.Attribute.IsDefault,
-                    Status = x.Attribute.Status
+                    Status = x.Attribute.Status,
                 })
                 .OrderBy(x => x.Key, StringComparer.Ordinal)
                 .ToArray();
@@ -93,6 +93,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Discovery
                     Kind = x.Attribute.Kind,
                     DisplayName = x.Attribute.DisplayName,
                     IsDefault = x.Attribute.IsDefault
+
                 })
                 .OrderBy(x => x.Key, StringComparer.Ordinal)
                 .ToArray();
@@ -127,7 +128,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Discovery
                     ImplementationType = x.Type,
                     Kind = x.Attribute.Kind,
                     DisplayName = x.Attribute.DisplayName,
-                    IsDefault = x.Attribute.IsDefault
+                    IsDefault = x.Attribute.IsDefault,
                 })
                 .OrderBy(x => x.Key, StringComparer.Ordinal)
                 .ToArray();

@@ -10,6 +10,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery
     /// - deterministic ordinal key storage
     /// - uniqueness validation
     /// - fast runtime lookup
+    /// - provider metadata validation
     /// </summary>
     public sealed class DefaultRagOperationRegistry : IRagOperationRegistry
     {
@@ -55,6 +56,18 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery
                 {
                     throw new InvalidOperationException(
                         $"RAG operation '{descriptor.Key}' has a null execution context type.");
+                }
+
+                if (string.IsNullOrWhiteSpace(descriptor.ProviderKey))
+                {
+                    throw new InvalidOperationException(
+                        $"RAG operation '{descriptor.Key}' has a null or whitespace provider key.");
+                }
+
+                if (descriptor.UseProviderExecution && string.IsNullOrWhiteSpace(descriptor.ProviderKey))
+                {
+                    throw new InvalidOperationException(
+                        $"RAG operation '{descriptor.Key}' requires a provider key when UseProviderExecution is enabled.");
                 }
 
                 if (dictionary.ContainsKey(descriptor.Key))

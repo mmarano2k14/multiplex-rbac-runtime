@@ -279,7 +279,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services =>
                 {
                     services.AddRagCore();
-                    services.AddRagOperationsFromAssemblies(typeof(TestOperation).Assembly);
+                    services.AddRagFromAssemblies(typeof(TestOperation).Assembly);
                     RegisterRagTestServices(services);
                 });
         }
@@ -419,7 +419,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                         {
                             Id = "sql-1",
                             ProviderKey = Key,
-                            ProviderKind = RagProviderKind.Sql,
+                            ProviderKind = RagProviderKind.Structured,
                             ContentType = "text/plain",
                             ContentText = $"SQL row for '{context.QueryText}'",
                             Score = 0.80

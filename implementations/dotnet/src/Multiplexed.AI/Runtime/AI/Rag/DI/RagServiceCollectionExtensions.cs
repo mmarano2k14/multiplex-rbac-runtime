@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
 using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.Abstractions.AI.Rag.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
@@ -12,7 +13,12 @@ using Multiplexed.AI.Runtime.AI.Rag.Composition;
 using Multiplexed.AI.Runtime.AI.Rag.Discovery;
 using Multiplexed.AI.Runtime.AI.Rag.Discovery.Registry;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
-using Multiplexed.AI.Runtime.AI.Rag.Providers;
+using Multiplexed.AI.Runtime.AI.Rag.Operations.Discovery;
+using Multiplexed.AI.Runtime.AI.Rag.Providers.Connectors;
+using Multiplexed.AI.Runtime.AI.Rag.Providers.Connectors.Postgres;
+using Multiplexed.AI.Runtime.AI.Rag.Providers.Connectors.SqlServer;
+using Multiplexed.AI.Runtime.AI.Rag.Providers.Readers;
+using Multiplexed.AI.Runtime.AI.Rag.Providers.Resolvers;
 using Multiplexed.AI.Runtime.AI.Rag.Retrieval;
 using Multiplexed.AI.Runtime.AI.Rag.Steps;
 using Multiplexed.AI.Runtime.Execution.Normalization;
@@ -38,7 +44,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
     ///   discovery-based registration on top of that foundation.
     ///
     /// IMPORTANT:
-    /// - Providers, retrievals, and composers discovered from assemblies are
+    /// - Providers, operations, retrievals, and composers discovered from assemblies are
     ///   registered by their concrete implementation type.
     /// - Resolvers rely on registries + <see cref="IServiceProvider"/>.
     /// </summary>
@@ -54,7 +60,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
         /// IMPORTANT:
         /// - This method does not scan assemblies by itself.
         /// - Use <see cref="AddRagFromAssemblies(IServiceCollection, Assembly[])"/>
-        ///   to register attributed providers, retrievals, and composers dynamically.
+        ///   to register attributed providers, operations, retrievals, and composers dynamically.
         /// </summary>
         public static IServiceCollection AddRagCore(this IServiceCollection services)
         {
@@ -64,6 +70,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             // Discovery
             // -----------------------------------------------------------------
             services.TryAddSingleton<IRagDiscoveryService, DefaultRagDiscoveryService>();
+            services.TryAddSingleton<IRagOperationDiscoveryService, DefaultRagOperationDiscoveryService>();
 
             // -----------------------------------------------------------------
             // Registries
@@ -74,12 +81,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             services.TryAddSingleton<IRagProviderRegistry>(_ =>
                 new DefaultRagProviderRegistry(Array.Empty<RagProviderDescriptor>()));
 
+            services.TryAddSingleton<IRagOperationRegistry>(_ =>
+                new DefaultRagOperationRegistry(Array.Empty<RagOperationDescriptor>()));
+
             services.TryAddSingleton<IRagRetrievalRegistry>(_ =>
                 new DefaultRagRetrievalRegistry(Array.Empty<RagRetrievalDescriptor>()));
 
             services.TryAddSingleton<IRagComposerRegistry>(_ =>
                 new DefaultRagComposerRegistry(Array.Empty<RagComposerDescriptor>()));
-
 
             // -----------------------------------------------------------------
             // Core runtime configuration / services
@@ -92,6 +101,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             // Resolvers
             // -----------------------------------------------------------------
             services.TryAddSingleton<INormalizingRagProviderResolver, DefaultNormalizingRagProviderResolver>();
+            services.TryAddSingleton<IRagOperationResolver, DefaultRagOperationResolver>();
             services.TryAddSingleton<IRagRetrievalResolver, DefaultRagRetrievalResolver>();
             services.TryAddSingleton<IRagComposerResolver, DefaultRagComposerResolver>();
 
@@ -102,9 +112,24 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             services.TryAddSingleton<IAiRagCompositionLogger, AiRagCompositionLogger>();
             services.TryAddSingleton<IAiRagLogger, AiRagLogger>();
 
+            // -----------------------------------------------------------------
+            // Normalization / dispatch
+            // -----------------------------------------------------------------
             services.TryAddTransient<IRagStepResultNormalizer, DefaultRagStepResultNormalizer>();
-
             services.TryAddTransient<IRagRetrievalStepDispatcher, RagRetrievalStepDispatcher>();
+
+            // -----------------------------------------------------------------
+            // RAG Readers and Connectors
+            // -----------------------------------------------------------------
+
+            services.AddTransient<IRelationalRagConnectorResolver, DefaultRelationalRagConnectorResolver>();
+            services.AddTransient<IRelationalRagRecordReader, DefaultRelationalRagRecordReader>();
+
+            services.AddTransient<IRelationalRagConnector, SqlServerRelationalRagConnector>();
+            services.AddTransient<IRelationalRagConnector, PostgresRelationalRagConnector>();
+
+            services.AddSingleton<IRelationalRagConnectorResolver, DefaultRelationalRagConnectorResolver>();
+            services.AddTransient<IRelationalRagRecordReader, DefaultRelationalRagRecordReader>();
 
             // -----------------------------------------------------------------
             // Steps
@@ -128,13 +153,13 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
         /// Adds discovery-based RAG registration from the specified assemblies.
         ///
         /// PURPOSE:
-        /// - Scans assemblies for attributed RAG providers, retrievals, and composers.
+        /// - Scans assemblies for attributed RAG providers, operations, retrievals, and composers.
         /// - Builds and replaces the runtime registries with discovered descriptors.
         /// - Registers discovered implementation types in dependency injection.
         ///
         /// FLOW:
         /// 1. Ensure core RAG services are registered
-        /// 2. Discover providers, retrievals, and composers
+        /// 2. Discover providers, operations, retrievals, and composers
         /// 3. Register descriptors into registries
         /// 4. Register implementation types in DI
         ///
@@ -168,8 +193,10 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             // Use a temporary discovery service instance. This avoids needing a
             // built service provider during registration.
             var discovery = new DefaultRagDiscoveryService();
+            var operationDiscovery = new DefaultRagOperationDiscoveryService();
 
             var providerDescriptors = discovery.DiscoverProviders(validAssemblies);
+            var operationDescriptors = operationDiscovery.Discover(validAssemblies);
             var retrievalDescriptors = discovery.DiscoverRetrievals(validAssemblies);
             var composerDescriptors = discovery.DiscoverComposers(validAssemblies);
 
@@ -177,19 +204,23 @@ namespace Multiplexed.AI.Runtime.AI.Rag.DI
             services.Replace(ServiceDescriptor.Singleton<IRagProviderRegistry>(
                 _ => new DefaultRagProviderRegistry(providerDescriptors)));
 
+            services.Replace(ServiceDescriptor.Singleton<IRagOperationRegistry>(
+                _ => new DefaultRagOperationRegistry(operationDescriptors)));
+
             services.Replace(ServiceDescriptor.Singleton<IRagRetrievalRegistry>(
                 _ => new DefaultRagRetrievalRegistry(retrievalDescriptors)));
 
             services.Replace(ServiceDescriptor.Singleton<IRagComposerRegistry>(
                 _ => new DefaultRagComposerRegistry(composerDescriptors)));
 
-
-            
-
             // Register discovered implementation types by concrete type.
             RegisterDiscoveredImplementationTypes(
                 services,
                 providerDescriptors.Select(x => x.ImplementationType));
+
+            RegisterDiscoveredImplementationTypes(
+                services,
+                operationDescriptors.Select(x => x.ImplementationType));
 
             RegisterDiscoveredImplementationTypes(
                 services,

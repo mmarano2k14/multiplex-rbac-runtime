@@ -9,7 +9,7 @@ using Multiplexed.AI.Runtime.Rag.Operations;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
 {
-    [RagOperation("test.operation")]
+    [RagOperation("test.operation", "sql")]
     public sealed class TestOperation : RagOperationBase<AiExecutionContext>
     {
         public override string Key => "test.operation";

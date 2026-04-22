@@ -9,6 +9,8 @@ using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.Abstractions.AI.Rag.Steps;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.AI.Rag.DI;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
@@ -176,10 +178,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                     services.AddTransient<IRagRetrievalStepDispatcher, RagRetrievalStepDispatcher>();
 
                     // Register operations dynamically from this test assembly
-                    services.AddRagOperationsFromAssemblies(typeof(GetCandidateOperation).Assembly);
+                    services.AddAiStepsFromAssemblies(typeof(MergeRetrievalBatchStep).Assembly, typeof(AiRuntimeAssemblyMarker).Assembly);
+                    services.AddRagFromAssemblies(typeof(GetCandidateOperation).Assembly, typeof(AiRuntimeAssemblyMarker).Assembly);
 
                     // Register custom merge step concrete type
-                    services.AddTransient<MergeRetrievalBatchStep>();
+                    //services.AddTransient<MergeRetrievalBatchStep>();
                 });
         }
 
@@ -187,7 +190,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
         // TEST OPERATIONS
         // ============================================================
 
-        [RagOperation("getCandidate")]
+        [RagOperation("getCandidate", "sql")]
         private sealed class GetCandidateOperation : RagOperationBase<AiExecutionContext>
         {
             public override string Key => "getCandidate";
@@ -220,7 +223,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             }
         }
 
-        [RagOperation("getJob")]
+        [RagOperation("getJob", "sql")]
         private sealed class GetJobOperation : RagOperationBase<AiExecutionContext>
         {
             public override string Key => "getJob";

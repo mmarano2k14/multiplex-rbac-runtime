@@ -3,7 +3,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Descriptors;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Registry;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Providers
+namespace Multiplexed.AI.Runtime.AI.Rag.Providers.Resolvers
 {
     /// <summary>
     /// Default implementation of <see cref="INormalizingRagProviderResolver"/>.

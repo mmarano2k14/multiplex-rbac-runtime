@@ -43,7 +43,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             ArgumentNullException.ThrowIfNull(context);
 
             var operation = RagStepHelper.GetRequiredOperation(context);
-            var inputs = RagStepHelper.GetResolvedInputs(context);
+            var inputs = RagStepHelper.GetResolvedOperationArguments(context);
 
             var config = new RagRetrievalStepConfig
             {
