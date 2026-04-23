@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+
+## [Unreleased]
+
+### ✨ Added
+- Introduced `IAiExecutionSnapshotCleanupService` for dedicated snapshot cleanup handling
+- Added support for `DeleteSnapshotsIfExist` option in `AiExecutionCleanupOptions`
+- Integrated `IAiOwnedRbacCleanupService` into execution cleanup lifecycle
+- Added fallback cleanup path when execution record is missing (executionId-based cleanup)
+
+### ♻️ Changed
+- Refactored `AiExecutionCleanupService` to use a single unified internal cleanup method
+- Centralized cleanup orchestration (DAG, state, record, snapshot, RBAC)
+- Improved cleanup idempotency and resilience (safe retry behavior)
+
+### 🧪 Tests
+- Extended integration tests to cover:
+  - Snapshot deletion when cleanup is enabled
+  - Full execution lifecycle: execution → snapshot → replay → cleanup
+  - EF provider + external provider scenarios
+- Fixed cleanup behavior in tests when execution record is already deleted
+
+### 🧱 Internal
+- Updated DI registration to include snapshot cleanup service
+- Ensured optional services (snapshot store) are resolved safely
+- Improved logging consistency across cleanup operations
+
+---
+
+## 🚀 Summary
+
+This update finalizes the execution cleanup lifecycle:
+execution → snapshot → replay → cleanup
+
+The runtime is now fully prepared for V4 (vector-based RAG) with:
+- deterministic cleanup
+- robust fallback behavior
+- modular cleanup architecture
+
+---
+
 ## [1.0.2.9] - 2026-04-22
 
 ### 🚀 Added

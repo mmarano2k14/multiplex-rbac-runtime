@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution
+﻿namespace Multiplexed.Abstractions.AI.Execution.Cleanup
 {
     /// <summary>
     /// Deletes distributed DAG step persistence and associated claim metadata

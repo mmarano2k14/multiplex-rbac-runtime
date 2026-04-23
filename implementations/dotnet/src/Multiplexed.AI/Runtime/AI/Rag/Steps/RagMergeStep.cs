@@ -1,56 +1,118 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;
+using Multiplexed.AI.Runtime.AI.Rag.Steps;
 
-namespace Multiplexed.AI.Runtime.AI.Rag.Steps
+/// <summary>
+/// Merges multiple retrieval batches into a single deterministic batch.
+///
+/// PURPOSE:
+/// - Reads upstream retrieval batches from configured source steps.
+/// - Delegates merge behavior to the configured <see cref="IRagBatchMerger"/>.
+/// - Produces a consistent serializable batch for downstream steps.
+///
+/// CONFIG:
+/// - sourceSteps: list of upstream step names exposing result.data.batch (required)
+///
+/// CONTRACT:
+/// - Each source step must exist in the execution state.
+/// - Each step must expose a valid <c>result.data.batch</c>.
+///
+/// OUTPUT:
+/// - data:
+///     - batch: merged <see cref="RagRetrievalBatch"/>
+///     - itemCount: number of items in the merged batch
+///     - diagnostics: aggregated diagnostics
+///
+/// DETERMINISM:
+/// - Merge must produce identical output for identical inputs.
+/// - Output ordering is normalized and independent from caller order.
+/// - StableOrder is reassigned to a dense sequence (0..N-1).
+///
+/// SAFETY:
+/// - Fails fast when upstream data is invalid.
+/// - Protects downstream composition steps from inconsistent ordering.
+/// </summary>
+[AiStep("rag.merge")]
+public sealed class RagMergeStep : IAiStep
 {
-    /// <summary>
-    /// Merges multiple retrieval batches into a single deterministic batch.
-    /// </summary>
-    [AiStep("rag.merge")]
-    public sealed class RagMergeStep : IAiStep
-    {
-        private readonly IRagBatchMerger _batchMerger;
+    private readonly IRagBatchMerger _batchMerger;
 
-        public RagMergeStep(IRagBatchMerger batchMerger)
+    public RagMergeStep(IRagBatchMerger batchMerger)
+    {
+        _batchMerger = batchMerger ?? throw new ArgumentNullException(nameof(batchMerger));
+    }
+
+    public string Name => "rag.merge";
+
+    public Task<AiStepResult> ExecuteAsync(
+        AiStepExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var sourceSteps = RagStepHelper.GetRequiredSourceSteps(context);
+
+        var batches = new List<RagRetrievalBatch>(sourceSteps.Count);
+
+        foreach (var stepName in sourceSteps)
         {
-            _batchMerger = batchMerger ?? throw new ArgumentNullException(nameof(batchMerger));
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var batch = RagStepHelper.GetRequiredBatch(context, stepName);
+            batches.Add(batch);
         }
 
-        public string Name => "rag.merge";
+        var merged = _batchMerger.Merge(batches);
 
-        public Task<AiStepResult> ExecuteAsync(
-            AiStepExecutionContext context,
-            CancellationToken cancellationToken = default)
+        ValidateMergedBatch(merged);
+
+        return Task.FromResult(
+            AiStepResult.Ok(
+                output: $"Merged {batches.Count} batch(es) into {merged.Items.Count} item(s).",
+                data: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["batch"] = merged,
+                    ["itemCount"] = merged.Items.Count,
+                    ["diagnostics"] = merged.Diagnostics
+                }));
+    }
+
+    /// <summary>
+    /// Validates structural invariants expected from a merged retrieval batch.
+    ///
+    /// INVARIANTS:
+    /// - Batch must not be null.
+    /// - Items must not be null.
+    /// - No item may be null.
+    /// - StableOrder must be dense and sequential (0..N-1).
+    /// </summary>
+    private static void ValidateMergedBatch(RagRetrievalBatch merged)
+    {
+        ArgumentNullException.ThrowIfNull(merged);
+
+        if (merged.Items is null)
         {
-            ArgumentNullException.ThrowIfNull(context);
+            throw new InvalidOperationException(
+                "rag.merge: Merged batch contains null Items.");
+        }
 
-            var sourceSteps = RagStepHelper.GetRequiredSourceSteps(context);
-            var batches = new List<RagRetrievalBatch>(sourceSteps.Count);
+        for (var i = 0; i < merged.Items.Count; i++)
+        {
+            var item = merged.Items[i];
 
-            foreach (var stepName in sourceSteps)
+            if (item is null)
             {
-                var batch = RagStepHelper.GetRequiredBatch(context, stepName);
-                batches.Add(batch);
+                throw new InvalidOperationException(
+                    $"rag.merge: Null item detected at index {i}.");
             }
 
-            var merged = _batchMerger.Merge(batches);
-
-            return Task.FromResult(
-                AiStepResult.Ok(
-                    output: $"Merged {batches.Count} batch(es) into {merged.Items.Count} item(s).",
-                    data: new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["batch"] = merged,
-                        ["itemCount"] = merged.Items.Count,
-                        ["diagnostics"] = merged.Diagnostics
-                    }));
+            if (item.StableOrder != i)
+            {
+                throw new InvalidOperationException(
+                    $"rag.merge: Invalid StableOrder at index {i}. Expected {i}, found {item.StableOrder}.");
+            }
         }
     }
 }

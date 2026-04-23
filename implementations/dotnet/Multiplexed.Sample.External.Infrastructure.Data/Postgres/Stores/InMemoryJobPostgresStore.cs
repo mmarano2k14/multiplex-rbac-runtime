@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Sample.External.Infrastructure.Data.Postgres.Entities;
+using Multiplexed.Sample.External.Infrastructure.Data.SqlServer.Entities;
 
 namespace Multiplexed.Sample.External.Infrastructure.Data.Postgres.Stores
 {
@@ -39,14 +40,31 @@ namespace Multiplexed.Sample.External.Infrastructure.Data.Postgres.Stores
         {
             return new Dictionary<string, IReadOnlyList<JobPostgresEntity>>(StringComparer.Ordinal)
             {
-                ["job-101"] = new List<JobPostgresEntity>
+                ["job-001"] = new List<JobPostgresEntity>
                 {
                     new()
                     {
-                        Id = "job-101",
-                        Title = "Backend Engineer",
-                        Description = "Build reliable backend systems.",
-                        Requirements = "PostgreSQL, APIs, Messaging"
+                        Id = "job-001",
+                        Title = "Staff Software Engineer",
+                        Description = "Lead backend architecture and distributed systems design.",
+                    }
+                },
+                ["job-002"] = new List<JobPostgresEntity>
+                {
+                    new()
+                    {
+                        Id = "job-002",
+                        Title = "Senior Backend Engineer",
+                        Description = "Build and maintain high-scale APIs and data workflows.",
+                    }
+                },
+                ["job-003"] = new List<JobPostgresEntity>
+                {
+                    new()
+                    {
+                        Id = "job-003",
+                        Title = "Platform Engineer",
+                        Description = "Improve deployment systems, cloud infrastructure, and reliability.",
                     }
                 }
             };

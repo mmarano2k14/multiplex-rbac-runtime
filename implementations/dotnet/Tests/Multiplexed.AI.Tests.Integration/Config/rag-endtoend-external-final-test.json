@@ -1,0 +1,66 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-endtoend-external-final-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "candidate",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "input": {
+            "candidateId": "state.candidateId"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "state.candidateProviderKey",
+            "executionMode": "state.candidateExecutionMode"
+          }
+        },
+        {
+          "name": "job",
+          "stepKey": "rag.retrieval",
+          "order": 2,
+          "input": {
+            "jobId": "state.jobId"
+          },
+          "config": {
+            "operation": "job.byId",
+            "provider": "relational",
+            "providerKey": "state.jobProviderKey",
+            "executionMode": "state.jobExecutionMode"
+          }
+        },
+        {
+          "name": "merge",
+          "stepKey": "rag.merge",
+          "order": 3,
+          "dependsOn": [
+            "candidate",
+            "job"
+          ],
+          "config": {
+            "sourceSteps": [
+              "candidate",
+              "job"
+            ]
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 4,
+          "dependsOn": [
+            "merge"
+          ],
+          "config": {
+            "sourceStep": "merge",
+            "composer": "deterministic"
+          }
+        }
+      ]
+    }
+  ]
+}

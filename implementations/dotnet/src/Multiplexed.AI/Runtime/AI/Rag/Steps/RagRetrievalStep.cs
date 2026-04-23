@@ -10,6 +10,22 @@ using Multiplexed.AI.Runtime.Plugins;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 {
+    /// <summary>
+    /// Executes a RAG retrieval operation using either provider mode or operation fallback mode.
+    ///
+    /// PURPOSE:
+    /// - Resolves a registered RAG operation from configuration.
+    /// - Executes the operation via provider (preferred) or fallback execution.
+    /// - Normalizes the result into a consistent <see cref="RagRetrievalBatch"/>.
+    ///
+    /// CONTRACT:
+    /// - The configured operation must exist and be resolvable.
+    /// - The execution must return a valid retrieval batch.
+    ///
+    /// DETERMINISM:
+    /// - The same operation with identical inputs must produce the same output batch.
+    /// - No randomness or unstable ordering is allowed.
+    /// </summary>
     public sealed class RagRetrievalStep<TExecutionContext>
     {
         private readonly IRagOperationResolver _operationResolver;
@@ -44,7 +60,9 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 
             if (string.IsNullOrWhiteSpace(config.Operation))
             {
-                throw new ArgumentException("RAG retrieval operation cannot be null or whitespace.", nameof(config));
+                throw new ArgumentException(
+                    "rag.retrieval: Missing required config 'operation'.",
+                    nameof(config));
             }
 
             _logger.Engine.LogInformation($"Resolving RAG operation '{config.Operation}'.");
@@ -105,7 +123,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             if (normalized is not RagRetrievalBatch normalizedBatch)
             {
                 throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' returned invalid normalized result.");
+                    $"rag.retrieval: Operation '{operation.Key}' returned invalid normalized result of type '{normalized?.GetType().FullName}'.");
             }
 
             _logger.Engine.LogInformation(
@@ -123,13 +141,13 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             if (operation.ExecutionContextType != typeof(TExecutionContext))
             {
                 throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' expects '{operation.ExecutionContextType.Name}' but got '{typeof(TExecutionContext).Name}'.");
+                    $"rag.retrieval: Operation '{operation.Key}' expects '{operation.ExecutionContextType.Name}' but got '{typeof(TExecutionContext).Name}'.");
             }
 
             if (operation is not IRagOperation<TExecutionContext> typedOperation)
             {
                 throw new InvalidOperationException(
-                    $"RAG operation '{operation.Key}' does not implement expected typed interface.");
+                    $"rag.retrieval: Operation '{operation.Key}' does not implement expected typed interface.");
             }
 
             var executionContextSnapshot = executionContext is AiExecutionContext aiExecutionContext

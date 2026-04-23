@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution
+﻿namespace Multiplexed.Abstractions.AI.Execution.Cleanup
 {
     /// <summary>
     /// Represents the outcome of a coordinated AI execution bundle cleanup.

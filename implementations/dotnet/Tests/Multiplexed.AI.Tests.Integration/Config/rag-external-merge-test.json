@@ -1,0 +1,66 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-external-merge-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "candidate-sqlserver",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "input": {
+            "candidateId": "state.candidateIdSqlServer"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "sqlserver",
+            "executionMode": "provider"
+          }
+        },
+        {
+          "name": "candidate-postgres",
+          "stepKey": "rag.retrieval",
+          "order": 2,
+          "input": {
+            "candidateId": "state.candidateIdPostgres"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "postgres",
+            "executionMode": "provider"
+          }
+        },
+        {
+          "name": "merge",
+          "stepKey": "rag.merge",
+          "order": 3,
+          "dependsOn": [
+            "candidate-sqlserver",
+            "candidate-postgres"
+          ],
+          "config": {
+            "sourceSteps": [
+              "candidate-sqlserver",
+              "candidate-postgres"
+            ]
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 4,
+          "dependsOn": [
+            "merge"
+          ],
+          "config": {
+            "sourceStep": "merge",
+            "composer": "deterministic"
+          }
+        }
+      ]
+    }
+  ]
+}

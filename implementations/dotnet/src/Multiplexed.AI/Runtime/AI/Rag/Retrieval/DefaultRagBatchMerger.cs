@@ -65,22 +65,23 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         {
             ArgumentNullException.ThrowIfNull(batches);
 
-            // Normalize outer batch ordering first so that the aggregation path
-            // stays deterministic even if callers provide batches in varying order.
             var normalizedBatches = batches
                 .Where(x => x is not null)
-                .OrderBy(x => x.Items.Count)
-                .ThenBy(x => BuildBatchOrderingKey(x), StringComparer.Ordinal)
+                .OrderBy(x => GetSafeItemCount(x))
+                .ThenBy(BuildBatchOrderingKey, StringComparer.Ordinal)
                 .ToArray();
 
             var rawItems = normalizedBatches
                 .SelectMany(x => x.Items ?? Array.Empty<RagNormalizedItem>())
+                .Where(x => x is not null)
                 .ToArray();
 
             var mergedItems = ApplyMergeMode(rawItems);
             var deduplicatedItems = ApplyDeduplication(mergedItems);
             var rankedItems = ApplyRanking(deduplicatedItems);
             var stabilizedItems = ReassignStableOrder(rankedItems);
+
+            ValidateStableOrder(stabilizedItems);
 
             var diagnostics = BuildDiagnostics(
                 normalizedBatches,
@@ -107,6 +108,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         /// </summary>
         private IReadOnlyList<RagNormalizedItem> ApplyMergeMode(IReadOnlyList<RagNormalizedItem> items)
         {
+            ArgumentNullException.ThrowIfNull(items);
+
             return _options.MergeMode switch
             {
                 RagMergeMode.Concat => OrderDeterministically(items),
@@ -137,17 +140,19 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         /// </summary>
         private IReadOnlyList<RagNormalizedItem> ApplyDeduplication(IReadOnlyList<RagNormalizedItem> items)
         {
+            ArgumentNullException.ThrowIfNull(items);
+
             return _options.DeduplicationMode switch
             {
                 RagDeduplicationMode.None => items,
 
                 RagDeduplicationMode.ById => items
-                    .GroupBy(x => x.Id, StringComparer.Ordinal)
+                    .GroupBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
                     .Select(SelectPreferredItem)
                     .ToArray(),
 
                 RagDeduplicationMode.BySourceAndId => items
-                    .GroupBy(x => $"{x.ProviderKey}::{x.Id}", StringComparer.Ordinal)
+                    .GroupBy(x => $"{x.ProviderKey ?? string.Empty}::{x.Id ?? string.Empty}", StringComparer.Ordinal)
                     .Select(SelectPreferredItem)
                     .ToArray(),
 
@@ -168,6 +173,8 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         /// </summary>
         private IReadOnlyList<RagNormalizedItem> ApplyRanking(IReadOnlyList<RagNormalizedItem> items)
         {
+            ArgumentNullException.ThrowIfNull(items);
+
             return _options.RankingMode switch
             {
                 RagRankingMode.None => OrderDeterministically(items),
@@ -204,11 +211,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         private static IReadOnlyList<RagNormalizedItem> ReassignStableOrder(
             IReadOnlyList<RagNormalizedItem> items)
         {
+            ArgumentNullException.ThrowIfNull(items);
+
             var result = new RagNormalizedItem[items.Count];
 
             for (var i = 0; i < items.Count; i++)
             {
-                var item = items[i];
+                var item = items[i] ?? throw new InvalidOperationException(
+                    $"RAG merge produced a null item at index {i}.");
 
                 result[i] = new RagNormalizedItem
                 {
@@ -245,10 +255,13 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         private static IReadOnlyList<RagNormalizedItem> OrderDeterministically(
             IEnumerable<RagNormalizedItem> items)
         {
+            ArgumentNullException.ThrowIfNull(items);
+
             return items
-                .OrderBy(x => x.ProviderKey, StringComparer.Ordinal)
+                .Where(x => x is not null)
+                .OrderBy(x => x.ProviderKey ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(x => x.SourceType)
-                .ThenBy(x => x.Id, StringComparer.Ordinal)
+                .ThenBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
                 .ToArray();
         }
 
@@ -264,11 +277,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         private static RagNormalizedItem SelectPreferredItem(
             IGrouping<string, RagNormalizedItem> group)
         {
+            ArgumentNullException.ThrowIfNull(group);
+
             return group
+                .Where(x => x is not null)
                 .OrderByDescending(x => x.Score ?? double.MinValue)
-                .ThenBy(x => x.ProviderKey, StringComparer.Ordinal)
+                .ThenBy(x => x.ProviderKey ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(x => x.SourceType)
-                .ThenBy(x => x.Id, StringComparer.Ordinal)
+                .ThenBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
                 .First();
         }
 
@@ -281,12 +297,38 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
         /// </summary>
         private static string BuildBatchOrderingKey(RagRetrievalBatch batch)
         {
+            ArgumentNullException.ThrowIfNull(batch);
+
             return string.Join(
                 "|",
-                batch.Items
-                    .OrderBy(x => x.ProviderKey, StringComparer.Ordinal)
-                    .ThenBy(x => x.Id, StringComparer.Ordinal)
-                    .Select(x => $"{x.ProviderKey}:{x.Id}"));
+                (batch.Items ?? Array.Empty<RagNormalizedItem>())
+                    .Where(x => x is not null)
+                    .OrderBy(x => x.ProviderKey ?? string.Empty, StringComparer.Ordinal)
+                    .ThenBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                    .Select(x => $"{x.ProviderKey ?? string.Empty}:{x.Id ?? string.Empty}"));
+        }
+
+        private static int GetSafeItemCount(RagRetrievalBatch batch)
+        {
+            ArgumentNullException.ThrowIfNull(batch);
+            return batch.Items?.Count ?? 0;
+        }
+
+        private static void ValidateStableOrder(IReadOnlyList<RagNormalizedItem> items)
+        {
+            ArgumentNullException.ThrowIfNull(items);
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                var item = items[i] ?? throw new InvalidOperationException(
+                    $"RAG merge produced a null stabilized item at index {i}.");
+
+                if (item.StableOrder != i)
+                {
+                    throw new InvalidOperationException(
+                        $"RAG merge produced a non-dense StableOrder sequence at index {i}. Expected {i}, found {item.StableOrder}.");
+                }
+            }
         }
 
         #endregion
@@ -307,10 +349,13 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval
             int afterDedupCount,
             int finalItemCount)
         {
+            ArgumentNullException.ThrowIfNull(batches);
+
             var providerDiagnostics = batches
-                .Where(x => x.Diagnostics?.Providers is not null)
-                .SelectMany(x => x.Diagnostics!.Providers)
-                .OrderBy(x => x.ProviderKey, StringComparer.Ordinal)
+                .Where(x => x?.Diagnostics?.Providers is not null)
+                .SelectMany(x => x!.Diagnostics!.Providers)
+                .Where(x => x is not null)
+                .OrderBy(x => x.ProviderKey ?? string.Empty, StringComparer.Ordinal)
                 .ToArray();
 
             return new RagRetrievalDiagnostics

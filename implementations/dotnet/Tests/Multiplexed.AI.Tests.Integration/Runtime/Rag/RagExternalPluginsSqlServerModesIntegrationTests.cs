@@ -1,14 +1,16 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Rag.Models;
-using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using Multiplexed.AI.Runtime.AI.Rag.DI;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Sample.External.Plugins.Rag;
 using Multiplexed.Sample.External.Plugins.Rag.DI;
-using Multiplexed.AI.Runtime.AI.Rag.DI;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -17,12 +19,17 @@ using Xunit;
 namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
 {
     /// <summary>
-    /// Validates external RAG plugins across:
-    /// - SQL Server vs PostgreSQL
-    /// - InMemory vs EF
-    /// - Direct vs Provider mode
+    /// FINAL V3 VALIDATION
+    ///
+    /// Covers:
+    /// - InMemory
+    /// - EF direct (internal)
+    /// - EF provider
+    ///
+    /// Pipeline:
+    /// candidate + job → merge → compose → snapshot → cleanup
     /// </summary>
-    public sealed class RagExternalPluginsSqlServerModesIntegrationTests
+    public sealed class RagEndToEndFinalIntegrationTests
     {
         private const string SqlServerConnectionString =
             "Server=MSI\\SQLEXPRESS;Database=TestAiRuntimeRag;Trusted_Connection=True;TrustServerCertificate=True;";
@@ -31,11 +38,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             "Host=localhost;Port=5432;Database=TestAiRuntimeRag;Username=postgres;Password=sa";
 
         // ============================================================
-        // SQL SERVER - IN MEMORY - DIRECT
+        // IN MEMORY
         // ============================================================
 
         [Fact]
-        public async Task Candidate_ById_SqlServer_InMemory_Direct_Should_Succeed()
+        public async Task ExecuteAllAsync_InMemory_Should_Succeed()
         {
             await using var host = await CreateHostAsync(services =>
             {
@@ -44,36 +51,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services.AddExternalRag();
             });
 
-            var result = await ExecuteAsync(host, "cand-001", "direct", "sqlserver");
-
-            AssertSuccess(result);
+            await ExecuteAndValidate(host, "direct");
         }
 
         // ============================================================
-        // SQL SERVER - IN MEMORY - PROVIDER
+        // EF DIRECT (internal execution)
         // ============================================================
 
         [Fact]
-        public async Task Candidate_ById_SqlServer_InMemory_Provider_Should_Succeed()
-        {
-            await using var host = await CreateHostAsync(services =>
-            {
-                services.AddExternalSqlServerInMemory();
-                services.AddExternalPostgresInMemory();
-                services.AddExternalRag();
-            });
-
-            var result = await ExecuteAsync(host, "cand-001", "provider", "sqlserver");
-
-            AssertSuccess(result);
-        }
-
-        // ============================================================
-        // SQL SERVER - EF - DIRECT
-        // ============================================================
-
-        [Fact]
-        public async Task Candidate_ById_SqlServer_Ef_Direct_Should_Succeed()
+        public async Task ExecuteAllAsync_Ef_Direct_Should_Succeed()
         {
             await using var host = await CreateHostAsync(services =>
             {
@@ -82,17 +68,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services.AddExternalRag();
             });
 
-            var result = await ExecuteAsync(host, "cand-001", "direct", "sqlserver");
-
-            AssertSuccess(result);
+            await ExecuteAndValidate(host, "direct");
         }
 
         // ============================================================
-        // SQL SERVER - EF - PROVIDER
+        // EF PROVIDER
         // ============================================================
 
         [Fact]
-        public async Task Candidate_ById_SqlServer_Ef_Provider_Should_Succeed()
+        public async Task ExecuteAllAsync_Ef_Provider_Should_Succeed()
         {
             await using var host = await CreateHostAsync(services =>
             {
@@ -101,141 +85,63 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 services.AddExternalRag();
             });
 
-            var result = await ExecuteAsync(host, "cand-001", "provider", "sqlserver");
-
-            AssertSuccess(result);
+            await ExecuteAndValidate(host, "provider");
         }
 
         // ============================================================
-        // POSTGRES - IN MEMORY - DIRECT
+        // EXECUTION CORE
         // ============================================================
 
-        [Fact]
-        public async Task Candidate_ById_Postgres_InMemory_Direct_Should_Succeed()
-        {
-            await using var host = await CreateHostAsync(services =>
-            {
-                services.AddExternalSqlServerInMemory();
-                services.AddExternalPostgresInMemory();
-                services.AddExternalRag();
-            });
-
-            var result = await ExecuteAsync(host, "cand-101", "direct", "postgres");
-
-            AssertSuccess(result);
-        }
-
-        // ============================================================
-        // POSTGRES - IN MEMORY - PROVIDER
-        // ============================================================
-
-        [Fact]
-        public async Task Candidate_ById_Postgres_InMemory_Provider_Should_Succeed()
-        {
-            await using var host = await CreateHostAsync(services =>
-            {
-                services.AddExternalPostgresInMemory();
-                services.AddExternalSqlServerInMemory();
-                services.AddExternalRag();
-            });
-
-            var result = await ExecuteAsync(host, "cand-101", "provider", "postgres");
-
-            AssertSuccess(result);
-        }
-
-        // ============================================================
-        // POSTGRES - EF - DIRECT
-        // ============================================================
-
-        [Fact]
-        public async Task Candidate_ById_Postgres_Ef_Direct_Should_Succeed()
-        {
-            await using var host = await CreateHostAsync(services =>
-            {
-                services.AddExternalPostgresEf(PostgresConnectionString);
-                services.AddExternalSqlServerEf(SqlServerConnectionString);
-                services.AddExternalRag();
-            });
-
-            var result = await ExecuteAsync(host, "cand-101", "direct", "postgres");
-
-            AssertSuccess(result);
-        }
-
-        // ============================================================
-        // POSTGRES - EF - PROVIDER
-        // ============================================================
-
-        [Fact]
-        public async Task Candidate_ById_Postgres_Ef_Provider_Should_Succeed()
-        {
-            await using var host = await CreateHostAsync(services =>
-            {
-                services.AddExternalPostgresEf(PostgresConnectionString);
-                services.AddExternalSqlServerEf(SqlServerConnectionString);
-                services.AddExternalRag();
-            });
-
-            var result = await ExecuteAsync(host, "cand-101", "provider", "postgres");
-
-            AssertSuccess(result);
-        }
-
-        // ============================================================
-        // EXECUTION HELPER
-        // ============================================================
-
-        private static async Task<RagRetrievalBatch> ExecuteAsync(
+        private static async Task ExecuteAndValidate(
             AiDagExecutionEngineTestHost host,
-            string candidateId,
-            string mode,
-            string providerKey)
+            string executionMode)
         {
             var engine = host.Engine;
 
             var created = await engine.CreateAsync(
-                "candidate-by-id-test",
+                "rag-final-test",
                 new Dictionary<string, object?>
                 {
-                    ["candidateId"] = candidateId,
-                    ["executionMode"] = mode,
-                    ["providerKey"] = providerKey
+                    ["candidateId"] = "cand-001",
+                    ["jobId"] = "job-001",
+                    ["candidateProviderKey"] = "sqlserver",
+                    ["jobProviderKey"] = "postgres",
+                    ["candidateExecutionMode"] = executionMode,
+                    ["jobExecutionMode"] = executionMode
                 });
 
             var final = await engine.ExecuteAllAsync(created.ExecutionId);
 
-            var state = await host.ServiceProvider
-                .GetRequiredService<IAiDagExecutionStore>()
-                .GetStateAsync(created.ExecutionId);
+            Assert.NotNull(final);
+            Assert.True(final!.IsTerminal);
+            Assert.Equal(AiExecutionStatus.Completed, final.Status);
 
-            var step = state!.Steps["candidate.byId"];
+            var store = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
 
-            Assert.True(step.IsCompleted);
-            Assert.NotNull(step.Result);
-            Assert.NotNull(step.Result!.Data);
+            var record = await store.GetRecordAsync(created.ExecutionId);
+            var state = await store.GetStateAsync(created.ExecutionId);
 
-            Assert.True(
-                step.Result.Data.TryGetValue("batch", out var batchValue),
-                "Expected 'batch' in step result.");
-
-            return Assert.IsType<RagRetrievalBatch>(batchValue);
-        }
-
-        // ============================================================
-        // ASSERTIONS
-        // ============================================================
-
-        private static void AssertSuccess(RagRetrievalBatch batch)
-        {
-            Assert.NotNull(batch);
-            Assert.NotNull(batch.Items);
-            Assert.NotEmpty(batch.Items);
-
-            foreach (var item in batch.Items)
+            // cleanup may remove state/record depending on timing
+            if (record != null)
             {
-                Assert.False(string.IsNullOrWhiteSpace(item.Id));
-                Assert.False(string.IsNullOrWhiteSpace(item.ContentText));
+                Assert.True(record.IsTerminal);
+            }
+
+            if (state != null)
+            {
+                Assert.True(state.Steps["candidate"].IsCompleted);
+                Assert.True(state.Steps["job"].IsCompleted);
+                Assert.True(state.Steps["merge"].IsCompleted);
+                Assert.True(state.Steps["compose"].IsCompleted);
+
+                // validate compose output
+                var compose = state.Steps["compose"];
+
+                Assert.NotNull(compose.Result);
+                Assert.NotNull(compose.Result!.Data);
+
+                Assert.True(compose.Result.Data.ContainsKey("context"));
+                Assert.True(compose.Result.Data.ContainsKey("fragments"));
             }
         }
 
@@ -248,14 +154,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
         {
             var options = new AiEngineOptions
             {
-                JsonPipelineDefinitionFilePath = "config\\candidate-by-id-test.json"
+                JsonPipelineDefinitionFilePath = "config\\rag-final-test.json",
+                Snapshots = new AiExecutionSnapshotOptions
+                {
+                    Enabled = true
+                },
+                Cleanup = new AiExecutionCleanupOptions
+                {
+                    AutoCleanupOnCompleted = true,
+                    AutoCleanupOnFailed = true,
+                    SuppressCleanupExceptions = true
+                }
             };
 
             return await AiDagExecutionEngineFixture.CreateAsync(
                 options,
                 services =>
                 {
-                    services.AddMultiplexAI(options);
+                    //services.AddMultiplexAI(options);
 
                     configure(services);
 

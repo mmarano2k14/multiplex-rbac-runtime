@@ -8,6 +8,7 @@ using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.AI;
+using Multiplexed.AI.DI.Cleanup;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
@@ -234,8 +235,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                     ];
                 });
 
-            // Full AI runtime registrations using strongly-typed options.
             services.AddMultiplexAI(options);
+
+            services.AddAiExecutionCleanup(cleanup =>
+            {
+                cleanup.AutoCleanupOnCompleted = options.Cleanup.AutoCleanupOnCompleted;
+                cleanup.AutoCleanupOnFailed = options.Cleanup.AutoCleanupOnFailed;
+                cleanup.SuppressSnapshotIfExist = options.Cleanup.SuppressSnapshotIfExist;
+                cleanup.SuppressCleanupExceptions = options.Cleanup.SuppressCleanupExceptions;
+            });
 
             var configuration = new ConfigurationManager();
 

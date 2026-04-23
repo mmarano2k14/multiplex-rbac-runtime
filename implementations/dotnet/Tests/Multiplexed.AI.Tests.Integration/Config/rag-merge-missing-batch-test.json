@@ -1,0 +1,29 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-merge-missing-batch-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "fake-no-batch",
+          "stepKey": "test.no-batch",
+          "order": 1
+        },
+        {
+          "name": "merge",
+          "stepKey": "rag.merge",
+          "order": 2,
+          "dependsOn": [
+            "fake-no-batch"
+          ],
+          "config": {
+            "sourceSteps": [
+              "fake-no-batch"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

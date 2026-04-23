@@ -77,7 +77,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 string.IsNullOrWhiteSpace(provider))
             {
                 throw new InvalidOperationException(
-                    "The current step configuration is missing required field 'provider'.");
+                    "rag.retrieval: Missing required config 'provider'.");
             }
 
             return provider;
@@ -98,7 +98,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 string.IsNullOrWhiteSpace(operation))
             {
                 throw new InvalidOperationException(
-                    "The current step configuration is missing required field 'operation'.");
+                    "rag.retrieval: Missing required config 'operation'.");
             }
 
             return operation;
@@ -175,7 +175,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             if (snapshot is null)
             {
                 throw new InvalidOperationException(
-                    "The current execution does not contain an RBAC execution context snapshot.");
+                    "rag: The current execution does not contain an RBAC execution context snapshot.");
             }
 
             return snapshot;
@@ -205,7 +205,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             if (!context.TryGetStepConfigValue<object>("sourceSteps", out var raw) || raw is null)
             {
                 throw new InvalidOperationException(
-                    "The current step configuration is missing required field 'sourceSteps'.");
+                    "rag.merge: Missing required config 'sourceSteps'.");
             }
 
             if (raw is IEnumerable<object> objectItems)
@@ -219,7 +219,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 if (values.Length == 0)
                 {
                     throw new InvalidOperationException(
-                        "The current step configuration contains an empty 'sourceSteps' list.");
+                        "rag.merge: Config 'sourceSteps' cannot be empty.");
                 }
 
                 return values;
@@ -237,14 +237,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 if (values.Length == 0)
                 {
                     throw new InvalidOperationException(
-                        "The current step configuration contains an empty 'sourceSteps' list.");
+                        "rag.merge: Config 'sourceSteps' cannot be empty.");
                 }
 
                 return values;
             }
 
             throw new InvalidOperationException(
-                "The current step configuration field 'sourceSteps' must be an array.");
+                "rag.merge: Config 'sourceSteps' must be an array.");
         }
 
         /// <summary>
@@ -275,7 +275,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
                 raw is null)
             {
                 throw new InvalidOperationException(
-                    $"Unable to resolve retrieval batch from step '{stepName}'.");
+                    $"rag: Unable to resolve 'result.data.batch' from step '{stepName}'.");
             }
 
             if (TryConvertToRetrievalBatch(raw, out var batch))
@@ -284,7 +284,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             }
 
             throw new InvalidOperationException(
-                $"Resolved retrieval batch from step '{stepName}' could not be converted from runtime type '{raw.GetType().FullName}'.");
+                $"rag: Retrieval batch from step '{stepName}' could not be converted from type '{raw.GetType().FullName}'.");
         }
 
         /// <summary>

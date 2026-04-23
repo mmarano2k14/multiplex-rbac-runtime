@@ -7,7 +7,16 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
 {
     /// <summary>
     /// Normalizes execution snapshot data into a persistence-safe form.
-    /// This removes JsonElement instances by converting them into plain CLR values.
+    ///
+    /// PURPOSE:
+    /// - Removes runtime-specific values that are not safe to persist directly.
+    /// - Converts JsonElement values into plain CLR objects.
+    /// - Converts custom CLR objects into dictionary/list/primitive graphs so BSON persistence can succeed.
+    ///
+    /// IMPORTANT:
+    /// - The snapshot is normalized in place.
+    /// - This method is intended for persistence only.
+    /// - Runtime-friendly reconstruction is handled separately by the remapper.
     /// </summary>
     public static class AiExecutionSnapshotNormalizer
     {
@@ -68,7 +77,8 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         }
 
         /// <summary>
-        /// Normalizes a dictionary recursively and returns an empty dictionary when null.
+        /// Normalizes a dictionary recursively.
+        /// Returns an empty dictionary when the input is null or empty.
         /// </summary>
         private static Dictionary<string, object?> NormalizeDictionary(Dictionary<string, object?>? value)
         {
@@ -88,8 +98,13 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         }
 
         /// <summary>
-        /// Recursively normalizes an arbitrary object graph.
-        /// JsonElement values are converted into plain CLR types.
+        /// Recursively normalizes an arbitrary object graph into persistence-safe values.
+        ///
+        /// RULES:
+        /// - JsonElement is converted to plain CLR values.
+        /// - Dictionary values are normalized recursively.
+        /// - Enumerables are normalized into lists.
+        /// - Unknown CLR objects are serialized to JSON and re-normalized as plain CLR values.
         /// </summary>
         private static object? NormalizeObject(object? value)
         {
@@ -132,7 +147,20 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
                 return list;
             }
 
-            return value;
+            // Convert custom CLR objects into persistence-safe structures.
+            // This keeps snapshot persistence independent from BSON allowlists.
+            try
+            {
+                var json = JsonSerializer.Serialize(value);
+                using var document = JsonDocument.Parse(json);
+
+                return NormalizeJsonElement(document.RootElement);
+            }
+            catch
+            {
+                // Preserve previous fallback behavior if conversion fails unexpectedly.
+                return value;
+            }
         }
 
         /// <summary>

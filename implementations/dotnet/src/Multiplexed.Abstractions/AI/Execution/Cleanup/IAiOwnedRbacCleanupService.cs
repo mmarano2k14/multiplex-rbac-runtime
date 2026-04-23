@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution
+﻿namespace Multiplexed.Abstractions.AI.Execution.Cleanup
 {
     /// <summary>
     /// Deletes RBAC resources owned by an AI execution.

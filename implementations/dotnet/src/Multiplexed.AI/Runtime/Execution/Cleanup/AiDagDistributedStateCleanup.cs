@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Runtime.Execution.Cleanup

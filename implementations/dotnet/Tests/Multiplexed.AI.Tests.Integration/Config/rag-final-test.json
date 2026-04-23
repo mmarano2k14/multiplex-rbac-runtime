@@ -1,0 +1,66 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-final-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "candidate",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "input": {
+            "candidateId": "state.candidateId"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "sqlserver",
+            "executionMode": "provider"
+          }
+        },
+        {
+          "name": "job",
+          "stepKey": "rag.retrieval",
+          "order": 2,
+          "input": {
+            "jobId": "state.jobId"
+          },
+          "config": {
+            "operation": "job.byId",
+            "provider": "relational",
+            "providerKey": "postgres",
+            "executionMode": "provider"
+          }
+        },
+        {
+          "name": "merge",
+          "stepKey": "rag.merge",
+          "order": 3,
+          "dependsOn": [
+            "candidate",
+            "job"
+          ],
+          "config": {
+            "sourceSteps": [
+              "candidate",
+              "job"
+            ]
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 4,
+          "dependsOn": [
+            "merge"
+          ],
+          "config": {
+            "sourceStep": "merge",
+            "composer": "deterministic"
+          }
+        }
+      ]
+    }
+  ]
+}

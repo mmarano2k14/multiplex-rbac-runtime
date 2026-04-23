@@ -1,0 +1,37 @@
+{
+  "pipelines": [
+    {
+      "name": "rag-compose-invalid-composer-test",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "candidate",
+          "stepKey": "rag.retrieval",
+          "order": 1,
+          "input": {
+            "candidateId": "state.candidateId"
+          },
+          "config": {
+            "operation": "candidate.byId",
+            "provider": "relational",
+            "providerKey": "sqlserver",
+            "executionMode": "provider"
+          }
+        },
+        {
+          "name": "compose",
+          "stepKey": "rag.compose",
+          "order": 2,
+          "dependsOn": [
+            "candidate"
+          ],
+          "config": {
+            "sourceStep": "candidate",
+            "composer": "unknown-composer"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -20,5 +20,11 @@
         /// If false, cleanup failures are rethrown.
         /// </summary>
         public bool SuppressCleanupExceptions { get; set; } = true;
+
+        /// <summary>
+        /// If true, cleanup persistent snaphashot.
+        /// If false, snapshot will remain in the provider.
+        /// </summary>
+        public bool SuppressSnapshotIfExist{ get; set; } = false;
     }
 }

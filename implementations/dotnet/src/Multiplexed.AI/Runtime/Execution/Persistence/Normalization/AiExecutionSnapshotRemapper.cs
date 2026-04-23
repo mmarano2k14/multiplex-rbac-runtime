@@ -7,7 +7,18 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
 {
     /// <summary>
     /// Rebuilds snapshot values after persistence by remapping CLR-safe values
-    /// back into runtime-friendly JSON representations where needed.
+    /// into runtime-friendly representations.
+    ///
+    /// PURPOSE:
+    /// - Restores complex persisted dictionaries/lists into detached <see cref="JsonElement"/> values
+    ///   when needed by the runtime.
+    /// - Preserves primitive CLR values as-is.
+    ///
+    /// IMPORTANT:
+    /// - The snapshot is remapped in place.
+    /// - This is the reverse operation of <see cref="AiExecutionSnapshotNormalizer"/>,
+    ///   but it intentionally does not try to reconstruct original CLR domain types.
+    /// - Runtime consumers are expected to handle JsonElement/dictionary-based values safely.
     /// </summary>
     public static class AiExecutionSnapshotRemapper
     {
@@ -69,7 +80,8 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         }
 
         /// <summary>
-        /// Remaps a dictionary recursively and returns an empty dictionary when null.
+        /// Remaps a dictionary recursively.
+        /// Returns an empty dictionary when the input is null or empty.
         /// </summary>
         private static Dictionary<string, object?> RemapDictionary(Dictionary<string, object?>? value)
         {
@@ -89,9 +101,13 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         }
 
         /// <summary>
-        /// Recursively remaps CLR-safe persistence values back into runtime-friendly values.
-        /// Dictionaries and lists are converted to JsonElement.
-        /// Primitive values are left unchanged.
+        /// Recursively remaps persistence-safe values into runtime-friendly values.
+        ///
+        /// RULES:
+        /// - JsonElement values are preserved.
+        /// - Dictionaries are converted to detached JsonElement objects.
+        /// - Enumerables are converted to detached JsonElement arrays.
+        /// - Primitive CLR values are preserved as-is.
         /// </summary>
         private static object? RemapObject(object? value)
         {
@@ -107,7 +123,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
 
             if (value is Dictionary<string, object?> dictionary)
             {
-                return ToJsonElement(dictionary);
+                return ToJsonElement(RemappedDictionaryValue(dictionary));
             }
 
             if (value is IEnumerable<object?> enumerable && value is not string)
@@ -138,6 +154,22 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
         }
 
         /// <summary>
+        /// Recursively rebuilds a dictionary before it is converted to JsonElement.
+        /// </summary>
+        private static Dictionary<string, object?> RemappedDictionaryValue(
+            Dictionary<string, object?> dictionary)
+        {
+            var rebuilt = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
+
+            foreach (var pair in dictionary)
+            {
+                rebuilt[pair.Key] = RemappedCollectionItem(pair.Value);
+            }
+
+            return rebuilt;
+        }
+
+        /// <summary>
         /// Recursively prepares nested values before JsonElement reconstruction.
         /// </summary>
         private static object? RemappedCollectionItem(object? value)
@@ -154,14 +186,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
 
             if (value is Dictionary<string, object?> dictionary)
             {
-                var rebuilt = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
-
-                foreach (var pair in dictionary)
-                {
-                    rebuilt[pair.Key] = RemappedCollectionItem(pair.Value);
-                }
-
-                return rebuilt;
+                return RemappedDictionaryValue(dictionary);
             }
 
             if (value is IEnumerable<object?> enumerable && value is not string)

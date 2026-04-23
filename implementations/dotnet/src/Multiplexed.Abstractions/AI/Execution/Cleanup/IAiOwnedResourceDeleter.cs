@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution
+﻿namespace Multiplexed.Abstractions.AI.Execution.Cleanup
 {
     public interface IAiOwnedResourceLocator
     {

@@ -1,5 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 
@@ -29,6 +29,7 @@ namespace Multiplexed.AI.DI.Cleanup
             services.AddScoped<IAiExecutionCleanupService, AiExecutionCleanupService>();
             services.AddScoped<IAiDagDistributedStateCleanup, AiDagDistributedStateCleanup>();
             services.AddScoped<IAiOwnedRbacCleanupService, AiOwnedRbacCleanupService>();
+            services.AddScoped<IAiExecutionSnapshotCleanupService, AiExecutionSnapshotCleanupService>();
 
             return services;
         }
