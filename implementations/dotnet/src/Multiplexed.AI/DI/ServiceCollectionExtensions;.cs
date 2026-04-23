@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -20,6 +21,7 @@ using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
+using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -80,6 +82,12 @@ namespace Multiplexed.AI.DI
             services.AddSingleton<IOptions<AiEngineOptions>>(Options.Create(options));
             services.AddSingleton<IOptions<AiExecutionCleanupOptions>>(
                 Options.Create(options.Cleanup ?? new AiExecutionCleanupOptions()));
+
+            // ------------------------------------------------------------
+            // Memory payload : policies and resolvers
+            // ------------------------------------------------------------
+            services.TryAddSingleton<IAiExecutionDataPolicy, InlineAiExecutionDataPolicy>();
+            services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
 
             // ------------------------------------------------------------
             // Retry / step execution infrastructure
