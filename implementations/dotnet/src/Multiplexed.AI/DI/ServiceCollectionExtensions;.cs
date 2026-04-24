@@ -86,7 +86,8 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Memory payload : policies and resolvers
             // ------------------------------------------------------------
-            services.TryAddSingleton<IAiExecutionDataPolicy, InlineAiExecutionDataPolicy>();
+            services.AddSingleton<IAiPayloadStore, InMemoryAiPayloadStore>();
+            services.AddSingleton<IAiExecutionDataPolicy, SmartInlineAiExecutionDataPolicy>();
             services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
 
             // ------------------------------------------------------------
