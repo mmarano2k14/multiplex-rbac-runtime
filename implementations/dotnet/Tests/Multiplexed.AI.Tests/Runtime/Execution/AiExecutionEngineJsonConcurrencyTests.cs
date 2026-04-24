@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.Cleanup;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Fakes;
@@ -77,6 +78,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddOptions();
 
                 services.AddMultiplexAI(configuration);
+                services.AddAiExecutionCleanup();
 
                 services.AddSingleton<Multiplexed.AI.Stores.IAiExecutionStore, FakeInMemoryExecutionStore>();
                 services.AddSingleton<IContextStore, FakeInMemoryContextStore>();
@@ -221,7 +223,9 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
                 services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
                 services.AddSingleton<Multiplexed.AI.Runtime.Logging.IAiRuntimeLogger, NoopLogger>();
-                
+
+                services.AddAiExecutionCleanup();
+
 
                 var provider = services.BuildServiceProvider();
 

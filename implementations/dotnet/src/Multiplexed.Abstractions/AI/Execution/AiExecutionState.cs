@@ -1,8 +1,11 @@
-﻿using Multiplexed.Abstractions.AI.Pipeline;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Multiplexed.Abstractions.AI.Execution
 {
@@ -21,6 +24,12 @@ namespace Multiplexed.Abstractions.AI.Execution
     ///   for step-scoped execution and DAG orchestration
     /// - <see cref="Metadata"/> stores technical/runtime hints and diagnostics,
     ///   not business-critical pipeline payload
+    ///
+    /// PAYLOAD EVOLUTION:
+    /// - <see cref="DataPayloads"/> and <see cref="MetadataPayloads"/> introduce
+    ///   payload-backed storage without removing the legacy inline bags
+    /// - Payload-backed values are additive and intended for progressive ledger compaction
+    /// - Existing callers using <see cref="Data"/> and <see cref="Metadata"/> remain supported
     ///
     /// IMPORTANT:
     /// - This object is intended to be safely persisted and restored
@@ -53,8 +62,28 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// IMPORTANT:
         /// - Keys should remain stable across steps
         /// - Newer step-aware flows should prefer <see cref="Steps"/> when possible
+        /// - Large or unbounded payloads should progressively move to <see cref="DataPayloads"/>
         /// </summary>
         public Dictionary<string, object?> Data { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets or sets the optional payload-backed representation of shared execution data.
+        ///
+        /// PURPOSE:
+        /// - Enables large or unbounded execution data to be represented by compact payload references
+        /// - Supports future ledger compaction without removing the legacy <see cref="Data"/> bag
+        ///
+        /// COMPATIBILITY:
+        /// - Existing callers may continue using <see cref="Get{T}"/>, <see cref="Set{T}"/>,
+        ///   <see cref="TryGet{T}"/>, and <see cref="Data"/>
+        /// - Payload-aware callers should use <see cref="GetDataAsync{T}"/> or
+        ///   <see cref="GetData{T}"/>
+        ///
+        /// PRECEDENCE:
+        /// - When a key exists in both <see cref="DataPayloads"/> and <see cref="Data"/>,
+        ///   the payload-backed value takes priority in payload-aware accessors
+        /// </summary>
+        public Dictionary<string, AiStoredPayload>? DataPayloads { get; set; }
 
         /// <summary>
         /// Gets or sets the durable per-step runtime state.
@@ -73,6 +102,23 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - It should not contain business-critical pipeline payload
         /// </summary>
         public Dictionary<string, object?> Metadata { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets or sets the optional payload-backed representation of execution metadata.
+        ///
+        /// PURPOSE:
+        /// - Enables large diagnostic or runtime metadata values to be externalized
+        /// - Keeps <see cref="Metadata"/> fully compatible during migration
+        ///
+        /// COMPATIBILITY:
+        /// - Existing metadata accessors remain unchanged
+        /// - Payload-aware metadata access should use <see cref="GetMetadataAsync{T}"/>
+        ///   or <see cref="GetMetadata{T}(string, IAiExecutionPayloadResolver)"/>
+        ///
+        /// PRECEDENCE:
+        /// - Payload-backed metadata values take priority in payload-aware accessors
+        /// </summary>
+        public Dictionary<string, AiStoredPayload>? MetadataPayloads { get; set; }
 
         /// <summary>
         /// Gets or sets the UTC timestamp indicating when the execution state was created.
@@ -142,6 +188,125 @@ namespace Multiplexed.Abstractions.AI.Execution
         public void Remove(string key)
         {
             if (Data.Remove(key))
+                UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        // ------------------------------------------------------------------
+        // PAYLOAD-AWARE DATA ACCESS API
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Retrieves a strongly-typed value from payload-backed execution data when available,
+        /// otherwise falls back to the legacy shared execution data bag.
+        ///
+        /// BEHAVIOR:
+        /// - Payload-backed data takes priority over inline <see cref="Data"/>
+        /// - Inline <see cref="Data"/> remains the fallback for compatibility
+        /// - The method does not mutate execution state
+        /// </summary>
+        public async Task<T?> GetDataAsync<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (DataPayloads != null &&
+                DataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = await resolver.ResolveAsync(payload, cancellationToken);
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return Get<T>(key);
+        }
+
+        /// <summary>
+        /// Synchronous compatibility helper for retrieving payload-backed execution data
+        /// when available, otherwise falling back to the legacy shared execution data bag.
+        ///
+        /// Prefer <see cref="GetDataAsync{T}"/> in async runtime paths.
+        /// </summary>
+        public T? GetData<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (DataPayloads != null &&
+                DataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = resolver.ResolveAsync(payload)
+                    .GetAwaiter()
+                    .GetResult();
+
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return Get<T>(key);
+        }
+
+        /// <summary>
+        /// Attempts to retrieve a strongly-typed value from payload-backed execution data
+        /// when available, otherwise falling back to the legacy shared execution data bag.
+        ///
+        /// Returns <c>false</c> when the key does not exist or conversion/resolution fails.
+        /// </summary>
+        public async Task<(bool Success, T? Value)> TryGetDataAsync<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            try
+            {
+                var value = await GetDataAsync<T>(key, resolver, cancellationToken);
+                var exists =
+                    (DataPayloads != null && DataPayloads.ContainsKey(key)) ||
+                    Data.ContainsKey(key);
+
+                return (exists, value);
+            }
+            catch
+            {
+                return (false, default);
+            }
+        }
+
+        /// <summary>
+        /// Stores or replaces a payload-backed execution data entry.
+        ///
+        /// IMPORTANT:
+        /// - This method does not remove the legacy inline <see cref="Data"/> entry
+        /// - This preserves compatibility during progressive migration
+        /// - Payload-aware accessors will prefer this payload entry when present
+        /// </summary>
+        public void SetDataPayload(string key, AiStoredPayload payload)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(payload);
+
+            DataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
+            DataPayloads[key] = payload;
+            UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Removes a payload-backed execution data entry if it exists.
+        ///
+        /// IMPORTANT:
+        /// - This does not remove the legacy inline <see cref="Data"/> entry
+        /// - Use <see cref="Remove"/> to remove inline data
+        /// </summary>
+        public void RemoveDataPayload(string key)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (DataPayloads != null && DataPayloads.Remove(key))
                 UpdatedAtUtc = DateTime.UtcNow;
         }
 
@@ -371,6 +536,95 @@ namespace Multiplexed.Abstractions.AI.Execution
                 UpdatedAtUtc = DateTime.UtcNow;
         }
 
+        // ------------------------------------------------------------------
+        // PAYLOAD-AWARE METADATA ACCESS API
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Retrieves metadata using payload resolution when available,
+        /// otherwise falls back to the inline metadata bag.
+        ///
+        /// BEHAVIOR:
+        /// - Payload-backed metadata takes priority over inline <see cref="Metadata"/>
+        /// - Inline metadata remains the fallback for compatibility
+        /// - The method does not mutate execution state
+        /// </summary>
+        public async Task<T?> GetMetadataAsync<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (MetadataPayloads != null &&
+                MetadataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = await resolver.ResolveAsync(payload, cancellationToken);
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return GetMetadata<T>(key);
+        }
+
+        /// <summary>
+        /// Synchronous compatibility helper for retrieving payload-backed metadata
+        /// when available, otherwise falling back to the inline metadata bag.
+        ///
+        /// Prefer <see cref="GetMetadataAsync{T}"/> in async runtime paths.
+        /// </summary>
+        public T? GetMetadata<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (MetadataPayloads != null &&
+                MetadataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = resolver.ResolveAsync(payload)
+                    .GetAwaiter()
+                    .GetResult();
+
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return GetMetadata<T>(key);
+        }
+
+        /// <summary>
+        /// Stores or replaces a payload-backed metadata entry.
+        ///
+        /// IMPORTANT:
+        /// - This method does not remove the legacy inline <see cref="Metadata"/> entry
+        /// - This preserves compatibility during progressive migration
+        /// </summary>
+        public void SetMetadataPayload(string key, AiStoredPayload payload)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(payload);
+
+            MetadataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
+            MetadataPayloads[key] = payload;
+            UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Removes a payload-backed metadata entry if it exists.
+        ///
+        /// IMPORTANT:
+        /// - This does not remove the legacy inline <see cref="Metadata"/> entry
+        /// - Use <see cref="RemoveMetadata"/> to remove inline metadata
+        /// </summary>
+        public void RemoveMetadataPayload(string key)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+            if (MetadataPayloads != null && MetadataPayloads.Remove(key))
+                UpdatedAtUtc = DateTime.UtcNow;
+        }
+
         /// <summary>
         /// Sets or replaces the execution result for the specified step.
         ///
@@ -499,6 +753,34 @@ namespace Multiplexed.Abstractions.AI.Execution
                     $"{scope} key '{key}' contains JSON value '{jsonElement.ValueKind}' but could not be converted to '{typeof(T).Name}'.",
                     ex);
             }
+        }
+
+        /// <summary>
+        /// Converts a materialized payload value into the requested type.
+        ///
+        /// Supports:
+        /// - direct typed runtime values
+        /// - null values
+        /// - JSON-backed values restored as <see cref="JsonElement"/>
+        /// - simple convertible primitives
+        ///
+        /// IMPORTANT:
+        /// - This helper is used by payload-aware accessors only
+        /// - Existing legacy accessors continue to use <see cref="GetValue{T}"/>
+        ///   and <see cref="TryGetValue{T}"/>
+        /// </summary>
+        private static T? ConvertValue<T>(object? rawValue)
+        {
+            if (rawValue is null)
+                return default;
+
+            if (rawValue is T typed)
+                return typed;
+
+            if (rawValue is JsonElement jsonElement)
+                return ConvertJsonElement<T>("payload", jsonElement, "ExecutionPayload");
+
+            return (T?)Convert.ChangeType(rawValue, typeof(T));
         }
     }
 }

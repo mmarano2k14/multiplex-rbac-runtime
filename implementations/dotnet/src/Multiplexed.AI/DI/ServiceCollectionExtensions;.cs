@@ -144,9 +144,10 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             services.AddScoped<IAiExecutionCleanupService, AiExecutionCleanupService>();
             services.AddScoped<IAiDagDistributedStateCleanup, AiDagDistributedStateCleanup>();
-
-            // NOTE:
-            // Replace this with your real RBAC cleanup implementation if already available.
+            services.TryAddSingleton<IAiOwnedResourceLocator, NoopAiOwnedResourceLocator>();
+            services.TryAddSingleton<IAiOwnedResourceDeleter, NoopAiOwnedResourceDeleter>();
+            services.AddScoped<IAiOwnedRbacCleanupService, AiOwnedRbacCleanupService>();
+            services.AddScoped<IAiExecutionSnapshotCleanupService, AiExecutionSnapshotCleanupService>();
             services.AddScoped<IAiOwnedRbacCleanupService, NoOpAiOwnedRbacCleanupService>();
 
             // ------------------------------------------------------------

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.DI.Cleanup;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
@@ -76,6 +77,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
 
                 services.AddLogging();
                 services.AddOptions();
+                services.AddAiExecutionCleanup();
 
                 services.AddMultiplexAI(configuration);
 

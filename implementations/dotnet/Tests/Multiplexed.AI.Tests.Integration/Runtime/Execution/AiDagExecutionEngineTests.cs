@@ -13,6 +13,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -145,7 +146,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var dataPolicy = new InlineAiExecutionDataPolicy();
+
+            var stepExecutor = new AiStepExecutor(classifier, logger, dataPolicy);
 
             var services = new ServiceCollection();
 

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -25,6 +26,11 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     /// - It does not own distributed retry coordination
     /// - Durable DAG retry state remains owned by <see cref="AiStepState"/> and the execution store
     ///
+    /// PAYLOAD EVOLUTION:
+    /// - Step results may now receive a payload representation through <see cref="IAiExecutionDataPolicy"/>
+    /// - This is intentionally additive and does not remove or mutate the legacy inline value
+    /// - The goal is to prepare ledger compaction without breaking existing callers, tests, replay, or bindings
+    ///
     /// SEMANTICS:
     /// - <see cref="AiStepExecutionMetadata.AttemptCount"/> counts local in-process attempts
     /// - It is NOT equivalent to distributed <see cref="AiStepState.RetryCount"/>
@@ -34,6 +40,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     {
         private readonly IAiRetryExceptionClassifier _exceptionClassifier;
         private readonly IAiRuntimeLogger _logger;
+        private readonly IAiExecutionDataPolicy _dataPolicy;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
@@ -44,15 +51,22 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// <param name="logger">
         /// Runtime logger used to emit structured step execution events.
         /// </param>
+        /// <param name="dataPolicy">
+        /// Policy used to create a stored payload representation for step result values.
+        /// This is a non-breaking bridge toward artifact-backed execution payloads.
+        /// </param>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
-            IAiRuntimeLogger logger)
+            IAiRuntimeLogger logger,
+            IAiExecutionDataPolicy dataPolicy)
         {
             ArgumentNullException.ThrowIfNull(exceptionClassifier);
             ArgumentNullException.ThrowIfNull(logger);
+            ArgumentNullException.ThrowIfNull(dataPolicy);
 
             _exceptionClassifier = exceptionClassifier;
             _logger = logger;
+            _dataPolicy = dataPolicy;
         }
 
         /// <summary>
@@ -63,6 +77,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// - Load or create local step execution metadata
         /// - Skip execution if local metadata already marks the step as completed
         /// - Execute the step
+        /// - Attach payload representation to successful or failed results when applicable
         /// - Retry locally when policy allows and the exception is retryable
         /// - Return the final <see cref="AiStepResult"/> or rethrow the terminal exception
         ///
@@ -70,6 +85,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// - This method performs only local retry within the current process
         /// - It does not schedule durable DAG retry windows
         /// - It does not mutate distributed retry counters in <see cref="AiStepState"/>
+        /// - Payload attachment is additive and does not remove the inline result value
         /// </summary>
         public async Task<AiStepResult> ExecuteAsync(
             ResolvedAiPipelineStep resolvedStep,
@@ -128,6 +144,8 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                         context,
                         cancellationToken);
 
+                    await AttachPayloadAsync(result, cancellationToken);
+
                     if (!result.Success)
                     {
                         metadata.Status = AiStepExecutionStatus.Failed;
@@ -183,6 +201,37 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Attaches a stored payload representation to the step result when a primary
+        /// value exists and no payload has already been assigned.
+        ///
+        /// PURPOSE:
+        /// - Introduces payload indirection at the central step execution boundary
+        /// - Allows future storage policies to keep small values inline and move large
+        ///   values to artifact-backed storage
+        ///
+        /// COMPATIBILITY:
+        /// - This method does not clear or mutate <see cref="AiStepResult.Value"/>
+        /// - Existing bindings, tests, replay, and serializers continue to see the same inline value
+        /// - Payload-aware callers may start reading <see cref="AiStepResult.Payload"/>
+        /// </summary>
+        private async Task AttachPayloadAsync(
+            AiStepResult result,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+
+            if (result.Value is null)
+                return;
+
+            if (result.Payload != null)
+                return;
+
+            result.Payload = await _dataPolicy.StoreAsync(
+                result.Value,
+                cancellationToken);
         }
 
         /// <summary>

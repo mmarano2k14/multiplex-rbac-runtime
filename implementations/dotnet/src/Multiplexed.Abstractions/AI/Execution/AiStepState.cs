@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Steps;
 
 namespace Multiplexed.Abstractions.AI.Execution
@@ -21,6 +22,11 @@ namespace Multiplexed.Abstractions.AI.Execution
     /// - State transitions remain deterministic and monotonic
     /// - Computed helper properties are excluded from persistence where appropriate
     /// - Distributed ownership is modeled through explicit claim metadata and lease expiration
+    ///
+    /// PAYLOAD EVOLUTION:
+    /// - <see cref="InputPayloads"/> and <see cref="ConfigPayloads"/> are additive only
+    /// - Existing <see cref="Inputs"/> and <see cref="Config"/> remain fully supported
+    /// - Payload-aware accessors prefer payload-backed values when present
     ///
     /// INVARIANT MODEL:
     /// - A step in <see cref="AiStepExecutionStatus.Running"/> must represent a claimed in-flight execution
@@ -240,9 +246,41 @@ namespace Multiplexed.Abstractions.AI.Execution
         public Dictionary<string, object?> Inputs { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
+        /// Gets or sets the optional payload-backed representation of resolved runtime inputs.
+        ///
+        /// PURPOSE:
+        /// - Enables large input values to be represented by compact payload references
+        /// - Supports future ledger compaction without removing inline <see cref="Inputs"/>
+        ///
+        /// COMPATIBILITY:
+        /// - Existing callers may continue using <see cref="Inputs"/>
+        /// - Payload-aware callers should use <see cref="GetInputAsync"/> or <see cref="GetInput"/>
+        ///
+        /// PRECEDENCE:
+        /// - Payload-backed input values take priority in payload-aware accessors
+        /// </summary>
+        public Dictionary<string, AiStoredPayload>? InputPayloads { get; set; }
+
+        /// <summary>
         /// Gets the resolved static configuration values for this step instance.
         /// </summary>
         public Dictionary<string, object?> Config { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets or sets the optional payload-backed representation of resolved static configuration values.
+        ///
+        /// PURPOSE:
+        /// - Enables large configuration values to be represented by compact payload references
+        /// - Supports future ledger compaction without removing inline <see cref="Config"/>
+        ///
+        /// COMPATIBILITY:
+        /// - Existing callers may continue using <see cref="Config"/>
+        /// - Payload-aware callers should use <see cref="GetConfigAsync"/> or <see cref="GetConfig"/>
+        ///
+        /// PRECEDENCE:
+        /// - Payload-backed configuration values take priority in payload-aware accessors
+        /// </summary>
+        public Dictionary<string, AiStoredPayload>? ConfigPayloads { get; set; }
 
         // ---------------------------------------------------------------------
         // RESULT
@@ -289,21 +327,125 @@ namespace Multiplexed.Abstractions.AI.Execution
         }
 
         // ---------------------------------------------------------------------
+        // PAYLOAD-AWARE INPUT / CONFIG ACCESS
+        // ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Retrieves an input value using payload resolution when available.
+        ///
+        /// BEHAVIOR:
+        /// - If a payload exists for the requested key, it is resolved through the provided resolver
+        /// - Otherwise, the method falls back to the inline <see cref="Inputs"/> dictionary
+        ///
+        /// IMPORTANT:
+        /// - This method does not mutate state
+        /// - Payload-backed inputs take priority over inline inputs
+        /// - Existing callers using <see cref="Inputs"/> remain fully supported
+        /// </summary>
+        public async Task<object?> GetInputAsync(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (InputPayloads != null &&
+                InputPayloads.TryGetValue(key, out var payload))
+            {
+                return await resolver.ResolveAsync(payload, cancellationToken);
+            }
+
+            Inputs.TryGetValue(key, out var value);
+            return value;
+        }
+
+        /// <summary>
+        /// Synchronous compatibility helper for retrieving an input value using payload
+        /// resolution when available.
+        ///
+        /// Prefer <see cref="GetInputAsync"/> in async runtime paths.
+        /// </summary>
+        public object? GetInput(
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (InputPayloads != null &&
+                InputPayloads.TryGetValue(key, out var payload))
+            {
+                return resolver.ResolveAsync(payload)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            Inputs.TryGetValue(key, out var value);
+            return value;
+        }
+
+        /// <summary>
+        /// Retrieves a configuration value using payload resolution when available.
+        ///
+        /// BEHAVIOR:
+        /// - If a payload exists for the requested key, it is resolved through the provided resolver
+        /// - Otherwise, the method falls back to the inline <see cref="Config"/> dictionary
+        ///
+        /// IMPORTANT:
+        /// - This method does not mutate state
+        /// - Payload-backed configuration values take priority over inline configuration values
+        /// - Existing callers using <see cref="Config"/> remain fully supported
+        /// </summary>
+        public async Task<object?> GetConfigAsync(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (ConfigPayloads != null &&
+                ConfigPayloads.TryGetValue(key, out var payload))
+            {
+                return await resolver.ResolveAsync(payload, cancellationToken);
+            }
+
+            Config.TryGetValue(key, out var value);
+            return value;
+        }
+
+        /// <summary>
+        /// Synchronous compatibility helper for retrieving a configuration value using
+        /// payload resolution when available.
+        ///
+        /// Prefer <see cref="GetConfigAsync"/> in async runtime paths.
+        /// </summary>
+        public object? GetConfig(
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (ConfigPayloads != null &&
+                ConfigPayloads.TryGetValue(key, out var payload))
+            {
+                return resolver.ResolveAsync(payload)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            Config.TryGetValue(key, out var value);
+            return value;
+        }
+
+        // ---------------------------------------------------------------------
         // STATE TRANSITIONS
         // ---------------------------------------------------------------------
 
         /// <summary>
         /// Marks the step as ready for execution.
-        ///
-        /// SAFE TRANSITION FROM:
-        /// - None
-        /// - WaitingForRetry (when retry window is open)
-        /// - Running (only through timeout recovery or controlled reset)
-        ///
-        /// GUARANTEES:
-        /// - Clears all distributed claim metadata
-        /// - Does not modify retry counters
-        /// - Clears terminal timestamps and persisted final duration
         /// </summary>
         public void MarkReady()
         {
@@ -323,18 +465,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Marks the step as running after a successful distributed claim.
-        ///
-        /// INVARIANTS:
-        /// - Step must not already be Running
-        /// - Step must not already be terminal (Completed / Failed)
-        /// - Claim must originate from a schedulable state
-        ///
-        /// LEASE SEMANTICS:
-        /// - Claim ownership starts immediately
-        /// - Lease expiration is computed once and persisted on the step state
-        /// - Recovery logic must use <see cref="LeaseExpiresAtUtc"/> as the authoritative boundary
-        ///
-        /// VIOLATION OF THESE RULES INDICATES A DISTRIBUTION OR STATE MACHINE BUG.
         /// </summary>
         public void MarkRunning(string workerId, string claimToken)
         {
@@ -363,21 +493,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Marks the step as completed successfully.
-        ///
-        /// INVARIANTS:
-        /// - The step must currently be Running
-        /// - Completion must come from the worker owning the active claim
-        ///   (ownership is validated by the store in distributed mode)
-        ///
-        /// NOTE:
-        /// - This is a STEP-level terminal transition
-        /// - GLOBAL execution completion is handled separately via convergence + finalization
-        ///
-        /// GUARANTEES:
-        /// - Stores the final result
-        /// - Clears retry timing
-        /// - Clears claim ownership
-        /// - Computes and persists final duration when possible
         /// </summary>
         public void MarkCompleted(AiStepResult result)
         {
@@ -411,16 +526,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Marks the step as terminally failed.
-        ///
-        /// INVARIANTS:
-        /// - The step must currently be Running or WaitingForRetry
-        /// - This should only be used when retry budget is exhausted
-        ///   or the failure is considered non-retriable
-        ///
-        /// GUARANTEES:
-        /// - Persists the terminal timestamp
-        /// - Persists the final duration
-        /// - Clears claim ownership
         /// </summary>
         public void MarkFailed(string? error)
         {
@@ -452,16 +557,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Marks the step as waiting for a future retry attempt.
-        ///
-        /// INVARIANTS:
-        /// - The step must currently be Running
-        /// - RetryCount must not exceed MaxRetries
-        ///
-        /// IMPORTANT:
-        /// - This is a non-terminal retry state
-        /// - This method does not increment RetryCount
-        /// - While in this state, the step must not be claimed until <see cref="NextRetryAtUtc"/>
-        ///   is reached or passed
         /// </summary>
         public void MarkWaitingForRetry(string? error, DateTime nextRetryAtUtc)
         {
@@ -492,16 +587,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Requeues a timed-out running step back to Ready.
-        ///
-        /// INVARIANTS:
-        /// - The step must currently be Running
-        ///
-        /// IMPORTANT:
-        /// - This is an infrastructure recovery transition
-        /// - This is NOT a business retry decision
-        /// - <see cref="RecoveryCount"/> is incremented
-        /// - <see cref="RetryCount"/> is not modified
-        /// - The current claim lease is fully cleared
         /// </summary>
         public void MarkRequeuedAfterTimeout()
         {
@@ -525,9 +610,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Promotes a retry-waiting step back to Ready when its retry window has opened.
-        ///
-        /// If the step is not in <see cref="AiStepExecutionStatus.WaitingForRetry"/>,
-        /// or if the retry time has not yet been reached, this method does nothing.
         /// </summary>
         public void PromoteRetryToReadyIfDue(DateTime utcNow)
         {
@@ -548,21 +630,6 @@ namespace Multiplexed.Abstractions.AI.Execution
 
         /// <summary>
         /// Applies retry-or-fail semantics for a failed step execution attempt.
-        ///
-        /// INVARIANTS:
-        /// - The step must currently be Running
-        /// - RetryCount must never exceed MaxRetries
-        ///
-        /// SEMANTICS:
-        /// - <see cref="RetryCount"/> tracks scheduled business retries only
-        /// - The initial execution attempt is not counted in <see cref="RetryCount"/>
-        /// - If <see cref="RetryCount"/> is still lower than <see cref="MaxRetries"/>,
-        ///   the step transitions to <see cref="AiStepExecutionStatus.WaitingForRetry"/>
-        /// - Otherwise the step becomes terminally <see cref="AiStepExecutionStatus.Failed"/>
-        ///
-        /// GUARANTEES:
-        /// - RetryCount increments only on business retry
-        /// - RecoveryCount is never modified here
         /// </summary>
         public void MarkRetryOrFail(string? error, DateTime utcNow)
         {
@@ -604,74 +671,28 @@ namespace Multiplexed.Abstractions.AI.Execution
         // COMPUTED HELPERS
         // ---------------------------------------------------------------------
 
-        /// <summary>
-        /// Gets a value indicating whether the step has completed successfully.
-        ///
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsCompleted => Status == AiStepExecutionStatus.Completed;
 
-        /// <summary>
-        /// Gets a value indicating whether the step is currently running.
-        ///
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsRunning => Status == AiStepExecutionStatus.Running;
 
-        /// <summary>
-        /// Gets a value indicating whether the step is terminally failed.
-        ///
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsFailed => Status == AiStepExecutionStatus.Failed;
 
-        /// <summary>
-        /// Gets a value indicating whether the step is currently waiting for retry eligibility.
-        ///
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsWaitingForRetry => Status == AiStepExecutionStatus.WaitingForRetry;
 
-        /// <summary>
-        /// Gets a value indicating whether the step is terminal.
-        ///
-        /// A step is terminal when it is either Completed or Failed.
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsTerminal =>
             Status == AiStepExecutionStatus.Completed ||
             Status == AiStepExecutionStatus.Failed;
 
-        /// <summary>
-        /// Gets a value indicating whether the step is locally schedulable.
-        ///
-        /// NOTE:
-        /// - This helper does not validate dependency satisfaction
-        /// - The selector must still validate DAG prerequisites separately
-        ///
-        /// This is a computed property and is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public bool IsSchedulable =>
             Status == AiStepExecutionStatus.Ready ||
             Status == AiStepExecutionStatus.None;
 
-        /// <summary>
-        /// Gets the live elapsed duration of the step.
-        ///
-        /// SEMANTICS:
-        /// - Null if the step has never started
-        /// - For running steps, returns the live elapsed time from <see cref="StartedAtUtc"/> to now
-        /// - For terminal steps, returns the persisted <see cref="Duration"/> when available
-        ///
-        /// This helper is intended for logs, diagnostics, metrics, and live observability.
-        /// It is intentionally excluded from persisted JSON.
-        /// </summary>
         [JsonIgnore]
         public TimeSpan? ElapsedDuration
         {
@@ -690,14 +711,6 @@ namespace Multiplexed.Abstractions.AI.Execution
             }
         }
 
-        /// <summary>
-        /// Determines whether the current running lease is expired at the supplied UTC time.
-        ///
-        /// IMPORTANT:
-        /// - This helper only returns true for running steps
-        /// - A missing lease expiration is treated as non-expired
-        /// - Recovery logic can use this helper to decide whether reclaim is legal
-        /// </summary>
         public bool IsLeaseExpired(DateTime utcNow)
         {
             if (Status != AiStepExecutionStatus.Running)
@@ -709,15 +722,6 @@ namespace Multiplexed.Abstractions.AI.Execution
             return LeaseExpiresAtUtc.Value <= utcNow;
         }
 
-        /// <summary>
-        /// Determines whether the step currently has an active and valid running lease.
-        ///
-        /// IMPORTANT:
-        /// - This helper only returns true for running steps
-        /// - A missing lease expiration is treated as not valid
-        /// - Convergence and recovery logic can use this helper to distinguish
-        ///   between active work and reclaimable stale work
-        /// </summary>
         public bool HasValidLease(DateTime utcNow)
         {
             if (Status != AiStepExecutionStatus.Running)

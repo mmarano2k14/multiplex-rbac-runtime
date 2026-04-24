@@ -1,8 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.DI;
+using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Fakes;
@@ -52,6 +55,15 @@ namespace Multiplexed.AI.Tests.Runtime.DI
             services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
             services.AddSingleton<IAiRuntimeLogger, NoopLogger>();
             services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
+
+
+
+            services.AddScoped<IAiExecutionCleanupService, AiExecutionCleanupService>();
+            services.AddScoped<IAiDagDistributedStateCleanup, AiDagDistributedStateCleanup>();
+            services.TryAddSingleton<IAiOwnedResourceLocator, NoopAiOwnedResourceLocator>();
+            services.TryAddSingleton<IAiOwnedResourceDeleter, NoopAiOwnedResourceDeleter>();
+            services.AddScoped<IAiOwnedRbacCleanupService, AiOwnedRbacCleanupService>();
+            services.AddScoped<IAiExecutionSnapshotCleanupService, AiExecutionSnapshotCleanupService>();
 
             var provider = services.BuildServiceProvider();
 

@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Xunit;
@@ -31,7 +32,9 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             IAiRetryExceptionClassifier classifier = new DefaultAiRetryExceptionClassifier();
             IAiRuntimeLogger logger = new NoopLogger();
 
-            var executor = new AiStepExecutor(classifier, logger);
+            var dataPolicy = new InlineAiExecutionDataPolicy();
+
+            var executor = new AiStepExecutor(classifier, logger, dataPolicy);
 
             var record = new AiExecutionRecord();
 
