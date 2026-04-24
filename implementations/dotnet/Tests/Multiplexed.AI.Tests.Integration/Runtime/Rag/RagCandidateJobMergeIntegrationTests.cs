@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Rag.Models;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
@@ -29,6 +31,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
     /// - Prove that the runtime is not candidate-centric.
     /// - Prove that multiple business operations can feed the standard merge step.
     /// - Prove that rag.compose can consume a merged multi-entity batch.
+    ///
+    /// IMPORTANT:
+    /// - Step results may be payload-compacted by the DAG engine.
+    /// - Large values may appear as summaries in Data and as full content in DataPayloads.
+    /// - This test reads values through IAiExecutionPayloadResolver when needed.
     /// </summary>
     public sealed class RagCandidateJobMergeIntegrationTests
     {
@@ -61,6 +68,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 host.ServiceProvider,
                 created.ExecutionId);
 
+            var payloadResolver =
+                host.ServiceProvider.GetRequiredService<IAiExecutionPayloadResolver>();
+
             Assert.NotNull(record);
             Assert.NotNull(state);
             Assert.NotNull(state.Steps);
@@ -75,14 +85,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var candidateStep = state.Steps["candidate"];
             Assert.NotNull(candidateStep.Result);
-            Assert.NotNull(candidateStep.Result!.Data);
 
-            Assert.True(
-                candidateStep.Result.Data.TryGetValue("batch", out var candidateBatchValue),
-                "Expected 'batch' in candidate step result data.");
+            var candidateBatch = await GetResultDataValueAsync<RagRetrievalBatch>(
+                candidateStep.Result!,
+                "batch",
+                payloadResolver);
 
-            var candidateBatch = Assert.IsType<RagRetrievalBatch>(candidateBatchValue);
-            Assert.NotNull(candidateBatch.Items);
+            Assert.NotNull(candidateBatch);
+            Assert.NotNull(candidateBatch!.Items);
             Assert.NotEmpty(candidateBatch.Items);
 
             // ---------------------------------------------------------
@@ -90,14 +100,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var jobStep = state.Steps["job"];
             Assert.NotNull(jobStep.Result);
-            Assert.NotNull(jobStep.Result!.Data);
 
-            Assert.True(
-                jobStep.Result.Data.TryGetValue("batch", out var jobBatchValue),
-                "Expected 'batch' in job step result data.");
+            var jobBatch = await GetResultDataValueAsync<RagRetrievalBatch>(
+                jobStep.Result!,
+                "batch",
+                payloadResolver);
 
-            var jobBatch = Assert.IsType<RagRetrievalBatch>(jobBatchValue);
-            Assert.NotNull(jobBatch.Items);
+            Assert.NotNull(jobBatch);
+            Assert.NotNull(jobBatch!.Items);
             Assert.NotEmpty(jobBatch.Items);
 
             // ---------------------------------------------------------
@@ -105,22 +115,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var mergeStep = state.Steps["merge"];
             Assert.NotNull(mergeStep.Result);
-            Assert.NotNull(mergeStep.Result!.Data);
 
-            Assert.True(
-                mergeStep.Result.Data.TryGetValue("batch", out var mergedBatchValue),
-                "Expected 'batch' in rag.merge result data.");
+            var mergedBatch = await GetResultDataValueAsync<RagRetrievalBatch>(
+                mergeStep.Result!,
+                "batch",
+                payloadResolver);
 
-            Assert.True(
-                mergeStep.Result.Data.TryGetValue("itemCount", out var itemCountValue),
-                "Expected 'itemCount' in rag.merge result data.");
+            var itemCountValue = await GetResultDataValueAsync<object>(
+                mergeStep.Result!,
+                "itemCount",
+                payloadResolver);
 
-            Assert.True(
-                mergeStep.Result.Data.TryGetValue("diagnostics", out var diagnosticsValue),
-                "Expected 'diagnostics' in rag.merge result data.");
+            var diagnosticsValue = await GetResultDataValueAsync<object>(
+                mergeStep.Result!,
+                "diagnostics",
+                payloadResolver);
 
-            var mergedBatch = Assert.IsType<RagRetrievalBatch>(mergedBatchValue);
-            Assert.NotNull(mergedBatch.Items);
+            Assert.NotNull(mergedBatch);
+            Assert.NotNull(mergedBatch!.Items);
             Assert.NotEmpty(mergedBatch.Items);
 
             var itemCount = ExtractInt(itemCountValue, "itemCount");
@@ -133,7 +145,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 Assert.Equal(i, mergedBatch.Items[i].StableOrder);
             }
 
-            // Should contain at least one item from candidate and one from job paths.
             Assert.True(
                 mergedBatch.Items.Count >= 2,
                 "Expected merged batch to contain at least two items coming from candidate and job retrieval.");
@@ -143,25 +154,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var composeStep = state.Steps["compose"];
             Assert.NotNull(composeStep.Result);
-            Assert.NotNull(composeStep.Result!.Data);
 
-            Assert.True(
-                composeStep.Result.Data.TryGetValue("context", out var contextValue),
-                "Expected 'context' in rag.compose result data.");
+            var context = await GetResultDataValueAsync<RagStructuredContext>(
+                composeStep.Result!,
+                "context",
+                payloadResolver);
 
-            Assert.True(
-                composeStep.Result.Data.TryGetValue("fragments", out var fragmentsValue),
-                "Expected 'fragments' in rag.compose result data.");
+            var fragments = await GetResultDataValueAsync<IReadOnlyList<RagContextFragment>>(
+                composeStep.Result!,
+                "fragments",
+                payloadResolver);
 
-            var context = Assert.IsType<RagStructuredContext>(contextValue);
-            var fragments = Assert.IsAssignableFrom<IReadOnlyList<RagContextFragment>>(fragmentsValue);
-
-            Assert.NotNull(context.Text);
+            Assert.NotNull(context);
+            Assert.NotNull(context!.Text);
             Assert.NotNull(context.OrderedTexts);
             Assert.NotEmpty(context.OrderedTexts);
 
             Assert.NotNull(fragments);
-            Assert.NotEmpty(fragments);
+            Assert.NotEmpty(fragments!);
 
             for (var i = 0; i < fragments.Count; i++)
             {
@@ -169,6 +179,75 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             }
 
             Assert.True(record.IsTerminal);
+        }
+
+        private static async Task<T?> GetResultDataValueAsync<T>(
+            AiStepResult result,
+            string key,
+            IAiExecutionPayloadResolver payloadResolver)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(payloadResolver);
+
+            object? raw = null;
+
+            if (result.DataPayloads is not null &&
+                result.DataPayloads.TryGetValue(key, out var payload))
+            {
+                raw = await payloadResolver.ResolveAsync(payload);
+            }
+            else if (result.Data is not null &&
+                     result.Data.TryGetValue(key, out var value))
+            {
+                raw = value;
+            }
+
+            if (raw is null)
+            {
+                return default;
+            }
+
+            return ConvertValue<T>(raw);
+        }
+
+        private static T? ConvertValue<T>(object raw)
+        {
+            if (raw is T typed)
+            {
+                return typed;
+            }
+
+            if (raw is JsonElement json)
+            {
+                if (typeof(T) == typeof(string))
+                {
+                    return (T?)(object?)(
+                        json.ValueKind == JsonValueKind.String
+                            ? json.GetString()
+                            : json.GetRawText());
+                }
+
+                if (typeof(T) == typeof(object))
+                {
+                    return (T?)(object?)json;
+                }
+
+                return json.Deserialize<T>();
+            }
+
+            if (typeof(T) == typeof(string))
+            {
+                return (T?)(object?)raw.ToString();
+            }
+
+            if (typeof(T) == typeof(object))
+            {
+                return (T?)(object?)raw;
+            }
+
+            var serialized = JsonSerializer.Serialize(raw);
+            return JsonSerializer.Deserialize<T>(serialized);
         }
 
         private static async Task<(AiExecutionRecord Record, AiExecutionState State)> LoadDistributedTruthAsync(
@@ -206,6 +285,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 {
                     return parsed;
                 }
+            }
+
+            if (int.TryParse(value?.ToString(), out var parsedValue))
+            {
+                return parsedValue;
             }
 
             throw new InvalidOperationException(

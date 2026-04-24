@@ -23,6 +23,8 @@ using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
+using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
@@ -86,16 +88,44 @@ namespace Multiplexed.AI.DI
                 Options.Create(options.Cleanup ?? new AiExecutionCleanupOptions()));
 
             // ------------------------------------------------------------
-            // Memory payload : policies and resolvers
+            // Payload store : policies and resolvers
             // ------------------------------------------------------------
-            services.AddSingleton<IAiPayloadStore, InMemoryAiPayloadStore>();
+
+            services.Configure<AiPayloadStoreOptions>(opts =>
+            {
+                opts.Enabled = options.PayloadStore.Enabled;
+                opts.Provider = options.PayloadStore.Provider;
+                opts.RequireReplaySafePayloads = options.PayloadStore.RequireReplaySafePayloads;
+                opts.MaxInlineSizeBytes = options.PayloadStore.MaxInlineSizeBytes;
+
+                opts.Mongo = options.PayloadStore.Mongo;
+                opts.RedisCache = options.PayloadStore.RedisCache;
+            });
+
+            // Concrete stores (NE PAS exposer IAiPayloadStore ici)
+            services.TryAddSingleton<InMemoryAiPayloadStore>();
+            services.TryAddSingleton<MongoAiPayloadStore>();
+            services.TryAddSingleton<RedisCachedAiPayloadStore>();
+            services.TryAddSingleton<IAiStepResultPayloadCompactor, DefaultAiStepResultPayloadCompactor>();
+
+            // Resolver (point d’entrée UNIQUE)
+            services.TryAddSingleton<IAiPayloadStoreResolver, DefaultAiPayloadStoreResolver>();
+
+
+            // Payload policy + resolver
+            services.TryAddSingleton<IAiExecutionDataPolicy, SmartInlineAiExecutionDataPolicy>();
+            services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
+
+
+            // ------------------------------------------------------------
+            // Memory system
+            // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiMemoryScoringPolicy, DefaultAiMemoryScoringPolicy>();
             services.TryAddSingleton<IAiMemoryLifecyclePolicy, DefaultAiMemoryLifecyclePolicy>();
-            services.AddSingleton<IAiExecutionDataPolicy, SmartInlineAiExecutionDataPolicy>();
             services.TryAddSingleton<IAiConsolidatedMemoryStore, InMemoryAiConsolidatedMemoryStore>();
             services.TryAddSingleton<IAiMemoryLifecycleEngine, DefaultAiMemoryLifecycleEngine>();
             services.TryAddSingleton<IAiMemoryWriter, DefaultAiMemoryWriter>();
-            services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
 
             // ------------------------------------------------------------
             // Retry / step execution infrastructure

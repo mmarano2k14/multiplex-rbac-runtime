@@ -9,6 +9,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Steps;
 ///
 /// PURPOSE:
 /// - Reads upstream retrieval batches from configured source steps.
+/// - Supports both inline and payload-backed upstream batches.
 /// - Delegates merge behavior to the configured <see cref="IRagBatchMerger"/>.
 /// - Produces a consistent serializable batch for downstream steps.
 ///
@@ -17,7 +18,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Steps;
 ///
 /// CONTRACT:
 /// - Each source step must exist in the execution state.
-/// - Each step must expose a valid <c>result.data.batch</c>.
+/// - Each step must expose a valid <c>result.data.batch</c>, either inline or through DataPayloads.
 ///
 /// OUTPUT:
 /// - data:
@@ -46,7 +47,7 @@ public sealed class RagMergeStep : IAiStep
 
     public string Name => "rag.merge";
 
-    public Task<AiStepResult> ExecuteAsync(
+    public async Task<AiStepResult> ExecuteAsync(
         AiStepExecutionContext context,
         CancellationToken cancellationToken = default)
     {
@@ -60,7 +61,11 @@ public sealed class RagMergeStep : IAiStep
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var batch = RagStepHelper.GetRequiredBatch(context, stepName);
+            var batch = await RagStepHelper.GetRequiredBatchAsync(
+                context,
+                stepName,
+                cancellationToken);
+
             batches.Add(batch);
         }
 
@@ -68,15 +73,14 @@ public sealed class RagMergeStep : IAiStep
 
         ValidateMergedBatch(merged);
 
-        return Task.FromResult(
-            AiStepResult.Ok(
-                output: $"Merged {batches.Count} batch(es) into {merged.Items.Count} item(s).",
-                data: new Dictionary<string, object?>(StringComparer.Ordinal)
-                {
-                    ["batch"] = merged,
-                    ["itemCount"] = merged.Items.Count,
-                    ["diagnostics"] = merged.Diagnostics
-                }));
+        return AiStepResult.Ok(
+            output: $"Merged {batches.Count} batch(es) into {merged.Items.Count} item(s).",
+            data: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["batch"] = merged,
+                ["itemCount"] = merged.Items.Count,
+                ["diagnostics"] = merged.Diagnostics
+            });
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
-﻿using Multiplexed.AI.Runtime.Configuration;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.AI.Runtime.Configuration;
 
 namespace Multiplexed.AI.Configuration
 {
@@ -48,5 +49,10 @@ namespace Multiplexed.AI.Configuration
         /// Gets or sets durable execution snapshot options.
         /// </summary>
         public AiExecutionSnapshotOptions Snapshots { get; set; } = new();
+
+        /// <summary>
+        /// Gets or sets payload-store-related runtime options.
+        /// </summary>
+        public AiPayloadStoreOptions PayloadStore { get; set; } = new();
     }
 }

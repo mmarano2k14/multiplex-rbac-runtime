@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution.Memory;
+﻿using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using System.Linq;
 using System.Text.Json;
@@ -46,6 +46,8 @@ namespace Multiplexed.Abstractions.AI.Execution
             State = state;
             Services = services;
             CancellationToken = cancellationToken;
+
+            Memory = new AiWorkingMemory();
         }
 
         /// <summary>

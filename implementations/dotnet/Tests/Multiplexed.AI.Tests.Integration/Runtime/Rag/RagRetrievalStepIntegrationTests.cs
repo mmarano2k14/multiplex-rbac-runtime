@@ -1,19 +1,19 @@
 ﻿// File: RagRetrievalStepIntegrationTests.cs
 
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Plugins;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Rag.Operations;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.AI.Rag.DI;
-using Multiplexed.AI.Runtime.AI.Rag.Normalization;
-using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -36,28 +36,59 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                     ["query"] = "Hello Plugin"
                 });
 
-            var final = await engine.ExecuteAllAsync(created.ExecutionId);
+            await engine.ExecuteAllAsync(created.ExecutionId);
 
             var state = await host.ServiceProvider
                 .GetRequiredService<IAiDagExecutionStore>()
                 .GetStateAsync(created.ExecutionId);
 
+            var payloadResolver =
+                host.ServiceProvider.GetRequiredService<IAiExecutionPayloadResolver>();
+
             var step = state!.Steps["retrieve"];
 
             Assert.True(step.IsCompleted);
             Assert.NotNull(step.Result);
-            Assert.NotNull(step.Result.Data);
 
-            Assert.True(step.Result.Data.TryGetValue("batch", out var batchValue));
+            var batch = await GetDataAsync<RagRetrievalBatch>(
+                step.Result!,
+                "batch",
+                payloadResolver);
 
-            var batch = Assert.IsType<RagRetrievalBatch>(batchValue);
-
-            Assert.NotNull(batch.Items);
+            Assert.NotNull(batch);
+            Assert.NotNull(batch!.Items);
         }
 
-        // -----------------------------------------------------
-        // HOST SETUP
-        // -----------------------------------------------------
+        private static async Task<T?> GetDataAsync<T>(
+            AiStepResult result,
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            object? raw = null;
+
+            if (result.DataPayloads is not null &&
+                result.DataPayloads.TryGetValue(key, out var payload))
+            {
+                raw = await resolver.ResolveAsync(payload);
+            }
+            else if (result.Data is not null &&
+                     result.Data.TryGetValue(key, out var value))
+            {
+                raw = value;
+            }
+
+            if (raw is null)
+                return default;
+
+            if (raw is T typed)
+                return typed;
+
+            if (raw is JsonElement json)
+                return json.Deserialize<T>();
+
+            return JsonSerializer.Deserialize<T>(
+                JsonSerializer.Serialize(raw));
+        }
 
         private static async Task<AiDagExecutionEngineTestHost> CreateHostAsync()
         {
@@ -75,10 +106,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 });
         }
 
-        // -----------------------------------------------------
-        // TEST OPERATION
-        // -----------------------------------------------------
-
         private sealed class TestOperation : IRagOperation<AiExecutionContext>
         {
             public string Key => "test.operation";
@@ -89,12 +116,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 IPluginExecutionContext<AiExecutionContext> context,
                 CancellationToken cancellationToken)
             {
-                // 🔥 VALIDATION CRITIQUE
                 Assert.NotNull(context.ExecutionContext);
                 Assert.NotNull(context.Inputs);
-
-                // Snapshot peut être null selon ton setup → pas bloquant
-                // Assert.NotNull(context.ExecutionContextSnapshot);
 
                 return Task.FromResult(new RagRetrievalBatch
                 {

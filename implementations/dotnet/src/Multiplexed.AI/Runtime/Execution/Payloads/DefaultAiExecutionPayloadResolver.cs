@@ -7,49 +7,29 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
     /// Default execution payload resolver.
     ///
     /// PURPOSE:
-    /// - Resolves execution payloads without exposing the storage representation to
-    ///   runtime components.
-    /// - Supports both inline payloads and artifact-backed payloads.
+    /// - Resolves inline and artifact-backed payloads.
+    /// - Keeps consumers unaware of the physical payload store.
     ///
     /// DESIGN:
     /// - Inline payloads are returned directly.
-    /// - Artifact-backed payloads are loaded from <see cref="IAiPayloadStore"/>.
-    /// - Artifact content is expected to be serialized JSON.
+    /// - Artifact-backed payloads are loaded through the configured store resolver.
     ///
     /// IMPORTANT:
-    /// - This resolver does not decide where payloads are stored.
-    /// - Storage decisions remain owned by <see cref="IAiExecutionDataPolicy"/>.
-    /// - This resolver only materializes an already stored payload.
+    /// - Missing artifacts are invalid replay/recovery state.
+    /// - Resolver does not decide storage provider; it uses <see cref="IAiPayloadStoreResolver"/>.
     /// </summary>
     public sealed class DefaultAiExecutionPayloadResolver : IAiExecutionPayloadResolver
     {
-        private readonly IAiPayloadStore _payloadStore;
+        private readonly IAiPayloadStoreResolver _storeResolver;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="DefaultAiExecutionPayloadResolver"/> class.
-        /// </summary>
-        /// <param name="payloadStore">
-        /// Store used to resolve artifact-backed execution payloads.
-        /// </param>
-        public DefaultAiExecutionPayloadResolver(IAiPayloadStore payloadStore)
+        public DefaultAiExecutionPayloadResolver(
+            IAiPayloadStoreResolver storeResolver)
         {
-            ArgumentNullException.ThrowIfNull(payloadStore);
+            ArgumentNullException.ThrowIfNull(storeResolver);
 
-            _payloadStore = payloadStore;
+            _storeResolver = storeResolver;
         }
 
-        /// <summary>
-        /// Resolves the stored payload into a materialized runtime value.
-        ///
-        /// BEHAVIOR:
-        /// - Inline payloads return <see cref="AiStoredPayload.InlineValue"/> directly.
-        /// - Artifact-backed payloads are loaded from <see cref="IAiPayloadStore"/>.
-        ///
-        /// IMPORTANT:
-        /// - Missing artifact identifiers are treated as invalid state.
-        /// - Missing artifact content is treated as invalid state because replay or
-        ///   binding may depend on the payload being resolvable.
-        /// </summary>
         public async Task<object?> ResolveAsync(
             AiStoredPayload payload,
             CancellationToken cancellationToken = default)
@@ -67,17 +47,16 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                     "Artifact-backed execution payload does not contain an artifact id.");
             }
 
-            var content = await _payloadStore.LoadAsync(
+            var store = _storeResolver.Resolve();
+
+            var content = await store.LoadAsync(
                 payload.ArtifactId,
                 cancellationToken);
 
-            if (content is null)
-            {
-                throw new InvalidOperationException(
-                    $"Execution payload artifact '{payload.ArtifactId}' could not be resolved.");
-            }
-
-            return JsonSerializer.Deserialize<object>(content);
+            return content is null
+                ? throw new InvalidOperationException(
+                    $"Execution payload artifact '{payload.ArtifactId}' could not be resolved.")
+                : JsonSerializer.Deserialize<object>(content);
         }
     }
 }

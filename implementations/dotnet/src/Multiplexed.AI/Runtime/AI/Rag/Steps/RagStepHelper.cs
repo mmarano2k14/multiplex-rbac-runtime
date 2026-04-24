@@ -1,14 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Text.Json;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Rag.Enums;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 {
@@ -28,7 +30,7 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
     ///   - <see cref="JsonElement"/>
     /// - This helper must therefore be resilient to runtime serialization boundaries.
     /// </summary>
-    internal static class RagStepHelper
+    public static class RagStepHelper
     {
         /// <summary>
         /// Builds a generic <see cref="RagExecutionContext"/> from the current step execution context.
@@ -285,6 +287,88 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 
             throw new InvalidOperationException(
                 $"rag: Retrieval batch from step '{stepName}' could not be converted from type '{raw.GetType().FullName}'.");
+        }
+
+        /// <summary>
+        /// Resolves and converts a required retrieval batch from a previous step,
+        /// including support for externalized payload-backed result data.
+        ///
+        /// PURPOSE:
+        /// - Supports the new payload compaction model.
+        /// - Reads inline data first for backward compatibility.
+        /// - Falls back to Result.DataPayloads["batch"] when the batch was externalized.
+        /// - Rehydrates the payload through <see cref="IAiExecutionPayloadResolver"/>.
+        ///
+        /// IMPORTANT:
+        /// - This method is required when upstream step results may have been compacted
+        ///   before being persisted to Redis/Lua or Mongo snapshots.
+        /// - The synchronous <see cref="GetRequiredBatch"/> method is kept for legacy callers
+        ///   that still operate on inline-only results.
+        /// </summary>
+        public static async Task<RagRetrievalBatch> GetRequiredBatchAsync(
+            AiStepExecutionContext context,
+            string stepName,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+
+            // -------------------------------------------------------------
+            // 1. Backward-compatible inline path.
+            //
+            // Before payload compaction:
+            // steps.{step}.result.data.batch contains the full RagRetrievalBatch.
+            //
+            // After payload compaction:
+            // steps.{step}.result.data.batch contains only a compact payload summary.
+            // -------------------------------------------------------------
+            if (context.TryResolvePath($"steps.{stepName}.result.data.batch", out object? raw) &&
+                raw is not null &&
+                TryConvertToRetrievalBatch(raw, out var inlineBatch))
+            {
+                return inlineBatch;
+            }
+
+            // -------------------------------------------------------------
+            // 2. Payload-backed path.
+            //
+            // After compaction:
+            // steps.{step}.result.data.batch      = summary
+            // steps.{step}.result.dataPayloads[]  = artifact reference
+            // -------------------------------------------------------------
+            if (!context.State.Steps.TryGetValue(stepName, out var stepState) ||
+                stepState.Result is null)
+            {
+                throw new InvalidOperationException(
+                    $"rag: Unable to resolve result from step '{stepName}'.");
+            }
+
+            var result = stepState.Result;
+
+            if (result.DataPayloads is null ||
+                !result.DataPayloads.TryGetValue("batch", out var payload) ||
+                payload is null)
+            {
+                throw new InvalidOperationException(
+                    $"rag: Unable to resolve 'result.data.batch' from step '{stepName}'. " +
+                    "The value was not available inline and no payload reference was found.");
+            }
+
+            var payloadResolver = context.Execution.Services
+                .GetRequiredService<IAiExecutionPayloadResolver>();
+
+            var resolved = await payloadResolver.ResolveAsync(
+                payload,
+                cancellationToken).ConfigureAwait(false);
+
+            if (resolved is not null &&
+                TryConvertToRetrievalBatch(resolved, out var payloadBatch))
+            {
+                return payloadBatch;
+            }
+
+            throw new InvalidOperationException(
+                $"rag: Retrieval batch from step '{stepName}' could not be converted from payload-backed value type '{resolved?.GetType().FullName ?? "null"}'.");
         }
 
         /// <summary>

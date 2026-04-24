@@ -6,6 +6,44 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.3.0] - 2026-04-25
+
+## 🚀 Payload Compaction & Payload-Aware Runtime
+
+This release introduces a major architectural improvement:
+
+👉 Centralized payload compaction across all execution paths
+
+### Highlights
+
+- Large step outputs are automatically externalized
+- Redis execution state remains lightweight and deterministic
+- Payloads are stored in external providers (Mongo, future Redis cache)
+- Replay and snapshot restoration fully support externalized payloads
+
+### Runtime Improvements
+
+- Unified payload compaction via DefaultAiStepResultPayloadCompactor
+- Payload-aware read path using IAiExecutionPayloadResolver
+- RAG, prompt, and custom steps aligned with payload abstraction
+- Deterministic replay preserved with external payload resolution
+
+### Developer Impact
+
+- Direct access to result.Data["key"] is no longer safe for large payloads
+- Use payload-aware helpers instead:
+  - GetDataAsync<T>()
+  - RagStepHelper.GetRequiredBatchAsync(...)
+
+### Next Steps
+
+- Redis cache payload store validation
+- Payload metrics (inline vs externalized, bytes, cache hit/miss)
+- State retention policy
+- Memory writer (ML signal extraction layer)
+
+---
+
 ## [Unreleased]
 
 ### ✨ Added

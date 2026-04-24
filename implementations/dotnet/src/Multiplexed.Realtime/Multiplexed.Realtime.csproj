@@ -10,9 +10,6 @@
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
 
-	<ItemGroup>
-	  <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.3" />
-	</ItemGroup>
 
 	<ItemGroup>
 	  <ProjectReference Include="..\Multiplexed.Abstractions\Multiplexed.Abstractions.csproj" />

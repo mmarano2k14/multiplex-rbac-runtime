@@ -253,7 +253,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
-                        record.CurrentStep,
+                        record.CurrentStep ?? "unknown",
                         pipelineResult.StepResult.Error);
 
                     record.TouchVersion();
@@ -261,7 +261,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     await PersistAsync(
                         record,
-                        expectedStepKey,
+                        expectedStepKey ?? record.ExecutionStepKey ?? string.Empty,
                         state,
                         cancellationToken);
 
@@ -286,7 +286,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 await PersistAsync(
                     record,
-                    expectedStepKey,
+                    expectedStepKey ?? record.ExecutionStepKey ?? string.Empty,
                     state,
                     cancellationToken);
 
@@ -310,12 +310,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 Logger.Engine.StepException(
                     record.ExecutionId,
-                    record.CurrentStep,
+                    record.CurrentStep ?? "unknown",
                     ex);
 
                 await Store.TryUpdateAsync(
                     record.ExecutionId,
-                    expectedStepKey,
+                    expectedStepKey ?? record.ExecutionStepKey ?? string.Empty,
                     record,
                     state,
                     cancellationToken);

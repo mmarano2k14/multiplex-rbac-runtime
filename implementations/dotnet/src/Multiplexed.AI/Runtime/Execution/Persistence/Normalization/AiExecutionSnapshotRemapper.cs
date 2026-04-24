@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Steps;
 using System.Text.Json;
@@ -13,12 +14,14 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
     /// - Restores complex persisted dictionaries/lists into detached <see cref="JsonElement"/> values
     ///   when needed by the runtime.
     /// - Preserves primitive CLR values as-is.
+    /// - Preserves payload references while remapping inline payload values.
     ///
     /// IMPORTANT:
     /// - The snapshot is remapped in place.
     /// - This is the reverse operation of <see cref="AiExecutionSnapshotNormalizer"/>,
     ///   but it intentionally does not try to reconstruct original CLR domain types.
     /// - Runtime consumers are expected to handle JsonElement/dictionary-based values safely.
+    /// - Artifact-backed payload metadata must remain unchanged for replay/recovery.
     /// </summary>
     public static class AiExecutionSnapshotRemapper
     {
@@ -45,6 +48,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
             state.Data = RemapDictionary(state.Data);
             state.Metadata = RemapDictionary(state.Metadata);
 
+            RemapPayloadDictionary(state.DataPayloads);
+            RemapPayloadDictionary(state.MetadataPayloads);
+
             if (state.Steps is null || state.Steps.Count == 0)
             {
                 return;
@@ -66,6 +72,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
             step.Inputs = RemapDictionary(step.Inputs);
             step.Config = RemapDictionary(step.Config);
 
+            RemapPayloadDictionary(step.InputPayloads);
+            RemapPayloadDictionary(step.ConfigPayloads);
+
             RemapStepResult(step.Result);
         }
 
@@ -76,7 +85,49 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
                 return;
             }
 
+            result.Value = RemapObject(result.Value);
             result.Data = RemapDictionary(result.Data);
+
+            RemapPayload(result.Payload);
+            RemapPayloadDictionary(result.DataPayloads);
+        }
+
+        /// <summary>
+        /// Remaps a payload dictionary while preserving artifact references.
+        ///
+        /// IMPORTANT:
+        /// - Artifact-backed payloads keep ArtifactId, ContentHash, SizeBytes, and ContentType unchanged.
+        /// - Only InlineValue is remapped, and only when the payload is inline.
+        /// </summary>
+        private static void RemapPayloadDictionary(Dictionary<string, AiStoredPayload>? payloads)
+        {
+            if (payloads is null || payloads.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var payload in payloads.Values)
+            {
+                RemapPayload(payload);
+            }
+        }
+
+        /// <summary>
+        /// Remaps inline payload content while preserving external artifact metadata.
+        /// </summary>
+        private static void RemapPayload(AiStoredPayload? payload)
+        {
+            if (payload is null)
+            {
+                return;
+            }
+
+            if (!payload.IsInline)
+            {
+                return;
+            }
+
+            payload.InlineValue = RemapObject(payload.InlineValue);
         }
 
         /// <summary>

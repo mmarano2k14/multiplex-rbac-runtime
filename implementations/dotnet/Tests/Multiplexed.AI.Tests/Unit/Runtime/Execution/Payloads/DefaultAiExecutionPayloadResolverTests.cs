@@ -1,6 +1,8 @@
-﻿using System.Text.Json;
+﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Tests.Runtime.Execution.Payloads;
+using System.Text.Json;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Unit.Runtime.Execution.Payloads
@@ -25,8 +27,11 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Execution.Payloads
         [Fact]
         public async Task ResolveAsync_Should_Return_Inline_Value()
         {
+
             var store = new InMemoryAiPayloadStore();
-            var resolver = new DefaultAiExecutionPayloadResolver(store);
+            var storeResolver = new FixedAiPayloadStoreResolver(store);
+            var resolver = new DefaultAiExecutionPayloadResolver(storeResolver);
+
             var payload = AiStoredPayload.Inline("hello");
 
             var value = await resolver.ResolveAsync(payload);
@@ -45,7 +50,8 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Execution.Payloads
         public async Task ResolveAsync_Should_Throw_When_Artifact_Is_Missing()
         {
             var store = new InMemoryAiPayloadStore();
-            var resolver = new DefaultAiExecutionPayloadResolver(store);
+            var storeResolver = new FixedAiPayloadStoreResolver(store);
+            var resolver = new DefaultAiExecutionPayloadResolver(storeResolver);
             var payload = AiStoredPayload.Artifact("artifact-1");
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -63,11 +69,13 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Execution.Payloads
         public async Task ResolveAsync_Should_Return_Artifact_Content_When_Artifact_Exists()
         {
             var store = new InMemoryAiPayloadStore();
+            var storeResolver = new FixedAiPayloadStoreResolver(store);
+            var resolver = new DefaultAiExecutionPayloadResolver(storeResolver);
 
             // Store JSON string manually (as done by future policy)
             var artifactId = await store.SaveAsync("\"hello\"");
 
-            var resolver = new DefaultAiExecutionPayloadResolver(store);
+            
             var payload = AiStoredPayload.Artifact(artifactId);
 
             var value = await resolver.ResolveAsync(payload);
@@ -80,7 +88,14 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Execution.Payloads
         public async Task StoreAsync_Should_Use_Artifact_When_Payload_Is_Large()
         {
             var store = new InMemoryAiPayloadStore();
-            var policy = new SmartInlineAiExecutionDataPolicy(store);
+            var storeResolver = new FixedAiPayloadStoreResolver(store);
+            var options = Options.Create(new AiPayloadStoreOptions
+            {
+                MaxInlineSizeBytes = 2048 // Set max inline size to 2KB for testing
+            });
+
+            var policy = new SmartInlineAiExecutionDataPolicy(storeResolver, options);
+
 
             var large = new string('A', 5000);
 

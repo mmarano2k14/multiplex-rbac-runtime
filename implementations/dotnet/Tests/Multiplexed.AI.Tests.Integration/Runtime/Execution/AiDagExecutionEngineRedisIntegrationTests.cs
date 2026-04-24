@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -35,6 +36,7 @@ using Multiplexed.Rbac.Core.Stores.Memory;
 using StackExchange.Redis;
 using System.Text.Json;
 using Xunit;
+using static Multiplexed.AI.Tests.Integration.Runtime.Execution.AiDagExecutionEngineTests;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
@@ -521,7 +523,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var dataPolicy = new InlineAiExecutionDataPolicy();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger, dataPolicy);
+            var stepExecutor = new AiStepExecutor(classifier, logger);
 
 
             var services = new ServiceCollection();
@@ -554,6 +556,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new AiRuntimeMetrics();
 
+            var payloadStore = new InMemoryAiPayloadStore();
+            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
+
+            var payloadOptions = Options.Create(new AiPayloadStoreOptions
+            {
+                Enabled = true,
+                Provider = "inmemory",
+                RequireReplaySafePayloads = false,
+                MaxInlineSizeBytes = 2048
+            });
+
+            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy);
+
             var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
@@ -564,6 +579,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 logger,
                 cleanupService,Options.Create(aiOptions),
                 metrics,
+                payloadCompactor,
                 dagStore);
 
 
@@ -758,9 +774,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var contextFactory = new ExecutionContextFactory();
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
-            var dataPolicy = new InlineAiExecutionDataPolicy();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger, dataPolicy);
+            var stepExecutor = new AiStepExecutor(classifier, logger);
 
             var services = new ServiceCollection();
 
@@ -791,6 +806,23 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new AiRuntimeMetrics();
 
+            var payloadStore = new InMemoryAiPayloadStore();
+            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
+
+            var payloadOptions = Options.Create(new AiPayloadStoreOptions
+            {
+                Enabled = true,
+                Provider = "inmemory",
+                RequireReplaySafePayloads = false,
+                MaxInlineSizeBytes = 2048
+            });
+
+            var dataPolicy = new SmartInlineAiExecutionDataPolicy(
+                payloadStoreResolver,
+                payloadOptions);
+
+            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy);
+
             var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
@@ -801,6 +833,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 logger,
                 cleanupService, Options.Create(aiOptions),
                 metrics,
+                payloadCompactor,
                 dagStore);
 
             return engine;

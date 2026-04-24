@@ -272,25 +272,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
         {
             public string Name => "custom.merge";
 
-            public Task<AiStepResult> ExecuteAsync(
-                AiStepExecutionContext context,
-                CancellationToken cancellationToken = default)
+            public async Task<AiStepResult> ExecuteAsync(
+    AiStepExecutionContext context,
+    CancellationToken cancellationToken = default)
             {
                 ArgumentNullException.ThrowIfNull(context);
 
-                if (!context.TryResolvePath("steps.getCandidate.result.data.batch", out object? candidateRaw) ||
-                    candidateRaw is not RagRetrievalBatch candidateBatch)
-                {
-                    throw new InvalidOperationException(
-                        "Unable to resolve typed retrieval batch from step 'getCandidate'.");
-                }
+                var candidateBatch = await RagStepHelper.GetRequiredBatchAsync(
+                    context,
+                    "getCandidate",
+                    cancellationToken);
 
-                if (!context.TryResolvePath("steps.getJob.result.data.batch", out object? jobRaw) ||
-                    jobRaw is not RagRetrievalBatch jobBatch)
-                {
-                    throw new InvalidOperationException(
-                        "Unable to resolve typed retrieval batch from step 'getJob'.");
-                }
+                var jobBatch = await RagStepHelper.GetRequiredBatchAsync(
+                    context,
+                    "getJob",
+                    cancellationToken);
 
                 var mergedItems = candidateBatch.Items
                     .Concat(jobBatch.Items)
@@ -315,10 +311,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                     ["diagnostics"] = mergedBatch.Diagnostics
                 };
 
-                return Task.FromResult(
-                    AiStepResult.Ok(
-                        output: $"Merged retrieval batches with {mergedBatch.Items.Count} item(s).",
-                        data: data));
+                return AiStepResult.Ok(
+                    output: $"Merged retrieval batches with {mergedBatch.Items.Count} item(s).",
+                    data: data);
             }
         }
     }

@@ -41,9 +41,9 @@
 
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
-        public List<string> ProvenanceExecutionIds { get; set; } = new();
+        public List<string> ProvenanceExecutionIds { get; set; } = [];
 
-        public List<string> ProvenanceStepNames { get; set; } = new();
+        public List<string> ProvenanceStepNames { get; set; } = [];
 
         public Dictionary<string, object?> Metadata { get; set; } = new(StringComparer.Ordinal);
     }

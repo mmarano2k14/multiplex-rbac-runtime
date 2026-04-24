@@ -62,7 +62,11 @@ public sealed class RagComposeStep : IAiStep
                 "rag.compose: Missing required config 'composer'.");
         }
 
-        var batch = RagStepHelper.GetRequiredBatch(context, sourceStep);
+        //var batch = RagStepHelper.GetRequiredBatch(context, sourceStep);
+        var batch = await RagStepHelper.GetRequiredBatchAsync(
+                        context,
+                        sourceStep,
+                        cancellationToken);
 
         var composer = _composerResolver.Resolve(composerKey);
 

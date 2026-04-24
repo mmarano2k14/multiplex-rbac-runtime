@@ -1,5 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Stores;
@@ -22,6 +25,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
     /// - Validate prompt rendering + binding resolution
     /// - Validate step result persistence and normalization
     /// - Validate prompt + deterministic decision chaining
+    ///
+    /// IMPORTANT:
+    /// - Step results may now be payload-compacted by the DAG engine.
+    /// - Large values may appear as summaries in Data/Value and as full content in Payload/DataPayloads.
+    /// - Tests must therefore resolve values through IAiExecutionPayloadResolver when needed.
     /// </summary>
     public sealed class AiPromptIntegrationTests
     {
@@ -77,25 +85,31 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             Assert.NotNull(step2.Result);
             Assert.NotNull(step2.Result!.Data);
 
-            var data = step2.Result.Data;
+            var payloadResolver = host.ServiceProvider.GetRequiredService<IAiExecutionPayloadResolver>();
 
-            Assert.True(data.ContainsKey("rawText"));
-            var rawText = data["rawText"]?.ToString();
+            var rawText = await GetResultDataValueAsync<string>(
+                step2.Result,
+                "rawText",
+                payloadResolver);
 
             Assert.NotNull(rawText);
             Assert.StartsWith("FAKE_RESPONSE:", rawText);
 
-            Assert.Equal("fake", data["providerKey"]?.ToString());
-            Assert.Equal("fake-model-v1", data["model"]?.ToString());
-            Assert.Equal("stop", data["finishReason"]?.ToString());
-            Assert.Equal("v1", data["promptVersion"]?.ToString());
+            Assert.Equal("fake", await GetResultDataValueAsync<string>(step2.Result, "providerKey", payloadResolver));
+            Assert.Equal("fake-model-v1", await GetResultDataValueAsync<string>(step2.Result, "model", payloadResolver));
+            Assert.Equal("stop", await GetResultDataValueAsync<string>(step2.Result, "finishReason", payloadResolver));
+            Assert.Equal("v1", await GetResultDataValueAsync<string>(step2.Result, "promptVersion", payloadResolver));
 
-            Assert.True(data.ContainsKey("renderedPromptHash"));
-            Assert.False(string.IsNullOrWhiteSpace(data["renderedPromptHash"]?.ToString()));
+            var renderedPromptHash = await GetResultDataValueAsync<string>(
+                step2.Result,
+                "renderedPromptHash",
+                payloadResolver);
 
-            Assert.Equal("10", data["inputTokens"]?.ToString());
-            Assert.Equal("20", data["outputTokens"]?.ToString());
-            Assert.Equal("30", data["totalTokens"]?.ToString());
+            Assert.False(string.IsNullOrWhiteSpace(renderedPromptHash));
+
+            Assert.Equal("10", (await GetResultDataValueAsync<object>(step2.Result, "inputTokens", payloadResolver))?.ToString());
+            Assert.Equal("20", (await GetResultDataValueAsync<object>(step2.Result, "outputTokens", payloadResolver))?.ToString());
+            Assert.Equal("30", (await GetResultDataValueAsync<object>(step2.Result, "totalTokens", payloadResolver))?.ToString());
 
             var completedStepsFromState = state.Steps.Values
                 .Where(x => x.IsCompleted)
@@ -164,24 +178,31 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             Assert.True(promptStep.IsCompleted);
             Assert.True(decisionStep.IsCompleted);
 
+            var payloadResolver = host.ServiceProvider.GetRequiredService<IAiExecutionPayloadResolver>();
+
             // -----------------------------------------------------------------
             // Validate prompt result
             // -----------------------------------------------------------------
             Assert.NotNull(promptStep.Result);
             Assert.NotNull(promptStep.Result!.Data);
 
-            var promptData = promptStep.Result.Data;
+            Assert.Equal("openai", await GetResultDataValueAsync<string>(promptStep.Result, "providerKey", payloadResolver));
+            Assert.Equal("gpt-5.4", await GetResultDataValueAsync<string>(promptStep.Result, "model", payloadResolver));
 
-            Assert.Equal("openai", promptData["providerKey"]?.ToString());
-            Assert.Equal("gpt-5.4", promptData["model"]?.ToString());
+            var rawText = await GetResultDataValueAsync<string>(
+                promptStep.Result,
+                "rawText",
+                payloadResolver);
 
-            var rawText = promptData["rawText"]?.ToString();
             Assert.NotNull(rawText);
             Assert.StartsWith("{", rawText!.Trim());
 
-            Assert.True(promptData.ContainsKey("parsedResult"));
+            var parsedResult = await GetResultDataValueAsync<object>(
+                promptStep.Result,
+                "parsedResult",
+                payloadResolver);
 
-            var score = ExtractScore(promptData["parsedResult"]);
+            var score = ExtractScore(parsedResult);
             Assert.InRange(score, 0, 100);
 
             // -----------------------------------------------------------------
@@ -190,17 +211,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             Assert.NotNull(decisionStep.Result);
             Assert.NotNull(decisionStep.Result!.Data);
 
-            var decisionData = decisionStep.Result.Data;
+            var decision = await GetResultDataValueAsync<string>(
+                decisionStep.Result,
+                "decision",
+                payloadResolver);
 
-            var decision = decisionData["decision"]?.ToString();
             Assert.NotNull(decision);
             Assert.Contains(decision, new[] { "shortlist", "review", "reject" });
 
-            Assert.Equal(score.ToString(), decisionData["score"]?.ToString());
-            Assert.Equal(decision, decisionStep.Result.Value?.ToString());
+            var decisionScore = await GetResultDataValueAsync<object>(
+                decisionStep.Result,
+                "score",
+                payloadResolver);
 
-            Assert.Equal("80", decisionData["shortlistThreshold"]?.ToString());
-            Assert.Equal("50", decisionData["rejectThreshold"]?.ToString());
+            var resultValue = await GetResultValueAsync<object>(
+                decisionStep.Result,
+                payloadResolver);
+
+            Assert.Equal(score.ToString(), decisionScore?.ToString());
+            Assert.Equal(decision, resultValue?.ToString());
+
+            Assert.Equal("80", (await GetResultDataValueAsync<object>(decisionStep.Result, "shortlistThreshold", payloadResolver))?.ToString());
+            Assert.Equal("50", (await GetResultDataValueAsync<object>(decisionStep.Result, "rejectThreshold", payloadResolver))?.ToString());
 
             // -----------------------------------------------------------------
             // Validate business consistency
@@ -238,6 +270,93 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         // ============================================================
         // HELPERS
         // ============================================================
+
+        private static async Task<T?> GetResultDataValueAsync<T>(
+            AiStepResult result,
+            string key,
+            IAiExecutionPayloadResolver payloadResolver)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(payloadResolver);
+
+            object? raw = null;
+
+            if (result.DataPayloads is not null &&
+                result.DataPayloads.TryGetValue(key, out var payload))
+            {
+                raw = await payloadResolver.ResolveAsync(payload);
+            }
+            else if (result.Data.TryGetValue(key, out var value))
+            {
+                raw = value;
+            }
+
+            if (raw is null)
+            {
+                return default;
+            }
+
+            return ConvertValue<T>(raw);
+        }
+
+        private static async Task<T?> GetResultValueAsync<T>(
+            AiStepResult result,
+            IAiExecutionPayloadResolver payloadResolver)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+            ArgumentNullException.ThrowIfNull(payloadResolver);
+
+            object? raw = result.Payload is not null
+                ? await payloadResolver.ResolveAsync(result.Payload)
+                : result.Value;
+
+            if (raw is null)
+            {
+                return default;
+            }
+
+            return ConvertValue<T>(raw);
+        }
+
+        private static T? ConvertValue<T>(object raw)
+        {
+            if (raw is T typed)
+            {
+                return typed;
+            }
+
+            if (raw is JsonElement json)
+            {
+                if (typeof(T) == typeof(string))
+                {
+                    return (T?)(object?)(
+                        json.ValueKind == JsonValueKind.String
+                            ? json.GetString()
+                            : json.GetRawText());
+                }
+
+                if (typeof(T) == typeof(object))
+                {
+                    return (T?)(object?)json;
+                }
+
+                return json.Deserialize<T>();
+            }
+
+            if (typeof(T) == typeof(string))
+            {
+                return (T?)(object?)raw.ToString();
+            }
+
+            if (typeof(T) == typeof(object))
+            {
+                return (T?)(object?)raw;
+            }
+
+            var serialized = JsonSerializer.Serialize(raw);
+            return JsonSerializer.Deserialize<T>(serialized);
+        }
 
         private static int ExtractScore(object? parsedResult)
         {

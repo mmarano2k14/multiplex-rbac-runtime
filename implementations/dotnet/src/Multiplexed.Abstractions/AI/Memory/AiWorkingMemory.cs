@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Memory
+﻿namespace Multiplexed.Abstractions.AI.Memory
 {
     /// <summary>
     /// Represents short-lived working memory for a single execution.

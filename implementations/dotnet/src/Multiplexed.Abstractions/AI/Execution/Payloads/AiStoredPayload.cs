@@ -29,10 +29,16 @@
         public bool IsInline { get; init; }
 
         /// <summary>
-        /// Gets the inline value when the payload is stored directly in the
+        /// Gets or sets the inline value when the payload is stored directly in the
         /// execution state or step result.
+        ///
+        /// IMPORTANT:
+        /// - This property uses set instead of init because snapshot normalization
+        ///   and remapping may need to rewrite the value into a persistence-safe or
+        ///   runtime-friendly representation.
+        /// - Artifact-backed payloads should leave this value null.
         /// </summary>
-        public object? InlineValue { get; init; }
+        public object? InlineValue { get; set; }
 
         /// <summary>
         /// Gets the artifact identifier when the payload is stored externally.

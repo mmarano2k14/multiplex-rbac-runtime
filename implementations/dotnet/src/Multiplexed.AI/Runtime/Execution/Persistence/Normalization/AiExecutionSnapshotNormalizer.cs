@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Steps;
 using System.Text.Json;
@@ -12,11 +13,13 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
     /// - Removes runtime-specific values that are not safe to persist directly.
     /// - Converts JsonElement values into plain CLR objects.
     /// - Converts custom CLR objects into dictionary/list/primitive graphs so BSON persistence can succeed.
+    /// - Preserves payload references while normalizing inline payload values.
     ///
     /// IMPORTANT:
     /// - The snapshot is normalized in place.
     /// - This method is intended for persistence only.
     /// - Runtime-friendly reconstruction is handled separately by the remapper.
+    /// - Artifact-backed payload metadata must be preserved exactly for replay/recovery.
     /// </summary>
     public static class AiExecutionSnapshotNormalizer
     {
@@ -42,6 +45,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
             state.Data = NormalizeDictionary(state.Data);
             state.Metadata = NormalizeDictionary(state.Metadata);
 
+            NormalizePayloadDictionary(state.DataPayloads);
+            NormalizePayloadDictionary(state.MetadataPayloads);
+
             if (state.Steps is null || state.Steps.Count == 0)
             {
                 return;
@@ -63,6 +69,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
             step.Inputs = NormalizeDictionary(step.Inputs);
             step.Config = NormalizeDictionary(step.Config);
 
+            NormalizePayloadDictionary(step.InputPayloads);
+            NormalizePayloadDictionary(step.ConfigPayloads);
+
             NormalizeStepResult(step.Result);
         }
 
@@ -73,7 +82,49 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
                 return;
             }
 
+            result.Value = NormalizeObject(result.Value);
             result.Data = NormalizeDictionary(result.Data);
+
+            NormalizePayload(result.Payload);
+            NormalizePayloadDictionary(result.DataPayloads);
+        }
+
+        /// <summary>
+        /// Normalizes a payload dictionary while preserving artifact references.
+        ///
+        /// IMPORTANT:
+        /// - Artifact-backed payloads keep ArtifactId, ContentHash, SizeBytes, and ContentType unchanged.
+        /// - Only InlineValue is normalized, and only when the payload is inline.
+        /// </summary>
+        private static void NormalizePayloadDictionary(Dictionary<string, AiStoredPayload>? payloads)
+        {
+            if (payloads is null || payloads.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var payload in payloads.Values)
+            {
+                NormalizePayload(payload);
+            }
+        }
+
+        /// <summary>
+        /// Normalizes inline payload content while preserving external artifact metadata.
+        /// </summary>
+        private static void NormalizePayload(AiStoredPayload? payload)
+        {
+            if (payload is null)
+            {
+                return;
+            }
+
+            if (!payload.IsInline)
+            {
+                return;
+            }
+
+            payload.InlineValue = NormalizeObject(payload.InlineValue);
         }
 
         /// <summary>
@@ -147,8 +198,6 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
                 return list;
             }
 
-            // Convert custom CLR objects into persistence-safe structures.
-            // This keeps snapshot persistence independent from BSON allowlists.
             try
             {
                 var json = JsonSerializer.Serialize(value);
@@ -158,7 +207,6 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
             }
             catch
             {
-                // Preserve previous fallback behavior if conversion fails unexpectedly.
                 return value;
             }
         }

@@ -12,6 +12,7 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine
 {
@@ -47,6 +48,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         private readonly AiEngineOptions _aiOptions;
         private readonly IAiRuntimeMetrics _metrics;
         private readonly IAiExecutionSnapshotService<ExecutionContextSnapshot>? _snapshotService;
+        private readonly IAiStepResultPayloadCompactor _payloadCompactor;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
@@ -62,6 +64,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiExecutionCleanupService cleanupService,
             IOptions<AiEngineOptions> aiOptions,
             IAiRuntimeMetrics metrics,
+            IAiStepResultPayloadCompactor payloadCompactor,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
             : base(
@@ -77,6 +80,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             _aiOptions = aiOptions?.Value ?? throw new ArgumentNullException(nameof(aiOptions));
             _dagStore = dagStore;
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+            _payloadCompactor = payloadCompactor ?? throw new ArgumentNullException(nameof(payloadCompactor));
             _snapshotService = snapshotService;
         }
 
@@ -436,6 +440,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     stepResult = await nextStep.Step.ExecuteAsync(
                         stepContext,
                         cancellationToken);
+
+                    await _payloadCompactor.CompactAsync(
+                        stepResult,
+                        cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -748,7 +756,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 try
                 {
-                    stepResult = await claimedStep.Step.ExecuteAsync(stepContext, cancellationToken);
+                    stepResult = await claimedStep.Step.ExecuteAsync(
+                                    stepContext,
+                                    cancellationToken);
+
+                    await _payloadCompactor.CompactAsync(
+                        stepResult,
+                        cancellationToken);
                 }
                 catch (Exception ex)
                 {

@@ -1,7 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
-using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -25,19 +23,15 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     /// - This class is scoped to execution of ONE resolved step
     /// - It does not own pipeline orchestration
     /// - It does not own distributed retry coordination
+    /// - It does not own payload compaction
+    /// - It does not own consolidated memory writing
     /// - Durable DAG retry state remains owned by <see cref="AiStepState"/> and the execution store
     ///
-    /// PAYLOAD EVOLUTION:
-    /// - Step results may receive a payload representation through <see cref="IAiExecutionDataPolicy"/>
-    /// - Small values remain inline as before
-    /// - Large values may be externalized by the policy and replaced with compact inline summaries
-    /// - The goal is to reduce ledger/state size without breaking execution, retry, replay, or bindings
-    ///
-    /// MEMORY EVOLUTION:
-    /// - Successful step results may be written to consolidated memory through <see cref="IAiMemoryWriter"/>
-    /// - Memory writing is optional and best-effort
-    /// - Consolidated memory is derived knowledge, not execution truth
-    /// - Memory writer failure must never fail the step execution
+    /// CENTRALIZATION NOTE:
+    /// - Payload compaction is handled centrally by the DAG engine before result persistence
+    /// - Memory writing should also be handled centrally by orchestration-level runtime services
+    /// - Keeping this executor focused on local retry avoids inconsistent behavior between
+    ///   sequential, DAG, RAG, operation, and provider execution paths
     ///
     /// SEMANTICS:
     /// - <see cref="AiStepExecutionMetadata.AttemptCount"/> counts local in-process attempts
@@ -48,30 +42,19 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     {
         private readonly IAiRetryExceptionClassifier _exceptionClassifier;
         private readonly IAiRuntimeLogger _logger;
-        private readonly IAiExecutionDataPolicy _dataPolicy;
-        private readonly IAiMemoryWriter? _memoryWriter;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
-        ///
-        /// COMPATIBILITY:
-        /// - <paramref name="memoryWriter"/> is optional to preserve all existing tests and registrations
-        /// - When no memory writer is provided, execution behavior remains unchanged
         /// </summary>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
-            IAiRuntimeLogger logger,
-            IAiExecutionDataPolicy dataPolicy,
-            IAiMemoryWriter? memoryWriter = null)
+            IAiRuntimeLogger logger)
         {
             ArgumentNullException.ThrowIfNull(exceptionClassifier);
             ArgumentNullException.ThrowIfNull(logger);
-            ArgumentNullException.ThrowIfNull(dataPolicy);
 
             _exceptionClassifier = exceptionClassifier;
             _logger = logger;
-            _dataPolicy = dataPolicy;
-            _memoryWriter = memoryWriter;
         }
 
         /// <summary>
@@ -82,8 +65,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// - Load or create local step execution metadata
         /// - Skip execution if local metadata already marks the step as completed
         /// - Execute the step
-        /// - Attach payload representations for large primary values and structured data entries
-        /// - Optionally write consolidated memory from the step result
         /// - Retry locally when policy allows and the exception is retryable
         /// - Return the final <see cref="AiStepResult"/> or rethrow the terminal exception
         ///
@@ -91,7 +72,8 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// - This method performs only local retry within the current process
         /// - It does not schedule durable DAG retry windows
         /// - It does not mutate distributed retry counters in <see cref="AiStepState"/>
-        /// - Memory writing is best-effort and must never affect execution correctness
+        /// - It does not compact payloads; orchestration-level code must do that before persistence
+        /// - It does not write consolidated memory; orchestration-level code should own that
         /// </summary>
         public async Task<AiStepResult> ExecuteAsync(
             ResolvedAiPipelineStep resolvedStep,
@@ -138,14 +120,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
 
                     var result = await resolvedStep.Step.ExecuteAsync(
                         context,
-                        cancellationToken);
-
-                    await AttachPayloadAsync(result, cancellationToken);
-
-                    await WriteMemoryAsync(
-                        context,
-                        stepName,
-                        result,
                         cancellationToken);
 
                     if (!result.Success)
@@ -203,147 +177,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     }
                 }
             }
-        }
-
-        /// <summary>
-        /// Attaches payload representations to the step result.
-        ///
-        /// BEHAVIOR:
-        /// - Processes the primary <see cref="AiStepResult.Value"/>
-        /// - Processes structured <see cref="AiStepResult.Data"/> entries
-        ///
-        /// DESIGN:
-        /// - Large values are externalized through <see cref="IAiExecutionDataPolicy"/>
-        /// - Inline values are preserved
-        /// - Externalized values are replaced with compact summaries
-        /// - Full payloads remain resolvable through <see cref="AiStepResult.Payload"/>
-        ///   or <see cref="AiStepResult.DataPayloads"/>
-        ///
-        /// IMPORTANT:
-        /// - No step success/failure semantics are changed
-        /// - The Data dictionary is preserved
-        /// - Only values that the policy externalizes are replaced by summaries
-        /// - This method does not mutate retry metadata or distributed DAG state
-        /// </summary>
-        private async Task AttachPayloadAsync(
-            AiStepResult result,
-            CancellationToken cancellationToken)
-        {
-            ArgumentNullException.ThrowIfNull(result);
-
-            // ---------------------------------------------------------------------
-            // PRIMARY VALUE
-            // ---------------------------------------------------------------------
-            if (result.Value is not null && result.Payload == null)
-            {
-                var originalValue = result.Value;
-
-                var payload = await _dataPolicy.StoreAsync(
-                    originalValue,
-                    cancellationToken);
-
-                result.Payload = payload;
-
-                if (!payload.IsInline)
-                {
-                    result.Value = CreatePayloadSummary(payload);
-                }
-            }
-
-            // ---------------------------------------------------------------------
-            // STRUCTURED DATA
-            // ---------------------------------------------------------------------
-            if (result.Data == null || result.Data.Count == 0)
-                return;
-
-            foreach (var entry in result.Data.ToList())
-            {
-                var key = entry.Key;
-                var value = entry.Value;
-
-                if (value is null)
-                    continue;
-
-                var payload = await _dataPolicy.StoreAsync(
-                    value,
-                    cancellationToken);
-
-                if (payload.IsInline)
-                    continue;
-
-                result.DataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
-                result.DataPayloads[key] = payload;
-
-                result.Data[key] = CreatePayloadSummary(payload);
-            }
-        }
-
-        /// <summary>
-        /// Writes a consolidated memory from the step result when memory writing is enabled.
-        ///
-        /// PURPOSE:
-        /// - Allows successful step outputs to become long-term consolidated memory
-        /// - Keeps memory creation separate from DAG execution, retry, and replay
-        /// - Treats memory as a derived artifact, not as execution truth
-        ///
-        /// IMPORTANT:
-        /// - This method is best-effort by design
-        /// - Memory writer failures must never fail the step execution
-        /// - Consolidated memory must never be required for deterministic replay
-        /// - Failed step results are passed to the writer, but the default writer ignores them
-        /// </summary>
-        private async Task WriteMemoryAsync(
-            AiStepExecutionContext context,
-            string stepName,
-            AiStepResult result,
-            CancellationToken cancellationToken)
-        {
-            if (_memoryWriter is null)
-                return;
-
-            try
-            {
-                var scope = !string.IsNullOrWhiteSpace(context.State.PipelineName)
-                    ? context.State.PipelineName!
-                    : "default";
-
-                await _memoryWriter.WriteFromStepResultAsync(
-                    context.Record,
-                    stepName,
-                    result,
-                    scope,
-                    cancellationToken);
-            }
-            catch
-            {
-                // Memory is derived and best-effort.
-                // It must never break execution, retry, DAG convergence, or replay.
-            }
-        }
-
-        /// <summary>
-        /// Creates the compact inline summary used when a payload is externalized.
-        ///
-        /// PURPOSE:
-        /// - Keeps the execution state small
-        /// - Preserves enough metadata for diagnostics and traceability
-        /// - Avoids leaving large duplicated values in the ledger/state
-        ///
-        /// IMPORTANT:
-        /// - This summary is not the payload itself
-        /// - Full content must be resolved through the stored payload reference
-        /// </summary>
-        private static Dictionary<string, object?> CreatePayloadSummary(
-            AiStoredPayload payload)
-        {
-            return new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["payloadExternalized"] = true,
-                ["artifactId"] = payload.ArtifactId,
-                ["contentHash"] = payload.ContentHash,
-                ["sizeBytes"] = payload.SizeBytes,
-                ["contentType"] = payload.ContentType
-            };
         }
 
         /// <summary>
