@@ -26,41 +26,14 @@ namespace Multiplexed.Abstractions.AI.Steps
         private static readonly Dictionary<string, object?> EmptyData =
             new(StringComparer.Ordinal);
 
-        /// <summary>
-        /// Indicates whether the step execution succeeded.
-        /// </summary>
         public bool Success { get; set; }
 
-        /// <summary>
-        /// Gets or sets the optional primary value produced by the step.
-        ///
-        /// This value is kept for backward compatibility and should remain
-        /// serialization-friendly when persisted.
-        /// </summary>
         public object? Value { get; set; }
 
-        /// <summary>
-        /// Gets or sets the optional stored payload representation.
-        ///
-        /// PURPOSE:
-        /// - Allows future ledger compaction by storing large payloads outside
-        ///   the execution state while keeping a compact reference here.
-        ///
-        /// COMPATIBILITY:
-        /// - Existing callers can continue using <see cref="Value"/>.
-        /// - New payload-aware callers should prefer resolving this property
-        ///   through <see cref="IAiExecutionPayloadResolver"/>.
-        /// </summary>
         public AiStoredPayload? Payload { get; set; }
 
-        /// <summary>
-        /// Optional textual output produced by the step.
-        /// </summary>
         public string? Output { get; set; }
 
-        /// <summary>
-        /// Optional error message when the step fails.
-        /// </summary>
         public string? Error { get; set; }
 
         /// <summary>
@@ -70,8 +43,19 @@ namespace Multiplexed.Abstractions.AI.Steps
         public Dictionary<string, object?> Data { get; set; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// Creates a successful result.
+        /// Optional payload-backed representation of structured data entries.
+        ///
+        /// PURPOSE:
+        /// - Allows large individual Data entries to be externalized without removing
+        ///   the existing inline Data dictionary.
+        ///
+        /// COMPATIBILITY:
+        /// - Existing callers can continue reading <see cref="Data"/>.
+        /// - Payload-aware callers should use <see cref="GetDataAsync{T}"/>.
+        /// - When a key exists in both dictionaries, <see cref="DataPayloads"/> takes priority.
         /// </summary>
+        public Dictionary<string, AiStoredPayload>? DataPayloads { get; set; }
+
         public static AiStepResult Ok(
             object? value = null,
             string? output = null,
@@ -88,9 +72,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             };
         }
 
-        /// <summary>
-        /// Creates a successful result using a stored payload.
-        /// </summary>
         public static AiStepResult OkPayload(
             AiStoredPayload payload,
             string? output = null,
@@ -109,9 +90,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             };
         }
 
-        /// <summary>
-        /// Creates a failed result.
-        /// </summary>
         public static AiStepResult Fail(
             string error,
             object? value = null,
@@ -130,9 +108,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             };
         }
 
-        /// <summary>
-        /// Creates a failed result using a stored payload.
-        /// </summary>
         public static AiStepResult FailPayload(
             string error,
             AiStoredPayload payload,
@@ -152,9 +127,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             };
         }
 
-        /// <summary>
-        /// Creates a successful result with a single extension data entry.
-        /// </summary>
         public static AiStepResult Ok(
             string key,
             object? dataValue,
@@ -177,24 +149,11 @@ namespace Multiplexed.Abstractions.AI.Steps
             };
         }
 
-        /// <summary>
-        /// Retrieves the primary value as the specified type.
-        /// Returns default if the value is missing or cannot be converted.
-        /// Supports values restored from JSON as <see cref="JsonElement"/>.
-        /// </summary>
         public T? GetValue<T>()
         {
             return ConvertValue<T>(Value);
         }
 
-        /// <summary>
-        /// Retrieves the primary value as the specified type using payload
-        /// resolution when a payload is present.
-        ///
-        /// IMPORTANT:
-        /// - Payload has priority over <see cref="Value"/>.
-        /// - Falls back to <see cref="Value"/> for backward compatibility.
-        /// </summary>
         public async Task<T?> GetValueAsync<T>(
             IAiExecutionPayloadResolver resolver,
             CancellationToken cancellationToken = default)
@@ -210,14 +169,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             return ConvertValue<T>(Value);
         }
 
-        /// <summary>
-        /// Retrieves the primary value as the specified type using payload
-        /// resolution when a payload is present.
-        ///
-        /// This synchronous helper is intended for compatibility scenarios.
-        /// Prefer <see cref="GetValueAsync{T}(IAiExecutionPayloadResolver, CancellationToken)"/>
-        /// in async runtime paths.
-        /// </summary>
         public T? GetValue<T>(IAiExecutionPayloadResolver resolver)
         {
             ArgumentNullException.ThrowIfNull(resolver);
@@ -234,10 +185,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             return ConvertValue<T>(Value);
         }
 
-        /// <summary>
-        /// Attempts to retrieve the primary value as the specified type.
-        /// Supports values restored from JSON as <see cref="JsonElement"/>.
-        /// </summary>
         public bool TryGetValue<T>(out T? value)
         {
             try
@@ -252,14 +199,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             }
         }
 
-        /// <summary>
-        /// Attempts to retrieve the primary value as the specified type using
-        /// payload resolution when a payload is present.
-        ///
-        /// IMPORTANT:
-        /// - Payload has priority over <see cref="Value"/>.
-        /// - Falls back to <see cref="Value"/> for backward compatibility.
-        /// </summary>
         public async Task<(bool Success, T? Value)> TryGetValueAsync<T>(
             IAiExecutionPayloadResolver resolver,
             CancellationToken cancellationToken = default)
@@ -277,11 +216,6 @@ namespace Multiplexed.Abstractions.AI.Steps
             }
         }
 
-        /// <summary>
-        /// Retrieves a structured data entry as the specified type.
-        /// Returns default if the key does not exist or the value cannot be converted.
-        /// Supports values restored from JSON as <see cref="JsonElement"/>.
-        /// </summary>
         public T? GetData<T>(string key)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(key);
@@ -293,9 +227,54 @@ namespace Multiplexed.Abstractions.AI.Steps
         }
 
         /// <summary>
-        /// Attempts to retrieve a structured data entry as the specified type.
-        /// Supports values restored from JSON as <see cref="JsonElement"/>.
+        /// Retrieves a structured data entry using payload resolution when available.
+        ///
+        /// BEHAVIOR:
+        /// - DataPayloads has priority over inline Data.
+        /// - Falls back to inline Data for backward compatibility.
         /// </summary>
+        public async Task<T?> GetDataAsync<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (DataPayloads != null &&
+                DataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = await resolver.ResolveAsync(payload, cancellationToken);
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return GetData<T>(key);
+        }
+
+        /// <summary>
+        /// Synchronous compatibility helper for payload-aware structured data access.
+        /// Prefer <see cref="GetDataAsync{T}"/> in async runtime paths.
+        /// </summary>
+        public T? GetData<T>(
+            string key,
+            IAiExecutionPayloadResolver resolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (DataPayloads != null &&
+                DataPayloads.TryGetValue(key, out var payload))
+            {
+                var resolvedValue = resolver.ResolveAsync(payload)
+                    .GetAwaiter()
+                    .GetResult();
+
+                return ConvertValue<T>(resolvedValue);
+            }
+
+            return GetData<T>(key);
+        }
+
         public bool TryGetData<T>(string key, out T? value)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(key);
@@ -319,13 +298,21 @@ namespace Multiplexed.Abstractions.AI.Steps
         }
 
         /// <summary>
-        /// Converts a raw value into the requested type.
-        /// Supports:
-        /// - direct typed values
-        /// - null values
-        /// - JSON-backed values restored as <see cref="JsonElement"/>
-        /// - simple convertible primitives
+        /// Stores or replaces a payload-backed structured data entry.
+        ///
+        /// IMPORTANT:
+        /// - Does not remove the inline Data entry.
+        /// - Payload-aware accessors will prefer this entry.
         /// </summary>
+        public void SetDataPayload(string key, AiStoredPayload payload)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(key);
+            ArgumentNullException.ThrowIfNull(payload);
+
+            DataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
+            DataPayloads[key] = payload;
+        }
+
         private static T? ConvertValue<T>(object? rawValue)
         {
             if (rawValue is null)

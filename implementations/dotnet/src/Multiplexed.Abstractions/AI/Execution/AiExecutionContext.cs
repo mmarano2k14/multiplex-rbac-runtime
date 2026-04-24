@@ -1,4 +1,5 @@
-﻿using Multiplexed.Abstractions.AI.Pipeline;
+﻿using Multiplexed.Abstractions.AI.Execution.Memory;
+using Multiplexed.Abstractions.AI.Pipeline;
 using System.Linq;
 using System.Text.Json;
 
@@ -61,6 +62,26 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// This contains shared state values, metadata, and step-scoped runtime data.
         /// </summary>
         public AiExecutionState State { get; }
+
+
+        /// <summary>
+        /// Gets the execution-scoped working memory for the current pipeline execution.
+        ///
+        /// PURPOSE:
+        /// - Provides a short-lived, in-memory storage for transient values shared across steps
+        /// - Allows steps to exchange intermediate data without polluting the durable execution state
+        ///
+        /// DESIGN:
+        /// - This memory is scoped to the lifetime of a single execution
+        /// - It is not persisted, not replayed, and not included in snapshots
+        /// - It is intended for temporary computation artifacts (e.g., embeddings, intermediate results)
+        ///
+        /// IMPORTANT:
+        /// - Values stored here must be considered non-durable
+        /// - Do not rely on this memory for deterministic replay or recovery
+        /// - Durable data must still be written to <see cref="AiExecutionState"/>
+        /// </summary>
+        public AiWorkingMemory Memory { get; }
 
         /// <summary>
         /// Gets the scoped service provider available to the current execution.

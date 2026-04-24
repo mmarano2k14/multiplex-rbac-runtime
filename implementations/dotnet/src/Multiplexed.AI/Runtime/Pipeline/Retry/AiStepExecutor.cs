@@ -28,8 +28,9 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
     ///
     /// PAYLOAD EVOLUTION:
     /// - Step results may now receive a payload representation through <see cref="IAiExecutionDataPolicy"/>
-    /// - This is intentionally additive and does not remove or mutate the legacy inline value
-    /// - The goal is to prepare ledger compaction without breaking existing callers, tests, replay, or bindings
+    /// - Small values remain inline as before
+    /// - Large values may be externalized by the policy and replaced with a compact inline summary
+    /// - The goal is to reduce ledger/state size without breaking execution, retry, replay, or bindings
     ///
     /// SEMANTICS:
     /// - <see cref="AiStepExecutionMetadata.AttemptCount"/> counts local in-process attempts
@@ -45,16 +46,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         /// <summary>
         /// Initializes a new instance of the <see cref="AiStepExecutor"/> class.
         /// </summary>
-        /// <param name="exceptionClassifier">
-        /// Classifies exceptions to determine whether they are retryable.
-        /// </param>
-        /// <param name="logger">
-        /// Runtime logger used to emit structured step execution events.
-        /// </param>
-        /// <param name="dataPolicy">
-        /// Policy used to create a stored payload representation for step result values.
-        /// This is a non-breaking bridge toward artifact-backed execution payloads.
-        /// </param>
         public AiStepExecutor(
             IAiRetryExceptionClassifier exceptionClassifier,
             IAiRuntimeLogger logger,
@@ -71,21 +62,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
 
         /// <summary>
         /// Executes the specified resolved step using local attribute-driven retry behavior.
-        ///
-        /// FLOW:
-        /// - Resolve retry policy from the concrete step type
-        /// - Load or create local step execution metadata
-        /// - Skip execution if local metadata already marks the step as completed
-        /// - Execute the step
-        /// - Attach payload representation to successful or failed results when applicable
-        /// - Retry locally when policy allows and the exception is retryable
-        /// - Return the final <see cref="AiStepResult"/> or rethrow the terminal exception
-        ///
-        /// IMPORTANT:
-        /// - This method performs only local retry within the current process
-        /// - It does not schedule durable DAG retry windows
-        /// - It does not mutate distributed retry counters in <see cref="AiStepState"/>
-        /// - Payload attachment is additive and does not remove the inline result value
         /// </summary>
         public async Task<AiStepResult> ExecuteAsync(
             ResolvedAiPipelineStep resolvedStep,
@@ -98,24 +74,15 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
 
             var stepType = resolvedStep.Step.GetType();
 
-            // Primary runtime identity comes from the resolved pipeline step name.
-            // Fallback type name support is kept for compatibility with tests or
-            // older metadata that may have used the concrete type name instead.
             var stepName = resolvedStep.Name;
             var fallbackStepName = stepType.Name;
 
             var retryPolicy = stepType.GetCustomAttribute<AiRetryPolicyAttribute>(inherit: true);
 
-            // Attempt to reuse existing local step execution metadata.
-            // We first try the resolved logical step name, then the fallback type name
-            // for compatibility with older or test-oriented metadata keys.
             var metadata =
                 TryGetStepMetadata(context.State, stepName)
                 ?? TryGetStepMetadata(context.State, fallbackStepName);
 
-            // Local idempotency safeguard:
-            // if this step has already completed successfully in local execution metadata,
-            // skip re-execution and return a successful no-op result.
             if (metadata != null && metadata.IsCompleted)
             {
                 _logger.StepExecutor.Skipped(context.ExecutionId, stepName);
@@ -124,7 +91,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                     output: $"Step '{stepName}' was skipped because it had already completed successfully.");
             }
 
-            // Always create or bind metadata using the primary logical step identity.
             metadata ??= GetOrCreateStepMetadata(context.State, stepName);
 
             while (true)
@@ -204,18 +170,21 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         }
 
         /// <summary>
-        /// Attaches a stored payload representation to the step result when a primary
-        /// value exists and no payload has already been assigned.
+        /// Attaches payload representations to the step result.
         ///
-        /// PURPOSE:
-        /// - Introduces payload indirection at the central step execution boundary
-        /// - Allows future storage policies to keep small values inline and move large
-        ///   values to artifact-backed storage
+        /// BEHAVIOR:
+        /// - Processes primary Value (already implemented)
+        /// - Processes structured Data entries (NEW)
         ///
-        /// COMPATIBILITY:
-        /// - This method does not clear or mutate <see cref="AiStepResult.Value"/>
-        /// - Existing bindings, tests, replay, and serializers continue to see the same inline value
-        /// - Payload-aware callers may start reading <see cref="AiStepResult.Payload"/>
+        /// DESIGN:
+        /// - Large values are externalized
+        /// - Inline values are preserved
+        /// - Data entries remain accessible via existing APIs
+        ///
+        /// IMPORTANT:
+        /// - No breaking changes
+        /// - Data dictionary is preserved (only values replaced with summary when needed)
+        /// - DataPayloads holds real payload references
         /// </summary>
         private async Task AttachPayloadAsync(
             AiStepResult result,
@@ -223,25 +192,68 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
         {
             ArgumentNullException.ThrowIfNull(result);
 
-            if (result.Value is null)
+            // ---------------------------------------------------------------------
+            // PRIMARY VALUE (EXISTING LOGIC)
+            // ---------------------------------------------------------------------
+            if (result.Value is not null && result.Payload == null)
+            {
+                var originalValue = result.Value;
+
+                var payload = await _dataPolicy.StoreAsync(
+                    originalValue,
+                    cancellationToken);
+
+                result.Payload = payload;
+
+                if (!payload.IsInline)
+                {
+                    result.Value = new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["payloadExternalized"] = true,
+                        ["artifactId"] = payload.ArtifactId,
+                        ["contentHash"] = payload.ContentHash,
+                        ["sizeBytes"] = payload.SizeBytes,
+                        ["contentType"] = payload.ContentType
+                    };
+                }
+            }
+
+            // ---------------------------------------------------------------------
+            // STRUCTURED DATA 
+            // ---------------------------------------------------------------------
+            if (result.Data == null || result.Data.Count == 0)
                 return;
 
-            if (result.Payload != null)
-                return;
+            foreach (var entry in result.Data.ToList()) // copy to avoid mutation issues
+            {
+                var key = entry.Key;
+                var value = entry.Value;
 
-            result.Payload = await _dataPolicy.StoreAsync(
-                result.Value,
-                cancellationToken);
+                if (value is null)
+                    continue;
+
+                var payload = await _dataPolicy.StoreAsync(value, cancellationToken);
+
+                if (payload.IsInline)
+                    continue;
+
+                // initialize payload dictionary
+                result.DataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
+
+                result.DataPayloads[key] = payload;
+
+                // replace inline value with compact summary
+                result.Data[key] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["payloadExternalized"] = true,
+                    ["artifactId"] = payload.ArtifactId,
+                    ["contentHash"] = payload.ContentHash,
+                    ["sizeBytes"] = payload.SizeBytes,
+                    ["contentType"] = payload.ContentType
+                };
+            }
         }
 
-        /// <summary>
-        /// Attempts to retrieve existing local step execution metadata without creating it.
-        ///
-        /// Returns <c>null</c> when:
-        /// - no step execution metadata bag exists
-        /// - the bag exists but has an unexpected type
-        /// - the specified step key is not present
-        /// </summary>
         private static AiStepExecutionMetadata? TryGetStepMetadata(
             AiExecutionState state,
             string stepName)
@@ -257,15 +269,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
                 : null;
         }
 
-        /// <summary>
-        /// Begins a new local execution attempt.
-        ///
-        /// This method:
-        /// - increments <see cref="AiStepExecutionMetadata.AttemptCount"/>
-        /// - marks metadata status as <see cref="AiStepExecutionStatus.Running"/>
-        /// - records the latest attempt start time
-        /// - preserves the first attempt start time once set
-        /// </summary>
         private static void BeginAttempt(AiStepExecutionMetadata metadata)
         {
             metadata.AttemptCount++;
@@ -274,14 +277,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             metadata.FirstStartedAtUtc ??= metadata.LastStartedAtUtc;
         }
 
-        /// <summary>
-        /// Marks the local execution metadata as successfully completed.
-        ///
-        /// This method:
-        /// - sets status to <see cref="AiStepExecutionStatus.Completed"/>
-        /// - records completion time
-        /// - clears the last error and exception type
-        /// </summary>
         private static void MarkSucceeded(AiStepExecutionMetadata metadata)
         {
             metadata.Status = AiStepExecutionStatus.Completed;
@@ -290,19 +285,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             metadata.LastExceptionType = null;
         }
 
-        /// <summary>
-        /// Determines whether the current exception should trigger another local retry attempt.
-        ///
-        /// RULES:
-        /// - if no retry policy is declared, retry is disabled
-        /// - if the current local attempt count exceeds the configured max retry count, retry is disabled
-        /// - if <see cref="AiRetryPolicyAttribute.RetryTransientOnly"/> is false, all exceptions are retryable
-        /// - otherwise exception retryability is delegated to <see cref="IAiRetryExceptionClassifier"/>
-        ///
-        /// IMPORTANT:
-        /// - <paramref name="attemptCount"/> is the local in-process attempt count
-        /// - it is not the same thing as durable DAG retry count
-        /// </summary>
         private bool ShouldRetry(
             Exception exception,
             AiRetryPolicyAttribute? retryPolicy,
@@ -320,17 +302,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             return _exceptionClassifier.IsRetryable(exception);
         }
 
-        /// <summary>
-        /// Computes the delay before the next local retry attempt.
-        ///
-        /// Supported modes:
-        /// - <see cref="AiRetryBackoffMode.Fixed"/>
-        /// - <see cref="AiRetryBackoffMode.Exponential"/>
-        ///
-        /// IMPORTANT:
-        /// - delay is computed from local retry policy only
-        /// - this does not schedule durable retry windows in execution state
-        /// </summary>
         private static TimeSpan ComputeDelay(
             AiRetryPolicyAttribute retryPolicy,
             int attemptCount)
@@ -351,13 +322,6 @@ namespace Multiplexed.AI.Runtime.Pipeline.Retry
             };
         }
 
-        /// <summary>
-        /// Gets the local step execution metadata map or creates it when missing,
-        /// then returns the entry for the specified logical step name.
-        ///
-        /// If the step metadata entry does not yet exist, a new one is created.
-        /// Updates <see cref="AiExecutionState.UpdatedAtUtc"/>.
-        /// </summary>
         private static AiStepExecutionMetadata GetOrCreateStepMetadata(
             AiExecutionState state,
             string stepName)

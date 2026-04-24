@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -23,6 +24,7 @@ using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
@@ -87,7 +89,12 @@ namespace Multiplexed.AI.DI
             // Memory payload : policies and resolvers
             // ------------------------------------------------------------
             services.AddSingleton<IAiPayloadStore, InMemoryAiPayloadStore>();
+            services.TryAddSingleton<IAiMemoryScoringPolicy, DefaultAiMemoryScoringPolicy>();
+            services.TryAddSingleton<IAiMemoryLifecyclePolicy, DefaultAiMemoryLifecyclePolicy>();
             services.AddSingleton<IAiExecutionDataPolicy, SmartInlineAiExecutionDataPolicy>();
+            services.TryAddSingleton<IAiConsolidatedMemoryStore, InMemoryAiConsolidatedMemoryStore>();
+            services.TryAddSingleton<IAiMemoryLifecycleEngine, DefaultAiMemoryLifecycleEngine>();
+            services.TryAddSingleton<IAiMemoryWriter, DefaultAiMemoryWriter>();
             services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
 
             // ------------------------------------------------------------
