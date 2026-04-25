@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
@@ -12,7 +14,6 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine
 {
@@ -49,6 +50,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         private readonly IAiRuntimeMetrics _metrics;
         private readonly IAiExecutionSnapshotService<ExecutionContextSnapshot>? _snapshotService;
         private readonly IAiStepResultPayloadCompactor _payloadCompactor;
+        private readonly IAiExecutionStateRetentionPolicy _retentionPolicy;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
@@ -82,6 +84,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
             _payloadCompactor = payloadCompactor ?? throw new ArgumentNullException(nameof(payloadCompactor));
             _snapshotService = snapshotService;
+            _retentionPolicy = Services.GetService(typeof(IAiExecutionStateRetentionPolicy))
+                as IAiExecutionStateRetentionPolicy ?? throw new InvalidOperationException("IAiExecutionStateRetentionPolicy service is not registered.");
         }
 
         /// <inheritdoc />
@@ -1170,6 +1174,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// TERMINAL BEHAVIOR:
         /// - Completed / Failed / Cancelled execution states are finalized atomically through the DAG store
         /// - If another worker wins the terminal race, the authoritative record is reloaded
+        /// - Execution state retention is applied before finalization to ensure a compact terminal snapshot
         ///
         /// NON-TERMINAL BEHAVIOR:
         /// - Falls back to the standard optimistic persistence flow
@@ -1179,10 +1184,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// - No terminal-state downgrade
         /// - Deterministic final record projection across workers
         ///
+        /// RETENTION:
+        /// - Retention is applied only when convergence is terminal and finalization is allowed
+        /// - Only completed steps are eligible for removal based on configured limits
+        /// - Non-terminal steps (Running, Ready, WaitingForRetry, Failed) are never removed
+        /// - Externalized payloads remain accessible via the payload store (Mongo/Redis)
+        ///
         /// IMPORTANT:
         /// - The step-state snapshot remains the source of truth
         /// - The <paramref name="convergence"/> argument is the evaluated truth derived from that step-state
         /// - The execution record is only the projection being persisted
+        /// - Retention must be applied before finalization to ensure consistent snapshot and persisted state
         /// </summary>
         /// <param name="record">The execution record projection to persist.</param>
         /// <param name="convergence">The evaluated convergence result derived from the current step-state snapshot.</param>
@@ -1235,10 +1247,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             // - Idempotent (can be called multiple times safely)
             // - Monotonic (cannot downgrade terminal state)
             //
+            // RETENTION INTEGRATION:
+            // - Execution state retention is applied immediately before finalization
+            // - Only completed steps may be evicted based on configured limits
+            // - Non-terminal steps (Running, Ready, WaitingForRetry, Failed) are preserved
+            // - Externalized payloads remain accessible via the payload store (Mongo/Redis)
+            // - Ensures final state, snapshot, and persisted record remain compact
+            //
             // IMPORTANT:
             // - Convergence MUST be evaluated BEFORE entering this block
             // - This method does NOT decide truth, it only persists it
             // - Step-state remains the single source of truth
+            // - Retention must occur BEFORE finalization to ensure consistency
             //
             // FAILURE SCENARIO:
             // - If this worker loses the race, we MUST reload the authoritative record
@@ -1247,6 +1267,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             {
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
+
+                // RETENTION HERE
+                TryApplyStateRetention(state);
 
                 var request = new AiDagExecutionFinalizationRequest
                 {
@@ -1321,6 +1344,46 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             record.RenewExecutionStepKey();
 
             await _dagStore.SaveRecordAsync(record, cancellationToken);
+        }
+
+        /// <summary>
+        /// Attempts to apply execution state retention using the configured retention policy.
+        /// 
+        /// PURPOSE:
+        /// - Limits the number of completed steps retained in <see cref="AiExecutionState"/>.
+        /// - Prevents unbounded growth of execution state for long-running pipelines.
+        /// - Ensures terminal snapshots remain compact and efficient.
+        /// 
+        /// DESIGN:
+        /// - Uses the pre-resolved <see cref="IAiExecutionStateRetentionPolicy"/> if available.
+        /// - Operates as a best-effort, non-blocking optimization step.
+        /// 
+        /// IMPORTANT:
+        /// - This method is intentionally optional: if no policy is configured, no retention is applied.
+        /// - Must be invoked only when execution is in a terminal state (Completed/Failed).
+        /// - Does not remove non-terminal steps (Running, Ready, WaitingForRetry, Failed).
+        /// - Externalized payloads remain accessible via the payload store.
+        /// 
+        /// SAFETY:
+        /// - This method must never throw or interrupt execution finalization.
+        /// </summary>
+        /// <param name="state">The execution state to apply retention to.</param>
+        private void TryApplyStateRetention(AiExecutionState state)
+        {
+            if (state is null)
+                return;
+
+            if (_retentionPolicy is null)
+                return;
+
+            try
+            {
+                _retentionPolicy.Apply(state);
+            }
+            catch
+            {
+                // Intentionally swallow exceptions to preserve engine stability.
+            }
         }
 
         /// <summary>

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -15,9 +16,11 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
+using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -526,7 +529,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var stepExecutor = new AiStepExecutor(classifier, logger);
 
-
             var services = new ServiceCollection();
 
             services.AddAiStepsFromAssemblies(
@@ -545,7 +547,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var cleanupService = new NoOpAiExecutionCleanupService();
 
-
             var aiOptions = new AiEngineOptions();
 
             aiOptions.Cleanup = new AiExecutionCleanupOptions
@@ -557,33 +558,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new AiRuntimeMetrics();
 
-            var payloadStore = new InMemoryAiPayloadStore();
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
-            var payloadOptions = Options.Create(new AiPayloadStoreOptions
-            {
-                Enabled = true,
-                Provider = "inmemory",
-                RequireReplaySafePayloads = false,
-                MaxInlineSizeBytes = 2048
-            });
-
             var metricsPayload = new InMemoryAiPayloadMetrics();
             var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
+
+            var retentionPolicy = CreateDisabledRetentionPolicy();
 
             var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
                 accessor,
                 contextFactory,
-                CreateServiceProvider(accessor, executionStore, dagStore),
+                CreateServiceProvider(accessor, executionStore, dagStore, retentionPolicy),
                 pipelineExecutor,
                 logger,
-                cleanupService,Options.Create(aiOptions),
+                cleanupService,
+                Options.Create(aiOptions),
                 metrics,
                 payloadCompactor,
                 dagStore);
-
 
             accessor.Set(CreateRuntimeContext());
 
@@ -826,15 +818,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var metricsPayload = new InMemoryAiPayloadMetrics();
             var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
 
+            var retentionPolicy = CreateDisabledRetentionPolicy();
+
             var engine = new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
                 accessor,
                 contextFactory,
-                CreateServiceProvider(accessor, executionStore, dagStore),
+                CreateServiceProvider(accessor, executionStore, dagStore, retentionPolicy),
                 pipelineExecutor,
                 logger,
-                cleanupService, Options.Create(aiOptions),
+                cleanupService,
+                Options.Create(aiOptions),
                 metrics,
                 payloadCompactor,
                 dagStore);
@@ -856,8 +851,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var metrics = new AiRuntimeMetrics();
             var keyBuilder = new AiExecutionKeyBuilder();
 
-            var normalizers = new DefaultAiStepResultNormalizerPipeline([ new RagStepResultNormalizer()]);
+            var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
             return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics, normalizers);
+        }
+
+        private static IAiExecutionStateRetentionPolicy CreateDisabledRetentionPolicy()
+        {
+            return new DefaultAiExecutionStateRetentionPolicy(
+                new AiExecutionStateRetentionOptions
+                {
+                    Enabled = false
+                },
+                new InMemoryAiExecutionRetentionMetrics());
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(string fileName = "dag-parallel-basic.json")
@@ -886,13 +891,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         private static IServiceProvider CreateServiceProvider(
             ExecutionContextAccessor accessor,
             IAiExecutionStore store,
-            IAiDagExecutionStore dagStore)
+            IAiDagExecutionStore dagStore,
+            IAiExecutionStateRetentionPolicy retentionPolicy)
         {
             return new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
                 [typeof(IAiExecutionStore)] = store,
-                [typeof(IAiDagExecutionStore)] = dagStore
+                [typeof(IAiDagExecutionStore)] = dagStore,
+                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy
             });
         }
 

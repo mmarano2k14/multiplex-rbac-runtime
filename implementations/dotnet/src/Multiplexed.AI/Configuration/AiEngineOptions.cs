@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.AI.Runtime.Configuration;
 
 namespace Multiplexed.AI.Configuration
@@ -54,5 +55,11 @@ namespace Multiplexed.AI.Configuration
         /// Gets or sets payload-store-related runtime options.
         /// </summary>
         public AiPayloadStoreOptions PayloadStore { get; set; } = new();
+
+        
+        /// <summary>
+        /// Gets or sets execution state retention options.
+        /// </summary>
+        public AiExecutionStateRetentionOptions StateRetention { get; set; } = new();
     }
 }

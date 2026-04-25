@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -27,6 +28,7 @@ using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
+using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
@@ -81,6 +83,15 @@ namespace Multiplexed.AI.DI
         {
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(options);
+
+            // ------------------------------------------------------------
+            // Execution State retention policy
+            // ------------------------------------------------------------
+            services.TryAddSingleton<IAiExecutionStateRetentionPolicy>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                return new DefaultAiExecutionStateRetentionPolicy(options.StateRetention);
+            });
 
             // ------------------------------------------------------------
             // Options

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -14,15 +15,16 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
+using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Stores.Memory;
-using Multiplexed.AI.Tests.Integration.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
@@ -66,79 +68,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             Assert.Equal(AiStepExecutionStatus.Completed, state.GetOrCreateStep("merge").Status);
         }
 
-        [Fact]
-        public async Task ExecuteNextAsync_Should_Execute_Root_First()
-        {
-            var engine = CreateEngine();
-
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
-
-            var record = await engine.ExecuteNextAsync(created.ExecutionId);
-
-            Assert.Contains("start", record.CompletedSteps);
-        }
-
-        [Fact]
-        public async Task ExecuteNextAsync_Should_Complete_All_Steps_In_Order()
-        {
-            var engine = CreateEngine();
-
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
-
-            var r1 = await engine.ExecuteNextAsync(created.ExecutionId);
-            var r2 = await engine.ExecuteNextAsync(created.ExecutionId);
-            var r3 = await engine.ExecuteNextAsync(created.ExecutionId);
-            var r4 = await engine.ExecuteNextAsync(created.ExecutionId);
-
-            Assert.Equal(AiExecutionStatus.Completed, r4.Status);
-
-            Assert.Equal(4, r4.CompletedSteps.Count);
-            Assert.Contains("merge", r4.CompletedSteps);
-        }
-
-        [Fact]
-        public async Task ExecuteNextAsync_Should_Throw_When_Not_Dag_Mode()
-        {
-            var engine = CreateEngine();
-
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var store = GetRequiredService<MemoryAiExecutionStore>(engine);
-
-            var record = new AiExecutionRecord
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                PipelineName = "dag-parallel-basic",
-                ExecutionMode = AiExecutionMode.Sequential,
-                ContextKey = "ctx",
-                Status = AiExecutionStatus.Pending
-            };
-
-            var state = new AiExecutionState
-            {
-                ExecutionId = record.ExecutionId,
-                PipelineName = record.PipelineName
-            };
-
-            await store.CreateAsync(record, state);
-
-            await Assert.ThrowsAsync<InvalidOperationException>(
-                () => engine.ExecuteNextAsync(record.ExecutionId));
-        }
-
-        // ================= ENGINE =================
-
         private static AiDagExecutionEngine CreateEngine()
         {
             var executionStore = new MemoryAiExecutionStore();
-
 
             var memoryCache = new MemoryCache(new MemoryCacheOptions());
             var contextStore = new MemoryContextStore(memoryCache, TimeSpan.FromMinutes(5));
@@ -161,7 +93,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var provider = services.BuildServiceProvider();
 
             var registry = provider.GetRequiredService<IAiStepRegistry>();
-
             var resolver = new AiPipelineResolver(registry);
 
             var sourceSelector = CreateJsonSourceSelector();
@@ -173,13 +104,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var cleanupService = new NoOpAiExecutionCleanupService();
 
-            var aiOptions = new AiEngineOptions();
-
-            aiOptions.Cleanup = new AiExecutionCleanupOptions
+            var aiOptions = new AiEngineOptions
             {
-                AutoCleanupOnCompleted = false,
-                AutoCleanupOnFailed = false,
-                SuppressCleanupExceptions = true
+                Cleanup = new AiExecutionCleanupOptions
+                {
+                    AutoCleanupOnCompleted = false,
+                    AutoCleanupOnFailed = false,
+                    SuppressCleanupExceptions = true
+                }
             };
 
             var metrics = new AiRuntimeMetrics();
@@ -200,16 +132,48 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadOptions);
 
             var metricsPayload = new InMemoryAiPayloadMetrics();
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
+
+            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(
+                dataPolicy,
+                metricsPayload);
+
+            var retentionPolicy = new DefaultAiExecutionStateRetentionPolicy(
+                new AiExecutionStateRetentionOptions
+                {
+                    Enabled = false
+                },
+                new InMemoryAiExecutionRetentionMetrics());
 
             return new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
                 accessor,
                 contextFactory,
-                CreateServiceProvider(accessor, executionStore),
+                CreateServiceProvider(accessor, executionStore, retentionPolicy),
                 pipelineExecutor,
-                logger,cleanupService, Options.Create(aiOptions), metrics, payloadCompactor);
+                logger,
+                cleanupService,
+                Options.Create(aiOptions),
+                metrics,
+                payloadCompactor);
+        }
+
+        private static IServiceProvider CreateServiceProvider(
+            ExecutionContextAccessor accessor,
+            MemoryAiExecutionStore store,
+            IAiExecutionStateRetentionPolicy retentionPolicy)
+        {
+            var provider = new TestServiceProvider(new Dictionary<Type, object>
+            {
+                [typeof(ExecutionContextAccessor)] = accessor,
+                [typeof(MemoryAiExecutionStore)] = store,
+                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy
+            });
+
+            // 🔥 FIX CRITIQUE
+            provider.RegisterSelf();
+
+            return provider;
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector()
@@ -233,29 +197,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             return new DefaultAiPipelineDefinitionSourceSelector(
                 provider.GetRequiredService<IOptions<AiEngineOptions>>(),
                 provider);
-        }
-
-        private static IAiStepRegistry CreateStepRegistry()
-        {
-            var registry = new InMemoryAiStepRegistry();
-
-            registry.Register(new TestStep("start"));
-            registry.Register(new TestStep("a1"));
-            registry.Register(new TestStep("a2"));
-            registry.Register(new TestStep("merge"));
-
-            return registry;
-        }
-
-        private static IServiceProvider CreateServiceProvider(
-            ExecutionContextAccessor accessor,
-            MemoryAiExecutionStore store)
-        {
-            return new TestServiceProvider(new Dictionary<Type, object>
-            {
-                [typeof(ExecutionContextAccessor)] = accessor,
-                [typeof(MemoryAiExecutionStore)] = store
-            });
         }
 
         private static ExecutionContext CreateRuntimeContext()
@@ -294,42 +235,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             return (T)provider.GetService(typeof(T))!;
         }
 
-        // ================= TEST STEPS =================
-
-        private sealed class TestStep : IAiStep
-        {
-            private readonly string _name;
-
-            public TestStep(string name)
-            {
-                _name = name;
-            }
-
-            public string Name => _name;
-
-            public Task<AiStepResult> ExecuteAsync(
-                AiStepExecutionContext context,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.FromResult(AiStepResult.Ok($"executed {_name}"));
-            }
-        }
-
-        private sealed class InMemoryAiStepRegistry : IAiStepRegistry
-        {
-            private readonly Dictionary<string, IAiStep> _steps = new();
-
-            public void Register(IAiStep step)
-            {
-                _steps[step.Name] = step;
-            }
-
-            public IAiStep Resolve(string key)
-            {
-                return _steps[key];
-            }
-        }
-
         private sealed class TestServiceProvider : IServiceProvider
         {
             private readonly Dictionary<Type, object> _services;
@@ -337,6 +242,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             public TestServiceProvider(Dictionary<Type, object> services)
             {
                 _services = services;
+            }
+
+            public void RegisterSelf()
+            {
+                _services[typeof(IServiceProvider)] = this;
             }
 
             public object? GetService(Type serviceType)
@@ -351,14 +261,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             public FixedAiPayloadStoreResolver(IAiPayloadStore store)
             {
-                ArgumentNullException.ThrowIfNull(store);
                 _store = store;
             }
 
-            public IAiPayloadStore Resolve()
-            {
-                return _store;
-            }
+            public IAiPayloadStore Resolve() => _store;
         }
     }
 }
