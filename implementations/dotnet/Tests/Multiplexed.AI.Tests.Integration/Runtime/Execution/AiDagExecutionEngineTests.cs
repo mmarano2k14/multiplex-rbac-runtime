@@ -15,6 +15,7 @@ using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -198,7 +199,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadStoreResolver,
                 payloadOptions);
 
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy);
+            var metricsPayload = new InMemoryAiPayloadMetrics();
+            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
 
             return new AiDagExecutionEngine(
                 executionStore,

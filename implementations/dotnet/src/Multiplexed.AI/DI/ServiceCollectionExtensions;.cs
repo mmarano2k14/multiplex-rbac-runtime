@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -23,6 +24,7 @@ using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Logging;
@@ -103,9 +105,14 @@ namespace Multiplexed.AI.DI
             });
 
             // Concrete stores (NE PAS exposer IAiPayloadStore ici)
+
+            services.TryAddSingleton<IAiPayloadMetrics, InMemoryAiPayloadMetrics>();
             services.TryAddSingleton<InMemoryAiPayloadStore>();
             services.TryAddSingleton<MongoAiPayloadStore>();
-            services.TryAddSingleton<RedisCachedAiPayloadStore>();
+            services.TryAddSingleton<RedisAiPayloadStore>();
+            services.TryAddSingleton<MongoRedisCachedAiPayloadStore>();
+
+           
             services.TryAddSingleton<IAiStepResultPayloadCompactor, DefaultAiStepResultPayloadCompactor>();
 
             // Resolver (point d’entrée UNIQUE)

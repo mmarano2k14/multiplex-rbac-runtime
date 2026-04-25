@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using System.Text.Json;
 using Xunit;
 
@@ -38,7 +39,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution.Payloads
             });
 
             var dataPolicy = new SmartInlineAiExecutionDataPolicy(storeResolver, options);
-            var compactor = new DefaultAiStepResultPayloadCompactor(dataPolicy);
+            var metrics = new InMemoryAiPayloadMetrics();
+            var compactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metrics);
             var resolver = new DefaultAiExecutionPayloadResolver(storeResolver);
 
             var largeValue = new string('A', 5000);
@@ -74,7 +76,8 @@ namespace Multiplexed.AI.Tests.Runtime.Execution.Payloads
             });
 
             var dataPolicy = new SmartInlineAiExecutionDataPolicy(storeResolver, options);
-            var compactor = new DefaultAiStepResultPayloadCompactor(dataPolicy);
+            var metrics = new InMemoryAiPayloadMetrics();
+            var compactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metrics);
             var resolver = new DefaultAiExecutionPayloadResolver(storeResolver);
 
             var largeDataValue = new string('B', 5000);

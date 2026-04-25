@@ -53,7 +53,7 @@
         /// <summary>
         /// Gets the estimated payload size in bytes, when known.
         /// </summary>
-        public long? SizeBytes { get; init; }
+        public long? SizeBytes { get; set; }
 
         /// <summary>
         /// Gets the payload content type, when known.

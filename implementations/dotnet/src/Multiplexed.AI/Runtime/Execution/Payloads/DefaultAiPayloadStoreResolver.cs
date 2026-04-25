@@ -16,10 +16,12 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
     /// SUPPORTED PROVIDERS:
     /// - inmemory
     /// - mongo
+    /// - redis
     /// - mongo-redis
     ///
     /// IMPORTANT:
     /// - In-memory is not replay-safe after process restart.
+    /// - Redis-only is not replay-safe after eviction, expiration or flush.
     /// - Mongo is the recommended durable provider.
     /// - Mongo-Redis uses Mongo as source of truth and Redis as bounded cache.
     /// </summary>
@@ -39,6 +41,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
             _options = options.Value;
         }
 
+        /// <inheritdoc />
         public IAiPayloadStore Resolve()
         {
             if (!_options.Enabled)
@@ -48,10 +51,11 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
 
             var provider = (_options.Provider ?? "inmemory").Trim().ToLowerInvariant();
 
-            if (_options.RequireReplaySafePayloads && provider == "inmemory")
+            if (_options.RequireReplaySafePayloads &&
+                (provider == "inmemory" || provider == "redis"))
             {
                 throw new InvalidOperationException(
-                    "Replay-safe payloads are required, but the configured payload store provider is 'inmemory'. " +
+                    $"Replay-safe payloads are required, but the configured payload store provider is '{provider}'. " +
                     "Use 'mongo' or 'mongo-redis' for replay-safe payload storage.");
             }
 
@@ -59,13 +63,15 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
             {
                 "mongo" => _services.GetRequiredService<MongoAiPayloadStore>(),
 
-                "mongo-redis" => _services.GetRequiredService<RedisCachedAiPayloadStore>(),
+                "redis" => _services.GetRequiredService<RedisAiPayloadStore>(),
+
+                "mongo-redis" => _services.GetRequiredService<MongoRedisCachedAiPayloadStore>(),
 
                 "inmemory" => _services.GetRequiredService<InMemoryAiPayloadStore>(),
 
                 _ => throw new InvalidOperationException(
                     $"Unsupported AI payload store provider '{_options.Provider}'. " +
-                    "Supported providers are: inmemory, mongo, mongo-redis.")
+                    "Supported providers are: inmemory, mongo, redis, mongo-redis.")
             };
         }
     }

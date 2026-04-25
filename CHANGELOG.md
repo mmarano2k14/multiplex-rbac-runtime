@@ -6,7 +6,58 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [1.0.3.0] - 2026-04-25
+## [1.0.3.1 ] - 2026-04-25
+
+## Payload System Finalization
+
+### 🚀 Added
+
+- Mongo-Redis payload store:
+  - Mongo as durable source of truth
+  - Redis as bounded read-through/write-through cache
+- Redis-only payload store (non replay-safe)
+- Payload metrics:
+  - inline_count / externalized_count
+  - inline_bytes / externalized_bytes
+  - cache_hit / cache_miss / cache_fallback / cache_write
+- SizeBytes tracking in AiStoredPayload
+
+### 🧠 Architecture
+
+- Redis cache implemented as decorator over payload store
+- MongoRedisCachedAiPayloadStore uses composition (no duplication)
+- Resolver now supports:
+  - `inmemory`
+  - `mongo`
+  - `redis`
+  - `mongo-redis`
+
+### 🧪 Tests
+
+- Compactor-level payload tests
+- Redis cache integration tests
+- Mongo-Redis provider integration tests
+- Engine-level pipeline tests (code-first, no JSON)
+- Long-run test (200 steps) validating stability and metrics
+
+### ⚠️ Breaking Changes
+
+- Mongo payload store requires `Mongo.Enabled = true`
+- IAiPayloadMetrics is now required in DI
+- Payload system now depends on metrics for observability
+- New providers available: `redis`, `mongo-redis`
+
+### 🎯 Result
+
+Payload system is now production-ready:
+- Durable ✔
+- Cached ✔
+- Observable ✔
+- Scalable ✔
+
+---
+
+## [1.0.3.0 ] - 2026-04-25
 
 ## 🚀 Payload Compaction & Payload-Aware Runtime
 
