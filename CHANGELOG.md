@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+## [1.0.3.1 ] - 2026-04-26
+
+## Major Runtime Refactor — State + Step Context Architecture
+
+### Execution State
+
+- Refactored `AiExecutionState` into a persistence-only model.
+- Introduced:
+  - `IAiExecutionStateReader`
+  - `IAiExecutionStateWriter`
+- Removed direct state access patterns:
+  - `state.Get(...)`
+  - `state.Set(...)`
+  - `state.GetMetadata(...)`
+  - `state.SetMetadata(...)`
+- Centralized step state management via writer (`GetOrCreateStep`).
+
+### Step Context & Arguments
+
+- Introduced `IAiStepContextHelper` and factory.
+- Introduced `IAiContextValueResolver` for path-based value resolution.
+- Introduced `IAiStepArguments` for structured step inputs.
+- Introduced `IAiAdditionalInputsContainer` for extensible input binding.
+- Removed raw dictionary-based step argument handling.
+
+### Runtime Architecture
+
+- Decoupled:
+  - execution state
+  - step context resolution
+  - payload resolution
+- Ensured payload-aware state reading through reader abstraction.
+- Improved DI consistency across runtime and tests.
+
+### Tests
+
+- Refactored DAG, Redis, retry, and pipeline tests.
+- Replaced direct state access with reader/writer.
+- Fixed DI-related failures.
+- Verified full test suite (250+ tests) passes.
+
+### Outcome
+
+- Cleaner architecture boundaries
+- Safer mutation model
+- Extensible step input system
+- Deterministic execution behavior
+
+---
 
 ## [1.0.3.1 ] - 2026-04-25
 
