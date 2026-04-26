@@ -1,8 +1,9 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;
-using Multiplexed.AI.Runtime.AI.Rag.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 /// <summary>
 /// Merges multiple retrieval batches into a single deterministic batch.
@@ -53,7 +54,17 @@ public sealed class RagMergeStep : IAiStep
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var sourceSteps = RagStepHelper.GetRequiredSourceSteps(context);
+        var helper = context.GetHelper();
+
+        var sourceSteps = await helper.GetRequiredConfigAsync<List<string>>(
+                            "sourceSteps",
+                            cancellationToken);
+
+        if (sourceSteps is null || sourceSteps.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "rag.merge: Config 'sourceSteps' cannot be empty.");
+        }
 
         var batches = new List<RagRetrievalBatch>(sourceSteps.Count);
 
@@ -61,8 +72,7 @@ public sealed class RagMergeStep : IAiStep
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var batch = await RagStepHelper.GetRequiredBatchAsync(
-                context,
+            var batch = await helper.GetRequiredBatchAsync(
                 stepName,
                 cancellationToken);
 
@@ -75,12 +85,12 @@ public sealed class RagMergeStep : IAiStep
 
         return AiStepResult.Ok(
             output: $"Merged {batches.Count} batch(es) into {merged.Items.Count} item(s).",
-            data: new Dictionary<string, object?>(StringComparer.Ordinal)
+            data: helper.ToDictionary(new
             {
-                ["batch"] = merged,
-                ["itemCount"] = merged.Items.Count,
-                ["diagnostics"] = merged.Diagnostics
-            });
+                batch = merged,
+                itemCount = merged.Items.Count,
+                diagnostics = merged.Diagnostics
+            }, ignoreNull: true));
     }
 
     /// <summary>

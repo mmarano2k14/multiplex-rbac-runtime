@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
@@ -146,8 +147,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 // Phase 3:
                 // Wait retry window → race again → ONLY ONE retry execution
                 // -----------------------------------------------------------------
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -185,8 +189,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 // -----------------------------------------------------------------
                 if (step2.Status == AiStepExecutionStatus.WaitingForRetry)
                 {
+               
+
                     await WaitUntilRetryWindowOpensAsync(
                         dagStore,
+                        stateWriter,
                         record.ExecutionId,
                         "start");
 
@@ -298,7 +305,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 executionErrors = new ConcurrentBag<Exception>();
 
-                await WaitUntilRetryWindowOpensAsync(dagStore, record.ExecutionId, "start");
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
+                await WaitUntilRetryWindowOpensAsync(
+                    dagStore,
+                    stateWriter,
+                    record.ExecutionId,
+                    "start");
 
                 await ParallelRunWorkersAsync(50, async () =>
                 {
@@ -391,7 +404,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 executionErrors = new ConcurrentBag<Exception>();
 
-                await WaitUntilRetryWindowOpensAsync(dagStore, record.ExecutionId, "start");
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
+                await WaitUntilRetryWindowOpensAsync(
+                    dagStore,
+                    stateWriter,
+                    record.ExecutionId,
+                    "start");
 
                 await ParallelRunWorkersAsync(10, async () =>
                 {
@@ -464,7 +483,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 executionErrors = new ConcurrentBag<Exception>();
 
-                await WaitUntilRetryWindowOpensAsync(dagStore, record.ExecutionId, "start");
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
+                await WaitUntilRetryWindowOpensAsync(
+                    dagStore,
+                    stateWriter,
+                    record.ExecutionId,
+                    "start");
 
                 await ParallelRunWorkersWithJitterAsync(20, 0, 150, async () =>
                 {
@@ -537,10 +562,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// relying on local timing assumptions.
         /// </summary>
         private static async Task WaitUntilRetryWindowOpensAsync(
-            IAiDagExecutionStore dagStore,
-            string executionId,
-            string stepName,
-            CancellationToken cancellationToken = default)
+    IAiDagExecutionStore dagStore,
+    IAiExecutionStateWriter stateWriter,
+    string executionId,
+    string stepName,
+    CancellationToken cancellationToken = default)
         {
             for (var i = 0; i < 100; i++)
             {
@@ -550,7 +576,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     throw new InvalidOperationException($"State '{executionId}' was not found.");
                 }
 
-                var step = state.GetOrCreateStep(stepName);
+                var step = stateWriter.GetOrCreateStep(state, stepName);
 
                 if (!step.NextRetryAtUtc.HasValue)
                 {

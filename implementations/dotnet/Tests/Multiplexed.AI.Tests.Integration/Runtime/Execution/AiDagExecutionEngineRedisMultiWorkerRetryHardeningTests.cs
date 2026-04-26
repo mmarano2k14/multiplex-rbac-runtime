@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Engine;
@@ -82,8 +83,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(1, failedStep.RetryCount);
                 Assert.True(failedStep.NextRetryAtUtc.HasValue);
 
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -149,8 +153,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterFirstFailure.Status);
                 Assert.Equal(1, stepAfterFirstFailure.RetryCount);
 
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -203,8 +210,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 // First execution fails and schedules retry #1.
                 await Assert.ThrowsAnyAsync<Exception>(() => engine.ExecuteNextAsync(record.ExecutionId));
 
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
+
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -249,10 +259,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// Waits until the retry window for a step becomes due.
         /// </summary>
         private static async Task WaitUntilRetryWindowOpensAsync(
-            IAiDagExecutionStore dagStore,
-            string executionId,
-            string stepName,
-            CancellationToken cancellationToken = default)
+             IAiDagExecutionStore dagStore,
+             IAiExecutionStateWriter stateWriter,
+             string executionId,
+             string stepName,
+             CancellationToken cancellationToken = default)
         {
             for (var i = 0; i < 100; i++)
             {
@@ -262,7 +273,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     throw new InvalidOperationException($"State '{executionId}' was not found.");
                 }
 
-                var step = state.GetOrCreateStep(stepName);
+                var step = stateWriter.GetOrCreateStep(state, stepName);
 
                 if (!step.NextRetryAtUtc.HasValue)
                 {

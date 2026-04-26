@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -29,6 +30,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         private readonly IAiExecutionCleanupService _cleanupService;
         private readonly AiExecutionCleanupOptions _cleanupOptions;
 
+        private readonly IAiExecutionStateReader _stateReader;
+        private readonly IAiExecutionStateWriter _stateWriter;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="AiSequentialExecutionEngine"/> class.
         /// </summary>
@@ -41,7 +45,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiSequentialPipelineExecutor pipelineExecutor,
             IAiRuntimeLogger logger,
             IAiExecutionCleanupService cleanupService,
-            IOptions<AiExecutionCleanupOptions> cleanupOptions)
+            IOptions<AiExecutionCleanupOptions> cleanupOptions,
+            IAiExecutionStateReader stateReader,
+            IAiExecutionStateWriter stateWriter)
             : base(
                 store,
                 contextStore,
@@ -49,10 +55,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 contextFactory,
                 services,
                 pipelineExecutor,
-                logger)
+                logger, stateReader, stateWriter)
         {
             _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
             _cleanupOptions = cleanupOptions?.Value ?? throw new ArgumentNullException(nameof(cleanupOptions));
+            _stateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
+            _stateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
         }
 
         /// <inheritdoc />
@@ -70,7 +78,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             return CreateInternalAsync(
                 pipelineName,
-                state => state.Set(AiExecutionKeys.Input, input),
+                state => _stateWriter.SetData(state, AiExecutionKeys.Input, input),
                 cancellationToken);
         }
 
@@ -114,7 +122,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                                 nameof(input));
                         }
 
-                        state.Set(pair.Key, pair.Value);
+                        _stateWriter.SetData(state, pair.Key, pair.Value);
                     }
                 },
                 cancellationToken);

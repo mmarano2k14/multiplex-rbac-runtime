@@ -1,12 +1,15 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -18,15 +21,18 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
     /// <summary>
     /// Integration tests for concurrent execution behavior in <see cref="AiSequentialExecutionEngine"/>.
     ///
-    /// This test suite validates that optimistic concurrency prevents double progression
-    /// when multiple callers attempt to execute the same workflow step at the same time.
+    /// PURPOSE:
+    /// - Validates optimistic concurrency protection.
+    /// - Ensures two concurrent callers cannot advance the same execution step twice.
+    /// - Verifies the engine uses the execution state writer/reader boundary correctly.
+    ///
+    /// EXPECTATION:
+    /// - One caller succeeds.
+    /// - One caller fails due to optimistic concurrency conflict.
+    /// - The step result is persisted exactly once.
     /// </summary>
     public sealed class AiExecutionEngineConcurrencyTests
     {
-        /// <summary>
-        /// Validates that only one concurrent execution succeeds when two callers
-        /// attempt to execute the same step with the same execution step key.
-        /// </summary>
         [Fact]
         public async Task ExecuteNextAsync_Should_Allow_Only_One_Concurrent_Step_Transition()
         {
@@ -43,8 +49,11 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var services = new ServiceCollection().BuildServiceProvider();
             var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
-
             var cleanupService = new NoOpAiExecutionCleanupService();
+
+            IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
+            IAiExecutionStateReader stateReader = new DefaultAiExecutionStateReader(
+                new NoopPayloadResolver());
 
             var cleanupOptions = Options.Create(new AiExecutionCleanupOptions
             {
@@ -118,7 +127,10 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 factory,
                 services,
                 pipelineExecutor,
-                logger, cleanupService, cleanupOptions);
+                logger,
+                cleanupService,
+                cleanupOptions,stateReader,
+                stateWriter);
 
             var record = await engine.CreateAsync("test-pipeline", "hello");
 
@@ -150,11 +162,16 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.Single(finalRecord!.CompletedSteps);
             Assert.Contains("step-1", finalRecord.CompletedSteps);
 
-            AiStepResult? result = finalState!.Steps["step-1"].Result;
-            Assert.Equal("processed", result?.Output);
+            var result = finalState!.Steps["step-1"].Result;
+
+            Assert.NotNull(result);
+            Assert.Equal("processed", result!.Output);
             Assert.True(finalRecord.IsTerminal);
         }
 
+        /// <summary>
+        /// Executes one concurrent attempt and captures the exception instead of failing the test task.
+        /// </summary>
         private static async Task<ExecutionAttemptOutcome> ExecuteAndCaptureAsync(
             AiSequentialExecutionEngine engine,
             string executionId)
@@ -171,8 +188,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         }
 
         /// <summary>
-        /// Fake step that delays slightly in order to increase the likelihood
-        /// of concurrent overlap during execution.
+        /// Fake step that delays execution to increase overlap between concurrent callers.
         /// </summary>
         private sealed class DelayedStep : IAiStep
         {
@@ -198,6 +214,23 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                     {
                         ["result"] = "processed"
                     });
+            }
+        }
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline state values, so resolving payloads would indicate
+        /// an unexpected test path.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this concurrency test.");
             }
         }
 

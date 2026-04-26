@@ -1,5 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
 {
@@ -12,24 +14,29 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
     {
         public string Name => "controlled-fail";
 
-        public Task<AiStepResult> ExecuteAsync(
+        public async Task<AiStepResult> ExecuteAsync(
             AiStepExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            if (context.TryGetStepConfigValue<bool>("shouldFail", out var shouldFail) && shouldFail)
+            var helper = context.GetHelper();
+
+            var shouldFail = await helper.GetConfigAsync<bool?>(
+                "shouldFail",
+                cancellationToken).ConfigureAwait(false) ?? false;
+
+            if (shouldFail)
             {
                 throw new Exception("Controlled failure");
             }
 
-            return Task.FromResult(
-                AiStepResult.Ok(
-                    output: "Controlled success",
-                    data: new Dictionary<string, object?>
-                    {
-                        ["controlled"] = true
-                    }));
+            return AiStepResult.Ok(
+                output: "Controlled success",
+                data: helper.ToDictionary(new
+                {
+                    controlled = true
+                }));
         }
     }
 }

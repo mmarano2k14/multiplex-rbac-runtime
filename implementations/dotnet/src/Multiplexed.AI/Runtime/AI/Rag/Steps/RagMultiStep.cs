@@ -1,10 +1,13 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;
+using Multiplexed.AI.Runtime.Execution.Context;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 {
@@ -56,9 +59,14 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         {
             ArgumentNullException.ThrowIfNull(context);
 
+            var helper = context.GetHelper();
+
             // Resolve the retrieval strategy key from the current step configuration.
-            if (!context.TryGetStepConfigValue<string>("retrieval", out var retrievalKey) ||
-                string.IsNullOrWhiteSpace(retrievalKey))
+            var retrievalKey = await helper.GetRequiredConfigAsync<string>(
+                "retrieval",
+                cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(retrievalKey))
             {
                 throw new InvalidOperationException(
                     "The current step configuration is missing required field 'retrieval'.");
@@ -68,7 +76,32 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
             var retrieval = _retrievalResolver.Resolve(retrievalKey);
 
             // Build the generic RAG execution envelope from the current step.
-            var ragContext = RagStepHelper.BuildRagExecutionContext(context);
+            var query = await helper.GetConfigAsync<string>(
+                "query",
+                cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                query = await helper.GetInputAsync<string>(
+                    "query",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var ragContext = new RagExecutionContext
+            {
+                QueryText = query ?? string.Empty,
+                QueryKey = helper.StepKey,
+                CorrelationId = helper.ExecutionId,
+                Inputs = await helper.GetResolvedInputsAsync(
+                    includeReservedVariables: true,
+                    cancellationToken).ConfigureAwait(false),
+                Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ExecutionId"] = helper.ExecutionId,
+                    ["StepName"] = helper.StepName,
+                    ["StepKey"] = helper.StepKey
+                }
+            };
 
             // Delegate the full orchestration to the retrieval strategy.
             var batch = await retrieval.RetrieveAsync(ragContext, cancellationToken);

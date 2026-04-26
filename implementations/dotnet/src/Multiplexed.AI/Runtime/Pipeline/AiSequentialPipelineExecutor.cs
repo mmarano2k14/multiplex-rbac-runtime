@@ -115,7 +115,10 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 stepContext,
                 cancellationToken);
 
-            context.State.SetStepResult(resolvedStep.Name, stepResult);
+            context.StateWriter.SetStepResult(
+                context.State,
+                resolvedStep.Name,
+                stepResult);
 
             var nextStepIndex = record.CurrentStepIndex + 1;
             var isCompleted = nextStepIndex >= orderedSteps.Length;

@@ -1,17 +1,16 @@
 ﻿using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps
 {
     /// <summary>
     /// Example step that summarizes input text using the AI service.
     /// </summary>
-    [AiStep(stepKey:"summary")]
+    [AiStep(stepKey: "summary")]
     public sealed class SummaryStep : IAiStep
     {
         private readonly IAiService _aiService;
@@ -27,8 +26,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
             AiStepExecutionContext context,
             CancellationToken cancellationToken = default)
         {
+            ArgumentNullException.ThrowIfNull(context);
+
+            var helper = context.GetHelper();
+
             // Retrieve input from context
-            var input = "context.Get<string>(AiExecutionKeys.Input);";
+            var input = await helper.GetDataAsync<string>(
+                AiExecutionKeys.Input,
+                cancellationToken).ConfigureAwait(false);
 
             if (string.IsNullOrWhiteSpace(input))
                 return AiStepResult.Fail("Missing required input: 'input'.");
@@ -44,10 +49,10 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
             // Return result and inject into context
             return AiStepResult.Ok(
                 output: response.Content,
-                data: new Dictionary<string, object?>
+                data: helper.ToDictionary(new
                 {
-                    [AiExecutionKeys.Input] = response.Content
-                });
+                    input = response.Content
+                }));
         }
     }
 }

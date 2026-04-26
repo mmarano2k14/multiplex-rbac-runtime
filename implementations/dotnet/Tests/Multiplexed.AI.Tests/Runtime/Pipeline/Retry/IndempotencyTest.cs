@@ -1,8 +1,11 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Xunit;
@@ -12,14 +15,16 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
     /// <summary>
     /// Integration tests for idempotent skip behavior in <see cref="AiStepExecutor"/>.
     ///
-    /// This test suite validates that the executor does not re-run a step that has
-    /// already been completed successfully and tracked in execution metadata.
+    /// PURPOSE:
+    /// - Verifies that a completed step is not executed again.
+    /// - Ensures idempotent skip behavior preserves existing metadata.
+    /// - Validates compatibility with the execution state reader/writer boundary.
     /// </summary>
     public sealed class AiStepExecutorIdempotencyTests
     {
         /// <summary>
-        /// Validates that the step executor skips execution when the step metadata
-        /// already indicates a successful completion.
+        /// Validates that the executor skips a step when metadata already marks it
+        /// as completed.
         /// </summary>
         [Fact]
         public async Task ExecuteAsync_Should_Skip_When_Step_Has_Already_Completed()
@@ -37,9 +42,15 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 ExecutionId = record.ExecutionId
             };
 
+            var stateWriter = new DefaultAiExecutionStateWriter();
+            var stateReader = new DefaultAiExecutionStateReader(
+                new NoopPayloadResolver());
+
             var stepName = "already-completed-step";
 
-            state.Metadata[AiExecutionKeys.StepExecutionMetadata] =
+            stateWriter.SetMetadata(
+                state,
+                AiExecutionKeys.StepExecutionMetadata,
                 new Dictionary<string, AiStepExecutionMetadata>(StringComparer.Ordinal)
                 {
                     [stepName] = new AiStepExecutionMetadata
@@ -51,15 +62,18 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                         LastStartedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-9),
                         CompletedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-8)
                     }
-                };
+                });
 
             var context = new AiExecutionContext(
                 record,
                 state,
                 new ServiceProviderStub(),
+                stateReader,
+                stateWriter,
                 CancellationToken.None);
 
             var step = new FailIfExecutedStep(stepName);
+
             var resolvedStep = new ResolvedAiPipelineStep
             {
                 Name = stepName,
@@ -76,22 +90,24 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
 
             // Assert
             Assert.True(result.Success);
-            Assert.Contains("skipped", result.Output ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "skipped",
+                result.Output ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase);
 
             var metadataMap = Assert.IsType<Dictionary<string, AiStepExecutionMetadata>>(
                 state.Metadata[AiExecutionKeys.StepExecutionMetadata]);
 
             var metadata = metadataMap[stepName];
 
-            // Metadata should remain unchanged for an idempotent skip
             Assert.Equal(1, metadata.AttemptCount);
             Assert.Equal(AiStepExecutionStatus.Completed, metadata.Status);
             Assert.NotNull(metadata.CompletedAtUtc);
         }
 
         /// <summary>
-        /// Fake step that should never be executed.
-        /// If execution reaches this step, the test must fail.
+        /// Fake step that must never be executed.
+        /// If this step runs, idempotent skip behavior is broken.
         /// </summary>
         private sealed class FailIfExecutedStep : IAiStep
         {
@@ -106,7 +122,24 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
-                throw new InvalidOperationException("This step should have been skipped and never executed.");
+                throw new InvalidOperationException(
+                    "This step should have been skipped and never executed.");
+            }
+        }
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline metadata. Payload resolution is not expected.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this idempotency test.");
             }
         }
 

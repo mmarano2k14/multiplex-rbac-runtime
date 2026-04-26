@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
@@ -19,6 +20,7 @@ using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -29,6 +31,7 @@ using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
 using Xunit;
+using static Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures.AiDagExecutionEngineTestHost;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
@@ -58,14 +61,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             Assert.Contains("merge", finalRecord.CompletedSteps);
 
             var store = GetRequiredService<MemoryAiExecutionStore>(engine);
+            var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+
             var state = await store.GetStateAsync(finalRecord.ExecutionId);
 
             Assert.NotNull(state);
 
-            Assert.Equal(AiStepExecutionStatus.Completed, state!.GetOrCreateStep("start").Status);
-            Assert.Equal(AiStepExecutionStatus.Completed, state.GetOrCreateStep("a1").Status);
-            Assert.Equal(AiStepExecutionStatus.Completed, state.GetOrCreateStep("a2").Status);
-            Assert.Equal(AiStepExecutionStatus.Completed, state.GetOrCreateStep("merge").Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, stateWriter.GetOrCreateStep(state!, "start").Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, stateWriter.GetOrCreateStep(state, "a1").Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, stateWriter.GetOrCreateStep(state, "a2").Status);
+            Assert.Equal(AiStepExecutionStatus.Completed, stateWriter.GetOrCreateStep(state, "merge").Status);
         }
 
         private static AiDagExecutionEngine CreateEngine()
@@ -87,8 +92,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             services.AddAiStepsFromAssemblies(
                 typeof(AiRuntimeAssemblyMarker).Assembly,
-                typeof(AiDagExecutionEngineTests).Assembly
-            );
+                typeof(AiDagExecutionEngineTests).Assembly);
 
             var provider = services.BuildServiceProvider();
 
@@ -144,33 +148,48 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 },
                 new InMemoryAiExecutionRetentionMetrics());
 
+            IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
+            IAiExecutionStateReader stateReader =
+                new DefaultAiExecutionStateReader(new NoopPayloadResolver());
+
             return new AiDagExecutionEngine(
                 executionStore,
                 contextStore,
                 accessor,
                 contextFactory,
-                CreateServiceProvider(accessor, executionStore, retentionPolicy),
+                CreateServiceProvider(
+                    accessor,
+                    executionStore,
+                    retentionPolicy,
+                    stateReader,
+                    stateWriter),
                 pipelineExecutor,
                 logger,
                 cleanupService,
                 Options.Create(aiOptions),
                 metrics,
-                payloadCompactor);
+                payloadCompactor,
+                stateReader,
+                stateWriter,
+                null);
         }
 
         private static IServiceProvider CreateServiceProvider(
             ExecutionContextAccessor accessor,
             MemoryAiExecutionStore store,
-            IAiExecutionStateRetentionPolicy retentionPolicy)
+            IAiExecutionStateRetentionPolicy retentionPolicy,
+            IAiExecutionStateReader stateReader,
+            IAiExecutionStateWriter stateWriter)
         {
             var provider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
                 [typeof(MemoryAiExecutionStore)] = store,
-                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy
+                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy,
+                [typeof(IAiExecutionStateReader)] = stateReader,
+                [typeof(IAiExecutionStateWriter)] = stateWriter
             });
 
-            // 🔥 FIX CRITIQUE
             provider.RegisterSelf();
 
             return provider;
@@ -187,7 +206,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 options.DefaultPipelineDefinitionSource = "Json";
             });
 
-            services.AddSingleton<JsonAiPipelineDefinitionProvider>(sp =>
+            services.AddSingleton<JsonAiPipelineDefinitionProvider>(_ =>
                 new JsonAiPipelineDefinitionProvider("config/dag-parallel-basic.json"));
 
             services.AddSingleton<InMemoryAiPipelineDefinitionProvider>();
@@ -227,12 +246,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
         private static T GetRequiredService<T>(AiDagExecutionEngine engine)
         {
-            var field = typeof(AiExecutionEngine)
-                .GetProperty("Services", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var property = typeof(AiExecutionEngine)
+                .GetProperty(
+                    "Services",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance);
 
-            var provider = (IServiceProvider)field!.GetValue(engine)!;
+            var provider = (IServiceProvider)property!.GetValue(engine)!;
 
-            return (T)provider.GetService(typeof(T))!;
+            return (T)(provider.GetService(typeof(T))
+                ?? throw new InvalidOperationException(
+                    $"Required service '{typeof(T).FullName}' is not registered."));
+        }
+
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this test.");
+            }
         }
 
         private sealed class TestServiceProvider : IServiceProvider
@@ -251,7 +286,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             public object? GetService(Type serviceType)
             {
-                return _services.TryGetValue(serviceType, out var s) ? s : null;
+                return _services.TryGetValue(serviceType, out var service)
+                    ? service
+                    : null;
             }
         }
 
@@ -264,7 +301,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 _store = store;
             }
 
-            public IAiPayloadStore Resolve() => _store;
+            public IAiPayloadStore Resolve()
+            {
+                return _store;
+            }
         }
     }
 }

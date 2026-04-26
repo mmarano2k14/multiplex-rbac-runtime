@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Pipeline;
 using Xunit;
 
@@ -11,12 +13,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
     /// <summary>
     /// Validates DAG step selection behavior using real runtime classes.
     ///
-    /// This test suite ensures that:
-    /// - root steps are selected first
-    /// - dependency-based readiness is respected
-    /// - merge steps are blocked until all parents complete
-    /// - completed steps are not re-selected
-    /// - pipeline completion detection is correct
+    /// PURPOSE:
+    /// - Ensures root steps are selected first.
+    /// - Ensures dependency-based readiness is respected.
+    /// - Ensures merge steps are blocked until all parents complete.
+    /// - Ensures completed, running, and failed steps are not re-selected.
+    /// - Ensures pipeline completion detection is correct.
+    ///
+    /// ARCHITECTURE:
+    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
+    /// - Step-state mutation is performed through <see cref="IAiExecutionStateWriter"/>.
+    /// - The selector receives the writer explicitly because readiness evaluation may
+    ///   initialize missing step state or promote retry-ready steps.
     /// </summary>
     public sealed class AiPipelineDagStepSelectorTests
     {
@@ -29,6 +37,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             }
         };
 
+        private static readonly IAiExecutionStateWriter StateWriter =
+            new DefaultAiExecutionStateWriter();
+
         [Fact]
         public async Task SelectReadySteps_Should_Return_Root_Step_First()
         {
@@ -37,7 +48,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = new AiExecutionState();
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -52,7 +67,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             Assert.Equal(2, ready.Count);
@@ -68,7 +87,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -83,7 +106,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1", "a2");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -98,7 +125,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start");
 
             // Act
-            var next = AiPipelineDagStepSelector.SelectNextReadyStep(pipeline, state, DateTime.UtcNow);
+            var next = AiPipelineDagStepSelector.SelectNextReadyStep(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             Assert.NotNull(next);
@@ -113,7 +144,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1", "a2", "merge");
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             Assert.Empty(ready);
@@ -126,17 +161,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var pipeline = await LoadPipelineAsync("dag-parallel-basic.json");
             var state = new AiExecutionState();
 
-            var start = state.GetOrCreateStep("start");
-            start.Status = AiStepExecutionStatus.Completed;
-
-            var a1 = state.GetOrCreateStep("a1");
-            a1.Status = AiStepExecutionStatus.Running;
-
-            var a2 = state.GetOrCreateStep("a2");
-            a2.Status = AiStepExecutionStatus.Ready;
+            StateWriter.GetOrCreateStep(state, "start").Status = AiStepExecutionStatus.Completed;
+            StateWriter.GetOrCreateStep(state, "a1").Status = AiStepExecutionStatus.Running;
+            StateWriter.GetOrCreateStep(state, "a2").Status = AiStepExecutionStatus.Ready;
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -150,17 +184,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var pipeline = await LoadPipelineAsync("dag-parallel-basic.json");
             var state = new AiExecutionState();
 
-            var start = state.GetOrCreateStep("start");
-            start.Status = AiStepExecutionStatus.Completed;
-
-            var a1 = state.GetOrCreateStep("a1");
-            a1.Status = AiStepExecutionStatus.Failed;
-
-            var a2 = state.GetOrCreateStep("a2");
-            a2.Status = AiStepExecutionStatus.Ready;
+            StateWriter.GetOrCreateStep(state, "start").Status = AiStepExecutionStatus.Completed;
+            StateWriter.GetOrCreateStep(state, "a1").Status = AiStepExecutionStatus.Failed;
+            StateWriter.GetOrCreateStep(state, "a2").Status = AiStepExecutionStatus.Ready;
 
             // Act
-            var ready = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, DateTime.UtcNow);
+            var ready = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                StateWriter,
+                DateTime.UtcNow);
 
             // Assert
             var step = Assert.Single(ready);
@@ -175,7 +208,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1");
 
             // Act
-            var result = AiPipelineDagStepSelector.IsCompleted(pipeline, state);
+            var result = AiPipelineDagStepSelector.IsCompleted(
+                pipeline,
+                state,
+                StateWriter);
 
             // Assert
             Assert.False(result);
@@ -189,12 +225,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             var state = CreateStateWithCompletedSteps("start", "a1", "a2", "merge");
 
             // Act
-            var result = AiPipelineDagStepSelector.IsCompleted(pipeline, state);
+            var result = AiPipelineDagStepSelector.IsCompleted(
+                pipeline,
+                state,
+                StateWriter);
 
             // Assert
             Assert.True(result);
         }
 
+        /// <summary>
+        /// Loads and resolves a test pipeline definition from the test config folder.
+        /// </summary>
         private static async Task<ResolvedAiPipeline> LoadPipelineAsync(string fileName)
         {
             var filePath = Path.Combine(AppContext.BaseDirectory, "config", fileName);
@@ -218,6 +260,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             return await resolver.ResolveAsync(definition);
         }
 
+        /// <summary>
+        /// Creates a minimal step resolver for the pipeline definitions used in these tests.
+        /// </summary>
         private static AiPipelineResolver CreateResolver()
         {
             var registry = new InMemoryAiStepRegistry();
@@ -228,25 +273,38 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             return new AiPipelineResolver(registry);
         }
 
-        private static AiExecutionState CreateStateWithCompletedSteps(params string[] completedStepNames)
+        /// <summary>
+        /// Creates an execution state with the supplied steps marked as completed.
+        ///
+        /// NOTE:
+        /// - Step state is created through the writer to preserve the refactored state boundary.
+        /// </summary>
+        private static AiExecutionState CreateStateWithCompletedSteps(
+            params string[] completedStepNames)
         {
             var state = new AiExecutionState();
 
             foreach (var stepName in completedStepNames)
             {
-                var step = state.GetOrCreateStep(stepName);
-                step.Status = AiStepExecutionStatus.Completed;
+                StateWriter.GetOrCreateStep(state, stepName).Status =
+                    AiStepExecutionStatus.Completed;
             }
 
             return state;
         }
 
+        /// <summary>
+        /// Test pipeline file root matching the JSON pipeline configuration shape.
+        /// </summary>
         private sealed class TestPipelineFileRoot
         {
             public IReadOnlyCollection<AiPipelineDefinition> Pipelines { get; init; }
                 = Array.Empty<AiPipelineDefinition>();
         }
 
+        /// <summary>
+        /// Minimal in-memory step registry for test pipeline resolution.
+        /// </summary>
         private sealed class InMemoryAiStepRegistry : IAiStepRegistry
         {
             private readonly Dictionary<string, IAiStep> _steps =
@@ -255,6 +313,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             public void Register(IAiStep step)
             {
                 ArgumentNullException.ThrowIfNull(step);
+
                 _steps[step.Name] = step;
             }
 
@@ -270,6 +329,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
             }
         }
 
+        /// <summary>
+        /// Test step used to satisfy pipeline resolution for hello-world steps.
+        /// </summary>
         private sealed class HelloWorldTestStep : IAiStep
         {
             public string Name => "hello-world";
@@ -278,11 +340,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
                 AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
-                return Task.FromResult(AiStepResult.Ok(
-                    output: "hello-world executed"));
+                return Task.FromResult(
+                    AiStepResult.Ok(output: "hello-world executed"));
             }
         }
 
+        /// <summary>
+        /// Test step used to satisfy pipeline resolution for summary steps.
+        /// </summary>
         private sealed class SummaryTestStep : IAiStep
         {
             public string Name => "summary";
@@ -291,8 +356,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Pipeline
                 AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
             {
-                return Task.FromResult(AiStepResult.Ok(
-                    output: "summary executed"));
+                return Task.FromResult(
+                    AiStepResult.Ok(output: "summary executed"));
             }
         }
     }

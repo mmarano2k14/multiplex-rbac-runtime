@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
@@ -52,6 +53,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         private readonly IAiStepResultPayloadCompactor _payloadCompactor;
         private readonly IAiExecutionStateRetentionPolicy _retentionPolicy;
 
+        private readonly IAiExecutionStateReader _stateReader;
+        private readonly IAiExecutionStateWriter _stateWriter;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
         /// </summary>
@@ -67,6 +71,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IOptions<AiEngineOptions> aiOptions,
             IAiRuntimeMetrics metrics,
             IAiStepResultPayloadCompactor payloadCompactor,
+            IAiExecutionStateReader stateReader,
+            IAiExecutionStateWriter stateWriter,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
             : base(
@@ -76,7 +82,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 contextFactory,
                 services,
                 pipelineExecutor,
-                logger)
+                logger, stateReader, stateWriter)
         {
             _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
             _aiOptions = aiOptions?.Value ?? throw new ArgumentNullException(nameof(aiOptions));
@@ -86,6 +92,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             _snapshotService = snapshotService;
             _retentionPolicy = Services.GetService(typeof(IAiExecutionStateRetentionPolicy))
                 as IAiExecutionStateRetentionPolicy ?? throw new InvalidOperationException("IAiExecutionStateRetentionPolicy service is not registered.");
+
+            _stateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
+            _stateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
+
+
         }
 
         /// <inheritdoc />
@@ -103,7 +114,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             return CreateInternalAsync(
                 pipelineName,
-                state => state.Set(AiExecutionKeys.Input, input),
+                state => _stateWriter.SetData(state,AiExecutionKeys.Input, input),
                 cancellationToken);
         }
 
@@ -147,7 +158,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                                 nameof(input));
                         }
 
-                        state.Set(pair.Key, pair.Value);
+                        _stateWriter.SetData(state, pair.Key, pair.Value);
                     }
                 },
                 cancellationToken);
@@ -238,12 +249,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             foreach (var step in preparedPipeline.Steps)
             {
-                state.EnsureStepInitialized(step);
+
+                _stateWriter.EnsureStepInitialized(state, step);
 
                 // Persist DAG dependency metadata directly in step state
                 // so both local and distributed execution paths can evaluate readiness
                 // without reintroducing global "current step" semantics.
-                var stepState = state.GetOrCreateStep(step.Name);
+                var stepState = _stateWriter.GetOrCreateStep(state, step.Name);
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
             }
 
@@ -371,6 +383,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 var nextStep = AiPipelineDagStepSelector.SelectNextReadyStep(
                     resolvedPipeline,
                     state,
+                    _stateWriter,
                     utcNow);
 
                 // -------------------------------------------------------------
@@ -386,6 +399,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
                         resolvedPipeline,
                         state,
+                        _stateWriter,
                         utcNow);
 
                     Logger.Engine.LogInformation(
@@ -421,7 +435,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     return record;
                 }
 
-                var stepState = state.GetOrCreateStep(nextStep.Name);
+                var stepState = _stateWriter.GetOrCreateStep(state, nextStep.Name);
 
                 // Synthetic local claim metadata is used only so local execution
                 // keeps the same per-step lifecycle structure as distributed execution.
@@ -482,6 +496,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         AiDagExecutionConvergenceEvaluator.Evaluate(
                             resolvedPipeline,
                             state,
+                            _stateWriter,
                             DateTime.UtcNow),
                         state);
 
@@ -554,6 +569,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     AiDagExecutionConvergenceEvaluator.Evaluate(
                         resolvedPipeline,
                         state,
+                        _stateWriter,
                         DateTime.UtcNow),
                     state);
 
@@ -703,6 +719,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
                         resolvedPipeline,
                         state,
+                        _stateWriter,
                         utcNow);
 
                     Logger.Engine.LogInformation(
@@ -809,6 +826,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
                         resolvedPipeline,
                         failedState,
+                        _stateWriter,
                         DateTime.UtcNow);
 
                     ApplyConvergenceToRecord(
@@ -921,6 +939,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 var finalConvergence = AiDagExecutionConvergenceEvaluator.Evaluate(
                     resolvedPipeline,
                     finalState,
+                    _stateWriter,
                     DateTime.UtcNow);
 
                 Logger.Engine.LogInformation(

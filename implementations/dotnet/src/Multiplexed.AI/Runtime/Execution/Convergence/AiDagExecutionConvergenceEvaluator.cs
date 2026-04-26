@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline;
 
@@ -6,39 +7,33 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
 {
     /// <summary>
     /// Evaluates the global lifecycle convergence of a DAG execution
-    /// based on the resolved pipeline topology and current step state.
+    /// from the resolved pipeline topology and the current durable step state.
     ///
     /// DESIGN PRINCIPLES:
-    /// - Deterministic evaluation (same input -> same output)
-    /// - Step state is the single source of truth
-    /// - Global execution status is a projection, not a stored truth
-    /// - No implicit terminal states
-    /// - Convergence must remain conservative under distributed uncertainty
+    /// - Deterministic evaluation: identical inputs produce identical output.
+    /// - Step state is the single source of truth.
+    /// - Global execution status is a projection, not stored truth.
+    /// - No implicit terminal states are inferred too early.
+    /// - Convergence remains conservative under distributed uncertainty.
+    ///
+    /// IMPORTANT:
+    /// - This evaluator does not mutate execution state directly.
+    /// - Missing step states are initialized through <see cref="IAiExecutionStateWriter"/>.
+    /// - This keeps <see cref="AiExecutionState"/> as a persistence model and routes
+    ///   mutation through the writer.
     ///
     /// CONVERGENCE STATES:
+    /// - Completed: all steps are completed.
+    /// - Running: work is actively executing or immediately executable.
+    /// - Waiting: no work is executable now, but future progress is still possible.
+    /// - Failed: no further progress is possible and at least one step has failed.
     ///
-    /// - Completed:
-    ///   All steps are completed.
-    ///
-    /// - Running:
-    ///   Work is actively executing OR immediately executable.
-    ///
-    /// - Waiting:
-    ///   No work is executable now, but future progress is still possible.
-    ///
-    /// - Failed:
-    ///   No further progress is possible and at least one step has failed.
-    ///
-    /// IMPORTANT DISTRIBUTED RULES:
-    /// - Running is ONLY valid if lease is still active
-    /// - Expired running work is considered recoverable (→ Waiting)
-    /// - Retry-delayed work is non-terminal (→ Waiting)
-    /// - Pending steps blocked by failed dependencies are NOT future work
-    /// - Failure is only projected when ALL recovery paths are exhausted
-    ///
-    /// NOTE:
-    /// This evaluator is NOT a reducer — it depends on runtime signals
-    /// such as selector readiness and timing (retry / lease).
+    /// DISTRIBUTED RULES:
+    /// - Running is only valid while the step lease is still active.
+    /// - Expired running work is treated as recoverable and projects Waiting.
+    /// - Retry-delayed work is non-terminal and projects Waiting.
+    /// - Pending steps blocked by failed dependencies are not future work.
+    /// - Failure is only projected when all recovery paths are exhausted.
     /// </summary>
     public static class AiDagExecutionConvergenceEvaluator
     {
@@ -46,27 +41,29 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
         /// Evaluates the global execution convergence state.
         ///
         /// ORDER MATTERS:
-        /// 1. Completed (strongest terminal)
-        /// 2. Running (active or immediately runnable)
-        /// 3. Waiting (future possible)
-        /// 4. Failed (terminal exhaustion)
+        /// 1. Completed: strongest terminal state.
+        /// 2. Running: active or immediately runnable work exists.
+        /// 3. Waiting: no immediate work, but future progress is possible.
+        /// 4. Failed: terminal exhaustion after recovery paths are gone.
         ///
-        /// This ensures no premature terminal projection.
+        /// This ordering prevents premature terminal projection in distributed execution.
         /// </summary>
         public static AiDagExecutionConvergenceResult Evaluate(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
             DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
 
             var resolvedSteps = pipeline.Steps
                 .OrderBy(x => x.Order)
                 .ToList();
 
             var stepStates = resolvedSteps
-                .Select(x => state.GetOrCreateStep(x.Name))
+                .Select(x => stateWriter.GetOrCreateStep(state, x.Name))
                 .ToList();
 
             if (stepStates.Count == 0)
@@ -74,17 +71,18 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 return AiDagExecutionConvergenceResult.Waiting();
             }
 
-            // Fast lookup
-            var stepStateByName = stepStates.ToDictionary(x => x.StepName, StringComparer.Ordinal);
+            var stepStateByName = stepStates.ToDictionary(
+                x => x.StepName,
+                StringComparer.Ordinal);
 
-            // Selector determines what is executable NOW
-            var readySteps = AiPipelineDagStepSelector.SelectReadySteps(pipeline, state, utcNow);
+            var readySteps = AiPipelineDagStepSelector.SelectReadySteps(
+                pipeline,
+                state,
+                stateWriter,
+                utcNow);
 
             var allCompleted = stepStates.All(x => x.IsCompleted);
 
-            // ------------------------------------------------------------
-            // WORK THAT CAN RUN NOW
-            // ------------------------------------------------------------
             var hasRunnableNow =
                 readySteps.Count > 0 ||
                 stepStates.Any(step =>
@@ -92,16 +90,10 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                     step.NextRetryAtUtc.HasValue &&
                     step.NextRetryAtUtc.Value <= utcNow);
 
-            // ------------------------------------------------------------
-            // ACTIVE RUNNING (LEASE VALID ONLY)
-            // ------------------------------------------------------------
             var hasValidRunningLease = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.Running &&
                 HasValidLease(step, utcNow));
 
-            // ------------------------------------------------------------
-            // FUTURE POSSIBILITY SIGNALS
-            // ------------------------------------------------------------
             var hasFutureRetry = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.WaitingForRetry &&
                 step.NextRetryAtUtc.HasValue &&
@@ -111,41 +103,33 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 step.Status == AiStepExecutionStatus.Running &&
                 IsExpiredLease(step, utcNow));
 
-            // ------------------------------------------------------------
-            // PENDING STEPS THAT ARE STILL SALVAGEABLE
-            // (not blocked by failed dependencies)
-            // ------------------------------------------------------------
             var hasRecoverablePendingWork = resolvedSteps.Any(resolvedStep =>
             {
                 var step = stepStateByName[resolvedStep.Name];
 
                 if (step.Status != AiStepExecutionStatus.None)
+                {
                     return false;
+                }
 
-                return CanStillBecomeRunnableLater(resolvedStep, stepStateByName, utcNow);
+                return CanStillBecomeRunnableLater(
+                    resolvedStep,
+                    stepStateByName,
+                    utcNow);
             });
 
             var hasFailedSteps = stepStates.Any(x => x.IsFailed);
 
-            // ============================================================
-            // COMPLETED
-            // ============================================================
             if (allCompleted)
             {
                 return AiDagExecutionConvergenceResult.Completed();
             }
 
-            // ============================================================
-            // RUNNING
-            // ============================================================
             if (hasRunnableNow || hasValidRunningLease)
             {
                 return AiDagExecutionConvergenceResult.Running();
             }
 
-            // ============================================================
-            // WAITING (future still possible)
-            // ============================================================
             var canStillProgress =
                 hasFutureRetry ||
                 hasRecoverableExpiredRunning ||
@@ -156,25 +140,20 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 return AiDagExecutionConvergenceResult.Waiting();
             }
 
-            // ============================================================
-            // FAILED (terminal)
-            // ============================================================
             if (hasFailedSteps)
             {
                 return AiDagExecutionConvergenceResult.Failed();
             }
 
-            // ============================================================
-            // SAFE FALLBACK
-            // ============================================================
             return AiDagExecutionConvergenceResult.Waiting();
         }
 
         /// <summary>
-        /// Determines if a running step is still protected by a valid lease.
+        /// Determines whether a running step still has a valid lease.
         ///
-        /// Only valid leases represent true in-flight work.
-        /// Expired leases must NOT be treated as active execution.
+        /// RULE:
+        /// - A running step is considered active only while its lease is valid.
+        /// - Expired leases must not be treated as active execution.
         /// </summary>
         private static bool HasValidLease(AiStepState step, DateTime utcNow)
         {
@@ -186,11 +165,11 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
         }
 
         /// <summary>
-        /// Determines if a running step has an expired lease.
+        /// Determines whether a running step has an expired lease.
         ///
-        /// This represents stale work that can still be recovered.
-        /// It must NOT be treated as active execution,
-        /// but must still prevent premature failure.
+        /// RULE:
+        /// - Expired running work is stale, not active.
+        /// - It remains recoverable and must prevent premature failure projection.
         /// </summary>
         private static bool IsExpiredLease(AiStepState step, DateTime utcNow)
         {
@@ -205,21 +184,21 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
         /// Determines whether a pending step can still become runnable later.
         ///
         /// RULE:
-        /// A step is salvageable only if ALL its dependencies still have a valid path forward.
+        /// A step remains salvageable only if all dependencies still have a valid path forward.
         ///
-        /// A dependency is considered viable if:
-        /// - Completed
-        /// - Running (valid or expired → recoverable)
-        /// - WaitingForRetry
-        /// - Ready
-        /// - Not yet initialized (None)
+        /// Dependency states considered viable:
+        /// - Completed.
+        /// - Running with a valid lease.
+        /// - Running with an expired lease, because it can be recovered.
+        /// - WaitingForRetry.
+        /// - Ready.
+        /// - None.
         ///
-        /// A dependency is terminally blocking if:
-        /// - Failed
+        /// Dependency states considered terminal blockers:
+        /// - Failed.
         ///
-        /// IMPORTANT:
-        /// This logic prevents falsely keeping execution in Waiting
-        /// when a branch is already irrecoverably broken.
+        /// This prevents keeping execution in Waiting when a dependency chain is already
+        /// irrecoverably broken.
         /// </summary>
         private static bool CanStillBecomeRunnableLater(
             ResolvedAiPipelineStep resolvedStep,
@@ -233,34 +212,50 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
             {
                 if (!stepStateByName.TryGetValue(dependencyName, out var dependencyStep))
                 {
-                    // Defensive guard: pipeline inconsistency
                     return false;
                 }
 
                 if (dependencyStep.IsCompleted)
+                {
                     continue;
+                }
 
                 if (dependencyStep.IsFailed)
+                {
                     return false;
+                }
 
                 if (dependencyStep.Status == AiStepExecutionStatus.WaitingForRetry)
+                {
                     continue;
+                }
 
                 if (dependencyStep.Status == AiStepExecutionStatus.Ready)
+                {
                     continue;
+                }
 
                 if (dependencyStep.Status == AiStepExecutionStatus.None)
+                {
                     continue;
+                }
 
                 if (dependencyStep.Status == AiStepExecutionStatus.Running)
                 {
-                    // Running is valid if lease is active OR recoverable if expired
                     if (HasValidLease(dependencyStep, utcNow))
+                    {
                         continue;
+                    }
 
                     if (IsExpiredLease(dependencyStep, utcNow))
+                    {
                         continue;
+                    }
+
+                    return false;
                 }
+
+                return false;
             }
 
             return true;

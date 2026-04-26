@@ -1,5 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
 {
@@ -18,17 +20,23 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            if (context.TryGetStepConfigValue<int>("delayMs", out var delayMs) && delayMs > 0)
+            var helper = context.GetHelper();
+
+            var delayMs = await helper.GetConfigAsync<int?>(
+                "delayMs",
+                cancellationToken).ConfigureAwait(false) ?? 0;
+
+            if (delayMs > 0)
             {
                 await Task.Delay(delayMs, cancellationToken);
             }
 
             return AiStepResult.Ok(
                 output: "Delayed execution complete",
-                data: new Dictionary<string, object?>
+                data: helper.ToDictionary(new
                 {
-                    ["delayMs"] = delayMs
-                });
+                    delayMs
+                }));
         }
     }
 }

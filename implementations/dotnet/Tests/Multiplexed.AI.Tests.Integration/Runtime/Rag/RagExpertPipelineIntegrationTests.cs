@@ -2,6 +2,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Plugins;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
@@ -16,6 +17,8 @@ using Multiplexed.AI.Runtime.AI.Rag.DI;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.AI.Rag.Operations;
 using Multiplexed.AI.Runtime.AI.Rag.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
+using Multiplexed.AI.Runtime.Execution.Results;
 using Multiplexed.AI.Runtime.Rag.Operations;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
@@ -71,6 +74,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                 .GetRequiredService<IAiDagExecutionStore>()
                 .GetStateAsync(created.ExecutionId);
 
+            var payloadResolver = host.ServiceProvider
+                .GetRequiredService<IAiExecutionPayloadResolver>();
+
             Assert.NotNull(state);
             Assert.NotNull(state!.Steps);
 
@@ -84,12 +90,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var candidateStep = state.Steps["getCandidate"];
             Assert.NotNull(candidateStep.Result);
-            Assert.NotNull(candidateStep.Result!.Data);
-            Assert.True(
-                candidateStep.Result.Data.TryGetValue("batch", out var candidateBatchValue),
-                "Expected 'batch' in getCandidate result data.");
 
-            var candidateBatch = Assert.IsType<RagRetrievalBatch>(candidateBatchValue);
+            var candidateBatch = await candidateStep.Result!
+                .GetRequiredDataAsync<RagRetrievalBatch>(
+                    "batch",
+                    payloadResolver);
+
             Assert.NotNull(candidateBatch.Items);
             Assert.Single(candidateBatch.Items);
             Assert.Equal("candidate-1", candidateBatch.Items[0].Id);
@@ -99,12 +105,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var jobStep = state.Steps["getJob"];
             Assert.NotNull(jobStep.Result);
-            Assert.NotNull(jobStep.Result!.Data);
-            Assert.True(
-                jobStep.Result.Data.TryGetValue("batch", out var jobBatchValue),
-                "Expected 'batch' in getJob result data.");
 
-            var jobBatch = Assert.IsType<RagRetrievalBatch>(jobBatchValue);
+            var jobBatch = await jobStep.Result!
+                .GetRequiredDataAsync<RagRetrievalBatch>(
+                    "batch",
+                    payloadResolver);
+
             Assert.NotNull(jobBatch.Items);
             Assert.Single(jobBatch.Items);
             Assert.Equal("job-1", jobBatch.Items[0].Id);
@@ -114,16 +120,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var mergeStep = state.Steps["merge"];
             Assert.NotNull(mergeStep.Result);
-            Assert.NotNull(mergeStep.Result!.Data);
-            Assert.True(
-                mergeStep.Result.Data.TryGetValue("batch", out var mergedBatchValue),
-                "Expected 'batch' in merge result data.");
 
-            var mergedBatch = Assert.IsType<RagRetrievalBatch>(mergedBatchValue);
+            var mergedBatch = await mergeStep.Result!
+                .GetRequiredDataAsync<RagRetrievalBatch>(
+                    "batch",
+                    payloadResolver);
+
             Assert.NotNull(mergedBatch.Items);
             Assert.Equal(2, mergedBatch.Items.Count);
 
-            var mergedIds = mergedBatch.Items.Select(x => x.Id).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            var mergedIds = mergedBatch.Items
+                .Select(x => x.Id)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToArray();
+
             Assert.Equal(new[] { "candidate-1", "job-1" }, mergedIds);
 
             // ---------------------------------------------------------
@@ -131,18 +141,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             // ---------------------------------------------------------
             var composeStep = state.Steps["compose"];
             Assert.NotNull(composeStep.Result);
-            Assert.NotNull(composeStep.Result!.Data);
 
-            Assert.True(
-                composeStep.Result.Data.TryGetValue("context", out var contextValue),
-                "Expected 'context' in compose result data.");
+            var context = await composeStep.Result!
+                .GetRequiredDataAsync<RagStructuredContext>(
+                    "context",
+                    payloadResolver);
 
-            Assert.True(
-                composeStep.Result.Data.TryGetValue("fragments", out var fragmentsValue),
-                "Expected 'fragments' in compose result data.");
-
-            var context = Assert.IsType<RagStructuredContext>(contextValue);
-            var fragments = Assert.IsAssignableFrom<IReadOnlyList<RagContextFragment>>(fragmentsValue);
+            var fragments = await composeStep.Result!
+                .GetRequiredDataAsync<IReadOnlyList<RagContextFragment>>(
+                    "fragments",
+                    payloadResolver);
 
             Assert.NotNull(context.Text);
             Assert.NotNull(context.OrderedTexts);
@@ -273,20 +281,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             public string Name => "custom.merge";
 
             public async Task<AiStepResult> ExecuteAsync(
-    AiStepExecutionContext context,
-    CancellationToken cancellationToken = default)
+                AiStepExecutionContext context,
+                CancellationToken cancellationToken = default)
             {
                 ArgumentNullException.ThrowIfNull(context);
 
-                var candidateBatch = await RagStepHelper.GetRequiredBatchAsync(
-                    context,
-                    "getCandidate",
-                    cancellationToken);
+                var helper = context.GetHelper();
 
-                var jobBatch = await RagStepHelper.GetRequiredBatchAsync(
-                    context,
+                var candidateBatch = await helper.GetRequiredBatchAsync(
+                    "getCandidate",
+                    cancellationToken).ConfigureAwait(false);
+
+                var jobBatch = await helper.GetRequiredBatchAsync(
                     "getJob",
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
 
                 var mergedItems = candidateBatch.Items
                     .Concat(jobBatch.Items)
@@ -303,17 +311,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
                     Items = mergedItems
                 };
 
-                var data = new Dictionary<string, object?>(StringComparer.Ordinal)
-                {
-                    ["providerKey"] = "custom.merge",
-                    ["itemCount"] = mergedBatch.Items.Count,
-                    ["batch"] = mergedBatch,
-                    ["diagnostics"] = mergedBatch.Diagnostics
-                };
-
                 return AiStepResult.Ok(
                     output: $"Merged retrieval batches with {mergedBatch.Items.Count} item(s).",
-                    data: data);
+                    data: helper.ToDictionary(new
+                    {
+                        providerKey = "custom.merge",
+                        itemCount = mergedBatch.Items.Count,
+                        batch = mergedBatch,
+                        diagnostics = mergedBatch.Diagnostics
+                    }, ignoreNull: true));
             }
         }
     }

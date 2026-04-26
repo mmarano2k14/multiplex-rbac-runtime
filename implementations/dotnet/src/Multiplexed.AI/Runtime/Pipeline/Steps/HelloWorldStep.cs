@@ -1,5 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps
 {
@@ -25,21 +27,38 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps
         {
             ArgumentNullException.ThrowIfNull(context);
 
+            var helper = context.GetHelper();
+
             // First try the declarative input binding for the current step.
-            var text = context.ResolveCurrentStepInput<string>("text");
+            var text = await helper.GetInputAsync<string>(
+                "text",
+                cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                text = await helper.GetDataAsync<string>(
+                    "input",
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             // Optional step configuration for test/demo delay simulation.
-            if (context.TryGetStepConfigValue<int>("delayMs", out var delayMs) && delayMs > 0)
+            var delayMs = await helper.GetConfigAsync<int?>(
+                "delayMs",
+                cancellationToken).ConfigureAwait(false) ?? 0;
+
+            if (delayMs > 0)
             {
                 await Task.Delay(delayMs, cancellationToken);
             }
 
+            var message = "Hello World : " + (text ?? "No text provided");
+
             return AiStepResult.Ok(
-                output: "Hello World : " + (text ?? "No text provided"),
-                data: new Dictionary<string, object?>
+                output: message,
+                data: helper.ToDictionary(new
                 {
-                    ["message"] = "Hello World : " + (text ?? "No text provided")
-                });
+                    message
+                }));
         }
     }
 }

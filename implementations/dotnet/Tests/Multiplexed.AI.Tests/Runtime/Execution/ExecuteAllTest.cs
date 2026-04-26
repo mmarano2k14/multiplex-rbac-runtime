@@ -1,12 +1,15 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Registry;
@@ -20,11 +23,16 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
     /// <summary>
     /// Integration tests for <see cref="AiSequentialExecutionEngine.ExecuteAllAsync"/>.
     ///
-    /// This test suite validates full multi-step orchestration, including:
-    /// - execution creation
-    /// - sequential step progression
-    /// - state merging across multiple steps
-    /// - terminal completion state
+    /// PURPOSE:
+    /// - Validate full sequential workflow execution.
+    /// - Verify all steps are executed in order.
+    /// - Verify step results are persisted.
+    /// - Verify the final execution record reaches a terminal completed state.
+    ///
+    /// ARCHITECTURE:
+    /// - State mutation is performed through <see cref="IAiExecutionStateWriter"/>.
+    /// - State reading is performed through <see cref="IAiExecutionStateReader"/>.
+    /// - <see cref="AiExecutionState"/> remains a persistence model only.
     /// </summary>
     public sealed class AiExecutionEngineExecuteAllTests
     {
@@ -48,6 +56,10 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var factory = new FakeExecutionContextFactory();
             var executor = new FakeStepExecutor();
             var logger = new NoopLogger();
+
+            IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
+            IAiExecutionStateReader stateReader = new DefaultAiExecutionStateReader(
+                new NoopPayloadResolver());
 
             var definitionProvider = new InMemoryAiPipelineDefinitionProvider(
                 new[]
@@ -78,11 +90,12 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             var stepRegistry = new InMemoryAiStepRegistry(
                 new[]
                 {
-                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>("step-1", step1),
-                    new KeyValuePair<string, Multiplexed.Abstractions.AI.Steps.IAiStep>("step-2", step2)
+                    new KeyValuePair<string, IAiStep>("step-1", step1),
+                    new KeyValuePair<string, IAiStep>("step-2", step2)
                 });
 
             var resolver = new AiPipelineResolver(stepRegistry);
+
             var pipelineExecutor = new AiSequentialPipelineExecutor(
                 sourceSelector,
                 resolver,
@@ -131,7 +144,11 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 factory,
                 services,
                 pipelineExecutor,
-                logger, cleanupService, cleanupOptions);
+                logger,
+                cleanupService,
+                cleanupOptions,
+                stateReader,
+                stateWriter);
 
             var record = await engine.CreateAsync("test-pipeline", "hello");
 
@@ -155,11 +172,30 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.Contains("step-1", finalRecord.CompletedSteps);
             Assert.Contains("step-2", finalRecord.CompletedSteps);
 
-            AiStepResult? result = finalState!.Steps["step-1"].Result;
-            Assert.Equal("processed", result?.Output);
+            var result = finalState!.Steps["step-1"].Result;
+
+            Assert.NotNull(result);
+            Assert.Equal("processed", result!.Output);
 
             Assert.Equal(string.Empty, finalRecord.CurrentStep);
             Assert.Equal(2, finalRecord.CurrentStepIndex);
+        }
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline execution state values. If payload resolution occurs,
+        /// the test should fail because that would indicate an unexpected execution path.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this ExecuteAll test.");
+            }
         }
     }
 }

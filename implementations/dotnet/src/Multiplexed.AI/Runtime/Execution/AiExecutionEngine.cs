@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
@@ -35,7 +36,9 @@ namespace Multiplexed.AI.Runtime.Execution
             IExecutionContextFactory contextFactory,
             IServiceProvider services,
             IAiSequentialPipelineExecutor pipelineExecutor,
-            IAiRuntimeLogger logger)
+            IAiRuntimeLogger logger,
+            IAiExecutionStateReader stateReader,
+            IAiExecutionStateWriter stateWriter)
         {
             ArgumentNullException.ThrowIfNull(store);
             ArgumentNullException.ThrowIfNull(contextStore);
@@ -44,6 +47,8 @@ namespace Multiplexed.AI.Runtime.Execution
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(pipelineExecutor);
             ArgumentNullException.ThrowIfNull(logger);
+            ArgumentNullException.ThrowIfNull(stateReader);
+            ArgumentNullException.ThrowIfNull(stateWriter);
 
             Store = store;
             ContextStore = contextStore;
@@ -52,6 +57,8 @@ namespace Multiplexed.AI.Runtime.Execution
             Services = services;
             PipelineExecutor = pipelineExecutor;
             Logger = logger;
+            StateReader = stateReader;
+            StateWriter = stateWriter;
         }
 
         /// <summary>
@@ -90,6 +97,16 @@ namespace Multiplexed.AI.Runtime.Execution
         protected IAiRuntimeLogger Logger { get; }
 
         /// <summary>
+        /// Gets the payload-aware execution state reader.
+        /// </summary>
+        protected IAiExecutionStateReader StateReader { get; }
+
+        /// <summary>
+        /// Gets the execution state writer.
+        /// </summary>
+        protected IAiExecutionStateWriter StateWriter { get; }
+
+        /// <summary>
         /// Creates a new execution without an explicit pipeline name.
         /// This overload is intentionally unsupported.
         /// </summary>
@@ -112,7 +129,8 @@ namespace Multiplexed.AI.Runtime.Execution
 
         /// <summary>
         /// Creates a new execution for the specified pipeline.
-        /// Must be implem
+        /// Must be implemented by the derived engine.
+        /// </summary>
         public abstract Task<AiExecutionRecord> CreateAsync(
             string pipelineName,
             IDictionary<string, object?> input,
@@ -188,6 +206,8 @@ namespace Multiplexed.AI.Runtime.Execution
                 record,
                 state,
                 Services,
+                StateReader,
+                StateWriter,
                 cancellationToken);
         }
 

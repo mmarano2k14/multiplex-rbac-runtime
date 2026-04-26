@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
@@ -348,6 +349,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             }
 
             RootProvider.Dispose();
+        }
+
+        public sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this test.");
+            }
         }
     }
 }

@@ -1,12 +1,12 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using StackExchange.Redis;
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Stores
@@ -15,38 +15,39 @@ namespace Multiplexed.AI.Tests.Integration.Stores
     /// Integration tests validating Redis round-trip persistence for
     /// <see cref="RedisAiExecutionStore"/>.
     ///
-    /// These tests focus on:
-    /// - Persisting execution records and states
-    /// - Reading them back from Redis
-    /// - Ensuring data survives JSON serialization/deserialization
-    /// - Verifying alignment between orchestration record and mutable state
+    /// PURPOSE:
+    /// - Validate execution record and state persistence.
+    /// - Validate Redis JSON round-trip behavior.
+    /// - Validate alignment between orchestration record and execution state.
+    ///
+    /// ARCHITECTURE:
+    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
+    /// - State mutation is performed through <see cref="IAiExecutionStateWriter"/>.
+    /// - State reading is performed through <see cref="IAiExecutionStateReader"/>.
     /// </summary>
     [Collection("redis")]
     public sealed class RedisAiExecutionStoreRoundTripTests
     {
         private readonly IConnectionMultiplexer _connection;
         private readonly RedisAiExecutionStore _store;
+        private readonly IAiExecutionStateWriter _stateWriter;
+        private readonly IAiExecutionStateReader _stateReader;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="RedisAiExecutionStoreRoundTripTests"/> class.
-        /// </summary>
         public RedisAiExecutionStoreRoundTripTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
+
             var keyBuilder = new AiExecutionKeyBuilder();
 
             _connection = fixture.Connection;
             _store = new RedisAiExecutionStore(_connection, keyBuilder);
+            _stateWriter = new DefaultAiExecutionStateWriter();
+            _stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
         }
 
-        /// <summary>
-        /// Verifies that <see cref="RedisAiExecutionStore.CreateAsync"/> persists
-        /// both the orchestration record and the mutable execution state.
-        /// </summary>
         [RedisFact]
         public async Task CreateAsync_Should_Persist_Record_And_State()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
@@ -72,21 +73,19 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "roundtrip-pipeline"
             };
 
-            state.Set("input", "hello world");
-            state.Set("count", 42);
-            state.Set("flag", true);
-            state.Set("tags", new List<string> { "a", "b", "c" });
+            _stateWriter.SetData(state, "input", "hello world");
+            _stateWriter.SetData(state, "count", 42);
+            _stateWriter.SetData(state, "flag", true);
+            _stateWriter.SetData(state, "tags", new List<string> { "a", "b", "c" });
 
-            state.SetMetadata("traceId", "trace-123");
-            state.SetMetadata("attempt", 1);
+            _stateWriter.SetMetadata(state, "traceId", "trace-123");
+            _stateWriter.SetMetadata(state, "attempt", 1);
 
-            // Act
             await _store.CreateAsync(record, state);
 
             var storedRecord = await _store.GetRecordAsync(executionId);
             var storedState = await _store.GetStateAsync(executionId);
 
-            // Assert
             Assert.NotNull(storedRecord);
             Assert.NotNull(storedState);
 
@@ -101,60 +100,44 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             Assert.Equal(record.Steps, storedRecord.Steps);
             Assert.Equal(record.CompletedSteps, storedRecord.CompletedSteps);
 
-            Assert.Equal("hello world", storedState!.Get<string>("input"));
-            Assert.Equal(42, storedState.Get<int>("count"));
-            Assert.True(storedState.Get<bool>("flag"));
+            Assert.Equal("hello world", await _stateReader.GetDataAsync<string>(storedState!, "input"));
+            Assert.Equal(42, await _stateReader.GetDataAsync<int>(storedState!, "count"));
+            Assert.True(await _stateReader.GetDataAsync<bool>(storedState!, "flag"));
 
-            var tags = storedState.Get<List<string>>("tags");
+            var tags = await _stateReader.GetDataAsync<List<string>>(storedState!, "tags");
+
             Assert.NotNull(tags);
             Assert.Equal(new[] { "a", "b", "c" }, tags);
 
-            Assert.Equal("trace-123", storedState.GetMetadata<string>("traceId"));
-            Assert.Equal(1, storedState.GetMetadata<int>("attempt"));
+            Assert.Equal("trace-123", await _stateReader.GetMetadataAsync<string>(storedState!, "traceId"));
+            Assert.Equal(1, await _stateReader.GetMetadataAsync<int>(storedState!, "attempt"));
         }
 
-        /// <summary>
-        /// Verifies that requesting a non-existent record returns <c>null</c>.
-        /// </summary>
         [RedisFact]
         public async Task GetRecordAsync_Should_Return_Null_When_Record_Does_Not_Exist()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
-            // Act
             var record = await _store.GetRecordAsync(executionId);
 
-            // Assert
             Assert.Null(record);
         }
 
-        /// <summary>
-        /// Verifies that requesting a non-existent state returns <c>null</c>.
-        /// </summary>
         [RedisFact]
         public async Task GetStateAsync_Should_Return_Null_When_State_Does_Not_Exist()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
-            // Act
             var state = await _store.GetStateAsync(executionId);
 
-            // Assert
             Assert.Null(state);
         }
 
-        /// <summary>
-        /// Verifies that creating a record/state pair with the same execution id
-        /// overwrites the previously stored values.
-        /// </summary>
         [RedisFact]
         public async Task CreateAsync_Should_Overwrite_Previous_Record_And_State_For_Same_ExecutionId()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
@@ -178,8 +161,8 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "pipeline-v1"
             };
 
-            initialState.Set("input", "first");
-            initialState.SetMetadata("traceId", "trace-v1");
+            _stateWriter.SetData(initialState, "input", "first");
+            _stateWriter.SetMetadata(initialState, "traceId", "trace-v1");
 
             await _store.CreateAsync(initialRecord, initialState);
 
@@ -203,17 +186,15 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "pipeline-v2"
             };
 
-            updatedState.Set("input", "second");
-            updatedState.Set("score", 99);
-            updatedState.SetMetadata("traceId", "trace-v2");
+            _stateWriter.SetData(updatedState, "input", "second");
+            _stateWriter.SetData(updatedState, "score", 99);
+            _stateWriter.SetMetadata(updatedState, "traceId", "trace-v2");
 
-            // Act
             await _store.CreateAsync(updatedRecord, updatedState);
 
             var storedRecord = await _store.GetRecordAsync(executionId);
             var storedState = await _store.GetStateAsync(executionId);
 
-            // Assert
             Assert.NotNull(storedRecord);
             Assert.NotNull(storedState);
 
@@ -227,18 +208,14 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             Assert.Single(storedRecord.CompletedSteps);
             Assert.Contains("hello", storedRecord.CompletedSteps);
 
-            Assert.Equal("second", storedState!.Get<string>("input"));
-            Assert.Equal(99, storedState.Get<int>("score"));
-            Assert.Equal("trace-v2", storedState.GetMetadata<string>("traceId"));
+            Assert.Equal("second", await _stateReader.GetDataAsync<string>(storedState!, "input"));
+            Assert.Equal(99, await _stateReader.GetDataAsync<int>(storedState!, "score"));
+            Assert.Equal("trace-v2", await _stateReader.GetMetadataAsync<string>(storedState!, "traceId"));
         }
 
-        /// <summary>
-        /// Verifies that complex object payloads survive a full Redis JSON round-trip.
-        /// </summary>
         [RedisFact]
         public async Task CreateAsync_Should_Preserve_Complex_Object_RoundTrip()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
@@ -262,36 +239,32 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "complex-pipeline"
             };
 
-            state.Set("payload", new TestPayload
+            _stateWriter.SetData(state, "payload", new TestPayload
             {
                 Name = "Marco",
                 Count = 3,
                 Tags = new List<string> { "redis", "roundtrip" }
             });
 
-            // Act
             await _store.CreateAsync(record, state);
 
             var storedState = await _store.GetStateAsync(executionId);
 
-            // Assert
             Assert.NotNull(storedState);
 
-            var payload = storedState!.Get<TestPayload>("payload");
+            var payload = await _stateReader.GetDataAsync<TestPayload>(
+                storedState!,
+                "payload");
+
             Assert.NotNull(payload);
             Assert.Equal("Marco", payload!.Name);
             Assert.Equal(3, payload.Count);
             Assert.Equal(new[] { "redis", "roundtrip" }, payload.Tags);
         }
 
-        /// <summary>
-        /// Verifies that the stored orchestration record and execution state
-        /// remain aligned after a Redis round-trip.
-        /// </summary>
         [RedisFact]
         public async Task Record_And_State_Should_Remain_Aligned_After_RoundTrip()
         {
-            // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             await CleanupExecutionAsync(executionId);
 
@@ -315,29 +288,27 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "alignment-pipeline"
             };
 
-            state.Set("result", "ok");
-            state.SetMetadata("traceId", "trace-aligned");
+            _stateWriter.SetData(state, "result", "ok");
+            _stateWriter.SetMetadata(state, "traceId", "trace-aligned");
 
-            // Act
             await _store.CreateAsync(record, state);
 
             var storedRecord = await _store.GetRecordAsync(executionId);
             var storedState = await _store.GetStateAsync(executionId);
 
-            // Assert
             Assert.NotNull(storedRecord);
             Assert.NotNull(storedState);
 
             Assert.Equal(storedRecord!.ExecutionId, storedState!.ExecutionId);
             Assert.Equal(storedRecord.PipelineName, storedState.PipelineName);
             Assert.Equal("finalize", storedRecord.CurrentStep);
-            Assert.Equal("ok", storedState.Get<string>("result"));
-            Assert.Equal("trace-aligned", storedState.GetMetadata<string>("traceId"));
+
+            Assert.Equal("ok", await _stateReader.GetDataAsync<string>(storedState!, "result"));
+            Assert.Equal("trace-aligned", await _stateReader.GetMetadataAsync<string>(storedState!, "traceId"));
         }
 
         /// <summary>
         /// Removes the Redis keys associated with a test execution id.
-        /// This keeps tests isolated and repeatable.
         /// </summary>
         private async Task CleanupExecutionAsync(string executionId)
         {
@@ -347,37 +318,36 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             await db.KeyDeleteAsync(GetStateKey(executionId));
         }
 
-        /// <summary>
-        /// Builds the Redis key used for execution records.
-        /// </summary>
         private static string GetRecordKey(string executionId)
             => $"ai:execution:record:{executionId}";
 
-        /// <summary>
-        /// Builds the Redis key used for execution states.
-        /// </summary>
         private static string GetStateKey(string executionId)
             => $"ai:execution:state:{executionId}";
 
-        /// <summary>
-        /// Simple payload used to validate complex object round-trip behavior.
-        /// </summary>
         private sealed class TestPayload
         {
-            /// <summary>
-            /// Gets or sets the payload name.
-            /// </summary>
             public string Name { get; set; } = string.Empty;
 
-            /// <summary>
-            /// Gets or sets the payload count.
-            /// </summary>
             public int Count { get; set; }
 
-            /// <summary>
-            /// Gets or sets the payload tags.
-            /// </summary>
             public List<string> Tags { get; set; } = new();
+        }
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline execution state values.
+        /// Payload resolution is not expected.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this Redis round-trip test.");
+            }
         }
     }
 }

@@ -5,9 +5,11 @@ using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -22,6 +24,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
+using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
@@ -29,6 +32,7 @@ using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
@@ -83,6 +87,13 @@ namespace Multiplexed.AI.DI
         {
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(options);
+
+            // ------------------------------------------------------------
+            // State readers and writers
+            // ------------------------------------------------------------
+
+            services.TryAddScoped<IAiExecutionStateReader, DefaultAiExecutionStateReader>();
+            services.TryAddScoped<IAiExecutionStateWriter, DefaultAiExecutionStateWriter>();
 
             // ------------------------------------------------------------
             // Execution State retention policy
@@ -223,6 +234,12 @@ namespace Multiplexed.AI.DI
             // Metrics
             // ------------------------------------------------------------
             services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
+
+            // ------------------------------------------------------------
+            // ContextHelpers
+            // ------------------------------------------------------------
+            services.TryAddSingleton<IAiContextValueResolver, DefaultAiContextValueResolver>();
+            services.TryAddSingleton<IAiStepContextHelperFactory, DefaultAiStepContextHelperFactory>();
 
             // ------------------------------------------------------------
             // Execution runtime

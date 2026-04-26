@@ -10,11 +10,14 @@ public class FakeStepExecutor : IAiStepExecutor
         CancellationToken ct)
     {
 
-        context.State.EnsureStepInitialized(resolvedStep);
+        context.Execution.StateWriter.GetOrCreateStep(context.Execution.State, resolvedStep.Name);
 
         var result = await resolvedStep.Step.ExecuteAsync(context, ct);
 
-        context.State.SetStepResult(resolvedStep.Name, result);
+        context.Execution.StateWriter.SetStepResult(
+            context.Execution.State,
+            resolvedStep.Name,
+            result);
 
         return result;
 

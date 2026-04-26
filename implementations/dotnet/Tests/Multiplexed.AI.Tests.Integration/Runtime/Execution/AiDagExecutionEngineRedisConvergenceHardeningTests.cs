@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
@@ -31,14 +32,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
     /// Distributed DAG convergence and finalization hardening tests.
     ///
     /// PURPOSE:
-    /// Validates that global execution projection remains deterministic and safe
-    /// under retry-aware distributed DAG execution.
+    /// - Validate deterministic global execution projection.
+    /// - Verify retry-aware waiting states are not finalized too early.
+    /// - Verify terminal failure is projected only after all progress paths are exhausted.
+    /// - Verify no active or retryable work remains after terminal convergence.
     ///
-    /// THIS TEST SUITE PROVES:
-    /// - waiting-for-retry does not prematurely finalize the execution
-    /// - terminal failure is projected only when no forward progress remains
-    /// - no active or retryable work remains after terminal convergence
-    /// - the global execution record remains consistent with authoritative step state
+    /// ARCHITECTURE:
+    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
+    /// - Step-state mutation is routed through <see cref="IAiExecutionStateWriter"/>.
+    /// - Redis remains the distributed source for persisted DAG state.
     /// </summary>
     [Collection("redis")]
     public sealed class AiDagExecutionEngineRedisConvergenceHardeningTests
@@ -46,12 +48,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         private readonly IConnectionMultiplexer _connection;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="AiDagExecutionEngineRedisConvergenceHardeningTests"/> class.
+        /// Initializes a new instance of the test suite with the shared Redis fixture.
         /// </summary>
-        /// <param name="fixture">The shared Redis fixture.</param>
         public AiDagExecutionEngineRedisConvergenceHardeningTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
+
             _connection = fixture.Connection;
         }
 
@@ -78,9 +80,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
                 catch
                 {
-                    // Expected:
-                    // the test step intentionally fails so the execution can move
-                    // into the retry-aware waiting state.
+                    // Expected: the test step intentionally fails and moves into retry waiting.
                 }
 
                 var persistedRecord = await dagStore.GetRecordAsync(record.ExecutionId);
@@ -112,6 +112,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var engine = provider.GetRequiredService<AiDagExecutionEngine>();
             var dagStore = provider.GetRequiredService<IAiDagExecutionStore>();
             var accessor = provider.GetRequiredService<ExecutionContextAccessor>();
+            var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 
             accessor.Set(CreateRuntimeContext());
 
@@ -129,19 +130,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     }
                     catch
                     {
-                        // Expected:
-                        // the step fails by design and consumes retry budget progressively.
+                        // Expected: the step consumes retry budget progressively.
                     }
 
                     var state = await dagStore.GetStateAsync(record.ExecutionId);
                     Assert.NotNull(state);
 
-                    var step = state!.Steps["start"];
+                    var step = stateWriter.GetOrCreateStep(state!, "start");
 
                     if (step.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
                         await WaitUntilRetryWindowOpensAsync(
                             dagStore,
+                            stateWriter,
                             record.ExecutionId,
                             "start");
                     }
@@ -169,6 +170,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var engine = provider.GetRequiredService<AiDagExecutionEngine>();
             var dagStore = provider.GetRequiredService<IAiDagExecutionStore>();
             var accessor = provider.GetRequiredService<ExecutionContextAccessor>();
+            var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 
             accessor.Set(CreateRuntimeContext());
 
@@ -181,6 +183,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var terminal = await WaitForTerminalFailureAsync(
                     engine,
                     dagStore,
+                    stateWriter,
                     record.ExecutionId);
 
                 var finalState = await dagStore.GetStateAsync(record.ExecutionId);
@@ -206,18 +209,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
-        // ==============================
-        // HELPERS
-        // ==============================
-
         /// <summary>
-        /// Waits until the target step has a retry window that is due.
+        /// Waits until a retry-delayed step becomes eligible for retry.
         ///
-        /// This helper intentionally polls persisted distributed state rather than
-        /// relying on local timing assumptions.
+        /// IMPORTANT:
+        /// - Polls persisted distributed state instead of relying on local assumptions.
+        /// - Uses <see cref="IAiExecutionStateWriter"/> to access or initialize step state
+        ///   consistently with the refactored state boundary.
         /// </summary>
         private static async Task WaitUntilRetryWindowOpensAsync(
             IAiDagExecutionStore dagStore,
+            IAiExecutionStateWriter stateWriter,
             string executionId,
             string stepName,
             CancellationToken cancellationToken = default)
@@ -230,7 +232,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     throw new InvalidOperationException($"State '{executionId}' was not found.");
                 }
 
-                var step = state.GetOrCreateStep(stepName);
+                var step = stateWriter.GetOrCreateStep(state, stepName);
 
                 if (!step.NextRetryAtUtc.HasValue)
                 {
@@ -258,23 +260,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Repeatedly calls <see cref="AiDagExecutionEngine.ExecuteNextAsync(string, CancellationToken)"/>
-        /// until the global execution record reaches a terminal state or the retry limit is exceeded.
+        /// Repeatedly advances the engine until the global execution record reaches
+        /// a terminal state.
         ///
-        /// This is used because the distributed step state is the source of truth,
-        /// while the execution record is a projected summary that may lag briefly
-        /// under optimistic concurrency races.
+        /// NOTE:
+        /// - Distributed step state is the source of truth.
+        /// - The global record is a projected summary and may lag briefly during races.
         /// </summary>
         private static async Task<AiExecutionRecord> WaitForTerminalRecordAsync(
             AiDagExecutionEngine engine,
             string executionId,
             CancellationToken cancellationToken = default)
         {
-            AiExecutionRecord? record = null;
-
             for (var i = 0; i < 20; i++)
             {
-                record = await engine.ExecuteNextAsync(executionId, cancellationToken);
+                var record = await engine.ExecuteNextAsync(executionId, cancellationToken);
 
                 if (record.IsTerminal)
                 {
@@ -289,14 +289,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Drives the retry-only test pipeline until it reaches terminal failure.
+        /// Drives the retry-only pipeline until it reaches terminal failure.
         ///
-        /// This helper is used by convergence hardening tests that require a stable
-        /// terminal DAG projection while preserving the real distributed retry flow.
+        /// PURPOSE:
+        /// - Preserve the real distributed retry flow.
+        /// - Wait for retry windows when retry delay is active.
+        /// - Stop only when the projected global record becomes terminal.
         /// </summary>
         private static async Task<AiExecutionRecord> WaitForTerminalFailureAsync(
             AiDagExecutionEngine engine,
             IAiDagExecutionStore dagStore,
+            IAiExecutionStateWriter stateWriter,
             string executionId,
             CancellationToken cancellationToken = default)
         {
@@ -313,9 +316,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
                 catch
                 {
-                    // Expected:
-                    // the retry test step intentionally fails so the execution can
-                    // progress through waiting-for-retry and terminal failure states.
+                    // Expected: the retry test step intentionally fails during retry progression.
                 }
 
                 var state = await dagStore.GetStateAsync(executionId, cancellationToken);
@@ -324,12 +325,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     throw new InvalidOperationException($"State '{executionId}' was not found.");
                 }
 
-                var step = state.GetOrCreateStep("start");
+                var step = stateWriter.GetOrCreateStep(state, "start");
 
                 if (step.Status == AiStepExecutionStatus.WaitingForRetry)
                 {
                     await WaitUntilRetryWindowOpensAsync(
                         dagStore,
+                        stateWriter,
                         executionId,
                         "start",
                         cancellationToken);
@@ -341,7 +343,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Creates a test service provider using the real runtime DI and Redis fixture connection.
+        /// Creates a test service provider using real runtime DI and the Redis fixture.
         /// </summary>
         private ServiceProvider CreateTestServiceProvider(string pipelineFileName)
         {
@@ -361,18 +363,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             services.AddMemoryCache();
             services.AddOptions();
 
-
             services.AddLogging(builder =>
             {
                 builder.ClearProviders();
             });
 
             services.AddSingleton<IConnectionMultiplexer>(_connection);
-
             services.AddSingleton<TestStepAttemptTracker>();
 
             services.AddSingleton<ExecutionContextAccessor>();
-            services.AddSingleton<IExecutionContextAccessor>(sp => sp.GetRequiredService<ExecutionContextAccessor>());
+            services.AddSingleton<IExecutionContextAccessor>(
+                sp => sp.GetRequiredService<ExecutionContextAccessor>());
             services.AddSingleton<IExecutionContextFactory, ExecutionContextFactory>();
 
             var contextOptions = Options.Create(new ContextRuntimeOptions
@@ -415,7 +416,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Creates a deterministic runtime RBAC context for integration tests.
+        /// Creates a deterministic RBAC runtime context for integration tests.
         /// </summary>
         private static ExecutionContext CreateRuntimeContext()
         {
@@ -444,7 +445,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         /// <summary>
-        /// Deletes the Redis execution bundle created by the test.
+        /// Deletes all Redis keys created for one DAG execution.
         /// </summary>
         private async Task CleanupDagExecutionAsync(string executionId)
         {
@@ -459,7 +460,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             foreach (var stepName in stepNames)
             {
                 if (stepName.IsNullOrEmpty)
+                {
                     continue;
+                }
 
                 await db.KeyDeleteAsync($"ai:execution:step:{executionId}:{stepName}");
             }

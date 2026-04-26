@@ -1,54 +1,63 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 
 namespace Multiplexed.AI.Runtime.Pipeline
 {
     /// <summary>
-    /// Provides helper methods for DAG-based step selection within an AI pipeline.
+    /// Provides deterministic DAG step selection for an AI pipeline.
     ///
-    /// This selector determines which step instances are ready for execution
-    /// based on dependency satisfaction and per-step runtime status.
+    /// PURPOSE:
+    /// - Determines which pipeline steps are eligible for execution.
+    /// - Evaluates dependency completion and step runtime status.
+    /// - Handles local retry readiness checks.
     ///
     /// DESIGN:
-    /// - Deterministic
-    /// - Stateless selector logic
-    /// - Retry-aware
+    /// - Deterministic: steps are evaluated in resolved pipeline order.
+    /// - Stateless selector: no internal state is stored by this class.
+    /// - Writer-backed mutation: any missing step state is created through
+    ///   <see cref="IAiExecutionStateWriter"/>.
     ///
     /// IMPORTANT:
-    /// This class does not execute steps.
-    /// It only evaluates execution readiness from resolved topology and mutable step state.
+    /// - This selector does not execute steps.
+    /// - This selector is a local readiness helper.
+    /// - Distributed multi-worker safety must still be enforced by the claim layer
+    ///   such as Redis Lua atomic claim scripts.
     ///
-    /// NOTE:
-    /// This selector may promote:
-    /// - WaitingForRetry → Ready (when retry window opens)
-    /// - None → Ready (when step becomes schedulable for the first time)
-    ///
-    /// In distributed mode, this selector is only a local readiness helper.
-    /// Final multi-worker safety must still be enforced by the distributed claim layer
-    /// (for example Redis Lua).
+    /// MUTATION:
+    /// - Missing step states may be initialized through the state writer.
+    /// - WaitingForRetry may be promoted to Ready when retry time is due.
+    /// - None may be promoted to Ready when dependencies are satisfied.
     /// </summary>
     public static class AiPipelineDagStepSelector
     {
         /// <summary>
-        /// Selects all steps that are currently eligible for execution.
+        /// Selects all steps currently eligible for execution.
         ///
-        /// The returned list is ordered deterministically using the resolved pipeline order.
+        /// The returned list follows deterministic pipeline order.
         /// </summary>
         public static IReadOnlyList<ResolvedAiPipelineStep> SelectReadySteps(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
             DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
 
             var readySteps = new List<ResolvedAiPipelineStep>();
 
             foreach (var step in pipeline.Steps.OrderBy(x => x.Order))
             {
-                var stepState = state.GetOrCreateStep(step.Name);
+                var stepState = stateWriter.GetOrCreateStep(state, step.Name);
 
-                if (!IsStepEligible(stepState, step, state, utcNow))
+                if (!IsStepEligible(
+                        stepState,
+                        step,
+                        state,
+                        stateWriter,
+                        utcNow))
                 {
                     continue;
                 }
@@ -65,24 +74,36 @@ namespace Multiplexed.AI.Runtime.Pipeline
         public static ResolvedAiPipelineStep? SelectNextReadyStep(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
             DateTime utcNow)
         {
-            return SelectReadySteps(pipeline, state, utcNow).FirstOrDefault();
+            return SelectReadySteps(
+                    pipeline,
+                    state,
+                    stateWriter,
+                    utcNow)
+                .FirstOrDefault();
         }
 
         /// <summary>
-        /// Determines whether all pipeline steps have completed successfully.
+        /// Determines whether all resolved pipeline steps completed successfully.
+        ///
+        /// NOTE:
+        /// - Missing step states are created through the writer to keep state access centralized.
+        /// - Completion is derived from durable step state, not from the global record.
         /// </summary>
         public static bool IsCompleted(
             ResolvedAiPipeline pipeline,
-            AiExecutionState state)
+            AiExecutionState state,
+            IAiExecutionStateWriter stateWriter)
         {
             ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
 
             foreach (var step in pipeline.Steps)
             {
-                var stepState = state.GetOrCreateStep(step.Name);
+                var stepState = stateWriter.GetOrCreateStep(state, step.Name);
 
                 if (!stepState.IsCompleted)
                 {
@@ -97,50 +118,40 @@ namespace Multiplexed.AI.Runtime.Pipeline
         /// Determines whether a step is currently eligible for execution.
         ///
         /// ELIGIBILITY RULES:
-        /// - Completed steps are never eligible
-        /// - Terminally failed steps are never eligible
-        /// - Running steps are never eligible
-        /// - WaitingForRetry steps are eligible only when their retry window is due
-        /// - None steps are promoted to Ready when first becoming schedulable
-        /// - All declared dependencies must already be completed
+        /// - Completed steps are never eligible.
+        /// - Failed steps are never eligible.
+        /// - Running steps are never eligible.
+        /// - WaitingForRetry steps are eligible only when their retry window is due.
+        /// - None steps are promoted to Ready when dependencies are satisfied.
+        /// - All declared dependencies must already be completed.
+        ///
+        /// MUTATION:
+        /// - Retry-ready steps may be promoted from WaitingForRetry to Ready.
+        /// - Newly schedulable steps may be promoted from None to Ready.
         /// </summary>
         private static bool IsStepEligible(
             AiStepState stepState,
             ResolvedAiPipelineStep step,
             AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
             DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(stepState);
             ArgumentNullException.ThrowIfNull(step);
             ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
 
-            // -----------------------------------------------------------------
-            // TERMINAL STATES
-            // -----------------------------------------------------------------
-
-            // Terminal success and terminal failure must never be selected again.
             if (stepState.Status == AiStepExecutionStatus.Completed ||
                 stepState.Status == AiStepExecutionStatus.Failed)
             {
                 return false;
             }
 
-            // -----------------------------------------------------------------
-            // RUNNING STATE
-            // -----------------------------------------------------------------
-
-            // A running step is already owned or executing and cannot be selected again.
             if (stepState.Status == AiStepExecutionStatus.Running)
             {
                 return false;
             }
 
-            // -----------------------------------------------------------------
-            // RETRY HANDLING
-            // -----------------------------------------------------------------
-
-            // Retry-waiting steps remain explicitly non-runnable until their retry window opens.
-            // Once the retry time is due, the step is promoted back to Ready.
             if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
             {
                 if (stepState.NextRetryAtUtc.HasValue &&
@@ -152,17 +163,13 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 stepState.PromoteRetryToReadyIfDue(utcNow);
             }
 
-            // -----------------------------------------------------------------
-            // DEPENDENCY CHECK
-            // -----------------------------------------------------------------
-
-            // Root nodes with no dependencies are immediately eligible once schedulable.
             if (step.DependsOn.Count > 0)
             {
-                // All upstream dependencies must already be completed.
                 foreach (var dependencyName in step.DependsOn)
                 {
-                    var dependencyState = state.GetOrCreateStep(dependencyName);
+                    var dependencyState = stateWriter.GetOrCreateStep(
+                        state,
+                        dependencyName);
 
                     if (!dependencyState.IsCompleted)
                     {
@@ -171,28 +178,14 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 }
             }
 
-            // -----------------------------------------------------------------
-            // INITIAL ACTIVATION
-            // -----------------------------------------------------------------
-
-            // Steps start in 'None' state and are promoted to Ready only once
-            // their dependencies are satisfied.
             if (stepState.Status == AiStepExecutionStatus.None)
             {
                 stepState.Status = AiStepExecutionStatus.Ready;
+                stepState.UpdatedAtUtc = utcNow;
+                state.UpdatedAtUtc = utcNow;
             }
 
-            // -----------------------------------------------------------------
-            // SCHEDULABILITY CHECK
-            // -----------------------------------------------------------------
-
-            // Only schedulable states may continue.
-            if (!stepState.IsSchedulable)
-            {
-                return false;
-            }
-
-            return true;
+            return stepState.IsSchedulable;
         }
     }
 }

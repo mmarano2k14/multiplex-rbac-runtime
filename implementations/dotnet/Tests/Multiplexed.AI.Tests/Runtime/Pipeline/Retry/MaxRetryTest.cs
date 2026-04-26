@@ -1,8 +1,11 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Xunit;
@@ -11,6 +14,11 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
 {
     /// <summary>
     /// Integration tests for terminal retry failure behavior in <see cref="AiStepExecutor"/>.
+    ///
+    /// PURPOSE:
+    /// - Verifies retry exhaustion behavior.
+    /// - Ensures the final exception is rethrown.
+    /// - Ensures retry metadata is written consistently through the execution state writer boundary.
     /// </summary>
     public sealed class AiStepExecutorFailureTests
     {
@@ -25,7 +33,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             IAiRetryExceptionClassifier classifier = new DefaultAiRetryExceptionClassifier();
             IAiRuntimeLogger logger = new NoopLogger();
 
-            var dataPolicy = new InlineAiExecutionDataPolicy();
+            _ = new InlineAiExecutionDataPolicy();
 
             var executor = new AiStepExecutor(classifier, logger);
 
@@ -36,10 +44,16 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 ExecutionId = record.ExecutionId
             };
 
+            IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
+            IAiExecutionStateReader stateReader = new DefaultAiExecutionStateReader(
+                new NoopPayloadResolver());
+
             var context = new AiExecutionContext(
                 record,
                 state,
                 new ServiceProviderStub(),
+                stateReader,
+                stateWriter,
                 CancellationToken.None);
 
             var step = new AlwaysTimeoutStep();
@@ -90,6 +104,22 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
                 CancellationToken cancellationToken = default)
             {
                 throw new TimeoutException("Always failing timeout.");
+            }
+        }
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline retry metadata. Payload resolution is not expected.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this retry failure test.");
             }
         }
 

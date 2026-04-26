@@ -1,9 +1,12 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
+using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
+using Multiplexed.AI.Runtime.Execution.Context;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps
 {
@@ -33,15 +36,52 @@ namespace Multiplexed.AI.Runtime.AI.Rag.Steps
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            var providerKey = RagStepHelper.GetRequiredProviderKey(context);
+            var helper = context.GetHelper();
+
+            var providerKey = await helper.GetRequiredConfigAsync<string>(
+                "provider",
+                cancellationToken).ConfigureAwait(false);
+
             var provider = _providerResolver.Resolve(providerKey);
-            var ragContext = RagStepHelper.BuildRagExecutionContext(context);
+
+            var query = await helper.GetConfigAsync<string>(
+                "query",
+                cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                query = await helper.GetInputAsync<string>(
+                    "query",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var ragContext = new RagExecutionContext
+            {
+                QueryText = query ?? string.Empty,
+                QueryKey = helper.StepKey,
+                CorrelationId = helper.ExecutionId,
+                Inputs = await helper.GetResolvedInputsAsync(
+                    includeReservedVariables: true,
+                    cancellationToken).ConfigureAwait(false),
+                Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ExecutionId"] = helper.ExecutionId,
+                    ["StepName"] = helper.StepName,
+                    ["StepKey"] = helper.StepKey
+                }
+            };
 
             var batch = await provider.RetrieveNormalizedAsync(ragContext, cancellationToken);
 
             return AiStepResult.Ok(
                 output: $"Runtime retrieval completed with {batch.Items.Count} item(s).",
-                data: RagStepHelper.BuildRetrievalStepResultData(batch, providerKey));
+                data: helper.ToDictionary(new
+                {
+                    providerKey,
+                    itemCount = batch.Items.Count,
+                    batch,
+                    diagnostics = batch.Diagnostics
+                }, ignoreNull: true));
         }
     }
 }

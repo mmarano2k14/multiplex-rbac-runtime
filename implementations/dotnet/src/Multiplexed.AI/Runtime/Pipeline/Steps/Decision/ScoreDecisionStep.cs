@@ -1,9 +1,11 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Steps;
 
 namespace Multiplexed.AI.Runtime.Pipeline.Steps.Decision
 {
@@ -36,24 +38,25 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Decision
     {
         public string Name => "decision.score";
 
-        public Task<AiStepResult> ExecuteAsync(
+        public async Task<AiStepResult> ExecuteAsync(
             AiStepExecutionContext context,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            // Compose once, then reuse.
-            _ = context.ResolveDeclaredInputs();
+            var helper = context.GetHelper();
 
-            var score = context.GetRequiredVariable<int>("score");
+            var score = await helper.GetRequiredInputAsync<int>(
+                "score",
+                cancellationToken).ConfigureAwait(false);
 
-            var shortlistThreshold = context.TryGetStepConfigValue<int>("shortlistThreshold", out var shortlist)
-                ? shortlist
-                : 80;
+            var shortlistThreshold = (await helper.GetConfigAsync<int?>(
+                 "shortlistThreshold",
+                 cancellationToken).ConfigureAwait(false)) ?? 80;
 
-            var rejectThreshold = context.TryGetStepConfigValue<int>("rejectThreshold", out var reject)
-                ? reject
-                : 50;
+            var rejectThreshold = (await helper.GetConfigAsync<int?>(
+                "rejectThreshold",
+                cancellationToken).ConfigureAwait(false)) ?? 50;
 
             if (rejectThreshold > shortlistThreshold)
             {
@@ -76,17 +79,16 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Decision
                 decision = "review";
             }
 
-            return Task.FromResult(
-                AiStepResult.Ok(
-                    output: decision,
-                    value: decision,
-                    data: new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["decision"] = decision,
-                        ["score"] = score,
-                        ["shortlistThreshold"] = shortlistThreshold,
-                        ["rejectThreshold"] = rejectThreshold
-                    }));
+            return AiStepResult.Ok(
+                output: decision,
+                value: decision,
+                data: helper.ToDictionary(new
+                {
+                    decision,
+                    score,
+                    shortlistThreshold,
+                    rejectThreshold
+                }, ignoreNull: true));
         }
     }
 }

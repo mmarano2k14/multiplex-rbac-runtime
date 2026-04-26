@@ -1,62 +1,60 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.AI.Runtime.Execution;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using StackExchange.Redis;
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Stores
 {
     /// <summary>
-    /// 🔴 Integration tests for RedisAiExecutionStore
-    /// 
-    /// These tests validate:
-    /// - optimistic concurrency behavior (CAS-like semantics)
-    /// - data isolation (deep copy guarantees)
-    /// - consistency between record and state
+    /// Integration tests for <see cref="RedisAiExecutionStore"/>.
     ///
-    /// IMPORTANT:
-    /// These are NOT unit tests → they validate real Redis behavior.
+    /// PURPOSE:
+    /// - Validate optimistic concurrency behavior.
+    /// - Validate isolated Redis snapshots.
+    /// - Validate consistency between execution record and execution state.
+    ///
+    /// ARCHITECTURE:
+    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
+    /// - State mutation is performed through <see cref="IAiExecutionStateWriter"/>.
+    /// - State reading is performed through <see cref="IAiExecutionStateReader"/>.
     /// </summary>
     [Collection("redis")]
     public sealed class RedisAiExecutionStoreConcurrencyTests
     {
         private readonly IConnectionMultiplexer _connection;
         private readonly RedisAiExecutionStore _store;
+        private readonly IAiExecutionStateWriter _stateWriter;
+        private readonly IAiExecutionStateReader _stateReader;
 
         public RedisAiExecutionStoreConcurrencyTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
+
             var keyBuilder = new AiExecutionKeyBuilder();
+
             _connection = fixture.Connection;
             _store = new RedisAiExecutionStore(_connection, keyBuilder);
+            _stateWriter = new DefaultAiExecutionStateWriter();
+            _stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
         }
 
         /// <summary>
-        /// 🧪 CORE TEST: Concurrency control
-        ///
-        /// Simulates 2 concurrent updates on the SAME execution.
-        ///
-        /// Expected behavior:
-        /// - Only ONE update succeeds
-        /// - The other must fail (optimistic concurrency)
-        ///
-        /// This validates:
-        /// - atomicity of Redis operation (Lua / WATCH / transaction)
-        /// - correctness of ExecutionStepKey check
+        /// Validates that only one concurrent update succeeds when two workers
+        /// update the same execution snapshot using the same expected step key.
         /// </summary>
         [RedisFact]
         public async Task TryUpdateAsync_Should_Allow_Only_One_Concurrent_Update()
         {
             var executionId = Guid.NewGuid().ToString("N");
+
             await CleanupExecutionAsync(executionId);
 
-            // Initial execution record (step 0)
             var initialRecord = new AiExecutionRecord
             {
                 ExecutionId = executionId,
@@ -71,18 +69,16 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 CompletedSteps = new()
             };
 
-            // Initial state
             var initialState = new AiExecutionState
             {
                 ExecutionId = executionId,
                 PipelineName = "test-pipeline"
             };
 
-            initialState.Set("input", "hello world");
+            _stateWriter.SetData(initialState, "input", "hello world");
 
             await _store.CreateAsync(initialRecord, initialState);
 
-            // 🔁 Load TWO independent copies (simulate 2 workers)
             var record1 = await _store.GetRecordAsync(executionId);
             var state1 = await _store.GetStateAsync(executionId);
 
@@ -94,28 +90,28 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             Assert.NotNull(state1);
             Assert.NotNull(state2);
 
-            // Worker 1 mutation
             record1!.CompletedSteps.Add("hello");
             record1.CurrentStepIndex = 1;
             record1.CurrentStep = "summary";
             record1.TouchVersion();
             record1.RenewExecutionStepKey();
-            state1!.Set("branch", "update-1");
 
-            // Worker 2 mutation (same base version → conflict expected)
+            _stateWriter.SetData(state1!, "branch", "update-1");
+
             record2!.CompletedSteps.Add("hello");
             record2.CurrentStepIndex = 1;
             record2.CurrentStep = "summary";
             record2.TouchVersion();
             record2.RenewExecutionStepKey();
-            state2!.Set("branch", "update-2");
 
-            // Barrier ensures TRUE concurrency
+            _stateWriter.SetData(state2!, "branch", "update-2");
+
             using var barrier = new Barrier(2);
 
             var t1 = Task.Run(async () =>
             {
                 barrier.SignalAndWait();
+
                 return await _store.TryUpdateAsync(
                     executionId,
                     "step-key-1",
@@ -126,6 +122,7 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             var t2 = Task.Run(async () =>
             {
                 barrier.SignalAndWait();
+
                 return await _store.TryUpdateAsync(
                     executionId,
                     "step-key-1",
@@ -137,42 +134,36 @@ namespace Multiplexed.AI.Tests.Integration.Stores
 
             var results = new[] { t1.Result, t2.Result };
 
-            // ✅ EXACTLY ONE must succeed
             Assert.Equal(1, results.Count(x => x));
             Assert.Equal(1, results.Count(x => !x));
 
-            // Reload final state
             var finalRecord = await _store.GetRecordAsync(executionId);
             var finalState = await _store.GetStateAsync(executionId);
 
             Assert.NotNull(finalRecord);
             Assert.NotNull(finalState);
 
-            // Ensure consistency
             Assert.Single(finalRecord!.CompletedSteps);
             Assert.Contains("hello", finalRecord.CompletedSteps);
             Assert.Equal(1, finalRecord.CurrentStepIndex);
             Assert.Equal("summary", finalRecord.CurrentStep);
 
-            // Only one branch should exist
-            var branch = finalState!.Get<string>("branch");
+            var branch = await _stateReader.GetDataAsync<string>(
+                finalState!,
+                "branch");
+
             Assert.True(branch is "update-1" or "update-2");
         }
 
         /// <summary>
-        /// 🧪 Negative test: wrong step key
-        ///
-        /// Expected:
-        /// - update MUST fail
-        ///
-        /// Validates:
-        /// - deterministic execution guard
-        /// - protection against out-of-order execution
+        /// Validates that an update is rejected when the expected execution step key
+        /// does not match the persisted record.
         /// </summary>
         [RedisFact]
         public async Task TryUpdateAsync_Should_Return_False_When_ExpectedStepKey_Does_Not_Match()
         {
             var executionId = Guid.NewGuid().ToString("N");
+
             await CleanupExecutionAsync(executionId);
 
             var initialRecord = new AiExecutionRecord
@@ -200,6 +191,9 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             var updatedRecord = await _store.GetRecordAsync(executionId);
             var updatedState = await _store.GetStateAsync(executionId);
 
+            Assert.NotNull(updatedRecord);
+            Assert.NotNull(updatedState);
+
             updatedRecord!.CompletedSteps.Add("hello");
             updatedRecord.CurrentStepIndex = 1;
             updatedRecord.CurrentStep = "summary";
@@ -216,21 +210,17 @@ namespace Multiplexed.AI.Tests.Integration.Stores
         }
 
         /// <summary>
-        /// 🧪 Isolation test (CRITICAL)
+        /// Validates that Redis returns isolated record and state copies.
         ///
-        /// Validates that:
-        /// - Redis store returns DEEP COPIES
-        /// - no shared references between calls
-        ///
-        /// This prevents:
-        /// - cross-thread mutation bugs
-        /// - memory corruption
-        /// - hidden race conditions
+        /// PURPOSE:
+        /// - Prevent shared-reference mutation between workers.
+        /// - Ensure one loaded snapshot cannot mutate another loaded snapshot.
         /// </summary>
         [RedisFact]
         public async Task GetRecordAsync_And_GetStateAsync_Should_Return_Isolated_Copies()
         {
             var executionId = Guid.NewGuid().ToString("N");
+
             await CleanupExecutionAsync(executionId);
 
             var initialRecord = new AiExecutionRecord
@@ -253,7 +243,7 @@ namespace Multiplexed.AI.Tests.Integration.Stores
                 PipelineName = "test-pipeline"
             };
 
-            initialState.Set("input", "hello world");
+            _stateWriter.SetData(initialState, "input", "hello world");
 
             await _store.CreateAsync(initialRecord, initialState);
 
@@ -263,23 +253,25 @@ namespace Multiplexed.AI.Tests.Integration.Stores
             var recordB = await _store.GetRecordAsync(executionId);
             var stateB = await _store.GetStateAsync(executionId);
 
-            // Mutate A
-            recordA!.CompletedSteps.Add("mutated");
-            stateA!.Set("input", "changed");
+            Assert.NotNull(recordA);
+            Assert.NotNull(stateA);
+            Assert.NotNull(recordB);
+            Assert.NotNull(stateB);
 
-            // Ensure B is NOT impacted
+            recordA!.CompletedSteps.Add("mutated");
+            _stateWriter.SetData(stateA!, "input", "changed");
+
             Assert.DoesNotContain("mutated", recordB!.CompletedSteps);
 
-            // ⚠️ Important: requires JsonElement fix in AiExecutionState
-            Assert.Equal("hello world", stateB!.Get<string>("input"));
+            var input = await _stateReader.GetDataAsync<string>(
+                stateB!,
+                "input");
+
+            Assert.Equal("hello world", input);
         }
 
         /// <summary>
-        /// 🧹 Cleanup helper
-        ///
-        /// Ensures:
-        /// - test isolation
-        /// - no cross-test pollution
+        /// Removes Redis keys for a given execution.
         /// </summary>
         private async Task CleanupExecutionAsync(string executionId)
         {
@@ -294,5 +286,22 @@ namespace Multiplexed.AI.Tests.Integration.Stores
 
         private static string GetStateKey(string executionId)
             => $"ai:execution:state:{executionId}";
+
+        /// <summary>
+        /// Payload resolver placeholder.
+        ///
+        /// This test only uses inline execution state values.
+        /// Payload resolution is not expected.
+        /// </summary>
+        private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
+        {
+            public Task<object?> ResolveAsync(
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                throw new InvalidOperationException(
+                    "Payload resolution is not expected in this Redis execution store test.");
+            }
+        }
     }
 }

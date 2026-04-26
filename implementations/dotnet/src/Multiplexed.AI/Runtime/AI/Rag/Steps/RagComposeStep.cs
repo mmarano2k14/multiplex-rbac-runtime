@@ -1,7 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
-using Multiplexed.AI.Runtime.AI.Rag.Steps;
+using Multiplexed.AI.Runtime.Execution.Context;
 
 /// <summary>
 /// Pipeline step that composes a final deterministic context from a retrieval batch.
@@ -48,25 +49,19 @@ public sealed class RagComposeStep : IAiStep
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (!context.TryGetStepConfigValue<string>("sourceStep", out var sourceStep) ||
-            string.IsNullOrWhiteSpace(sourceStep))
-        {
-            throw new InvalidOperationException(
-                "rag.compose: Missing required config 'sourceStep'.");
-        }
+        var helper = context.GetHelper();
 
-        if (!context.TryGetStepConfigValue<string>("composer", out var composerKey) ||
-            string.IsNullOrWhiteSpace(composerKey))
-        {
-            throw new InvalidOperationException(
-                "rag.compose: Missing required config 'composer'.");
-        }
+        var sourceStep = await helper.GetRequiredConfigAsync<string>(
+            "sourceStep",
+            cancellationToken);
 
-        //var batch = RagStepHelper.GetRequiredBatch(context, sourceStep);
-        var batch = await RagStepHelper.GetRequiredBatchAsync(
-                        context,
-                        sourceStep,
-                        cancellationToken);
+        var composerKey = await helper.GetRequiredConfigAsync<string>(
+            "composer",
+            cancellationToken);
+
+        var batch = await helper.GetRequiredBatchAsync(
+            sourceStep,
+            cancellationToken);
 
         var composer = _composerResolver.Resolve(composerKey);
 
@@ -74,6 +69,13 @@ public sealed class RagComposeStep : IAiStep
 
         return AiStepResult.Ok(
             output: composed.Context?.Text ?? string.Empty,
-            data: RagStepHelper.BuildCompositionStepResultData(composed));
+            //data: helper.ToDictionary(composed, ignoreNull: false));
+            data: helper.ToDictionary(new
+            {
+                context = composed.Context,
+                fragments = composed.Fragments,
+                fragmentCount = composed.Fragments.Count,
+                metadata = composed.Metadata
+            }, ignoreNull: false));
     }
 }

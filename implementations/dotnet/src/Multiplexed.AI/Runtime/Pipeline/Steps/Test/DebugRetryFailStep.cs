@@ -21,7 +21,7 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            var stepState = context.State.GetOrCreateStep(context.Step.Name);
+            var stepState = context.Execution.StateWriter.GetOrCreateStep(context.Execution.State, context.Step.Name);
 
             throw new InvalidOperationException(
                 $"Intentional retry test failure. " +

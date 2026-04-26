@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
@@ -12,6 +13,7 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Test;
 using Multiplexed.AI.Stores;
@@ -25,6 +27,7 @@ using Multiplexed.Rbac.Core.Stores.Memory;
 using Multiplexed.Realtime.DI;
 using StackExchange.Redis;
 using Xunit;
+using static Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures.AiDagExecutionEngineTestHost;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
@@ -89,10 +92,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     // Expected:
                     // the test step fails by design.
                 }
-
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
                 var finalRecord = await WaitForTerminalFailureAsync(
                     engine,
                     dagStore,
+                    stateWriter,
                     record.ExecutionId);
 
                 var finalState = await dagStore.GetStateAsync(record.ExecutionId);
@@ -156,9 +160,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 Assert.Equal(AiExecutionStatus.Waiting, recordAfterFirstFailure!.Status);
                 Assert.False(recordAfterFirstFailure.IsTerminal);
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -172,9 +178,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     // Expected.
                 }
 
+
                 var finalRecord = await WaitForTerminalFailureAsync(
                     engine,
                     dagStore,
+                    stateWriter,
                     record.ExecutionId);
 
                 var finalState = await dagStore.GetStateAsync(record.ExecutionId);
@@ -232,9 +240,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(1, stepAfterFirstFailure.RetryCount);
                 Assert.Equal(2, stepAfterFirstFailure.MaxRetries);
                 Assert.True(stepAfterFirstFailure.NextRetryAtUtc.HasValue);
-
+                var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -257,9 +266,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(2, stepAfterSecondFailure.RetryCount);
                 Assert.Equal(2, stepAfterSecondFailure.MaxRetries);
                 Assert.True(stepAfterSecondFailure.NextRetryAtUtc.HasValue);
-
+            
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
+                    stateWriter,
                     record.ExecutionId,
                     "start");
 
@@ -276,6 +286,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalRecord = await WaitForTerminalFailureAsync(
                     engine,
                     dagStore,
+                    stateWriter,
                     record.ExecutionId);
 
                 var finalState = await dagStore.GetStateAsync(record.ExecutionId);
@@ -302,14 +313,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         {
             var pipeline = CreateSingleStepPipeline();
             var state = new AiExecutionState();
+            var writer = new DefaultAiExecutionStateWriter();
 
-            var step = state.GetOrCreateStep("start");
+            var step = writer.GetOrCreateStep(state, "start");
             step.Status = AiStepExecutionStatus.WaitingForRetry;
             step.NextRetryAtUtc = DateTime.UtcNow.AddSeconds(10);
 
             var result = AiPipelineDagStepSelector.SelectReadySteps(
                 pipeline,
                 state,
+                writer,
                 DateTime.UtcNow);
 
             Assert.Empty(result);
@@ -320,44 +333,45 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         {
             var pipeline = CreateSingleStepPipeline();
             var state = new AiExecutionState();
+            var writer = new DefaultAiExecutionStateWriter();
 
-            var step = state.GetOrCreateStep("start");
+            var step = writer.GetOrCreateStep(state, "start");
             step.Status = AiStepExecutionStatus.WaitingForRetry;
             step.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
 
             var result = AiPipelineDagStepSelector.SelectReadySteps(
                 pipeline,
                 state,
+                writer,
                 DateTime.UtcNow);
 
             Assert.Single(result);
 
-            var updatedStep = state.GetOrCreateStep("start");
-            Assert.True(updatedStep.IsSchedulable); // promu Ready
+            var updatedStep = writer.GetOrCreateStep(state, "start");
+            Assert.True(updatedStep.IsSchedulable);
         }
 
         [Fact]
         public void SelectReadySteps_Should_Not_Return_Retry_Step_If_Dependencies_Not_Completed()
         {
-            var pipeline = CreateTwoStepPipeline(); // start -> step2
+            var pipeline = CreateTwoStepPipeline();
             var state = new AiExecutionState();
+            var writer = new DefaultAiExecutionStateWriter();
 
-            var step1 = state.GetOrCreateStep("start");
+            var step1 = writer.GetOrCreateStep(state, "start");
             step1.Status = AiStepExecutionStatus.WaitingForRetry;
             step1.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
 
-            var step2 = state.GetOrCreateStep("step2");
+            var step2 = writer.GetOrCreateStep(state, "step2");
             step2.Status = AiStepExecutionStatus.None;
 
             var result = AiPipelineDagStepSelector.SelectReadySteps(
                 pipeline,
                 state,
+                writer,
                 DateTime.UtcNow);
 
-            // start doit être ready (root)
             Assert.Contains(result, x => x.Name == "start");
-
-            // step2 ne doit PAS être ready
             Assert.DoesNotContain(result, x => x.Name == "step2");
         }
 
@@ -366,14 +380,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         {
             var pipeline = CreateSingleStepPipeline();
             var state = new AiExecutionState();
+            var writer = new DefaultAiExecutionStateWriter();
 
-            var step = state.GetOrCreateStep("start");
+            var step = writer.GetOrCreateStep(state, "start");
             step.Status = AiStepExecutionStatus.WaitingForRetry;
             step.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
 
             var result = AiDagExecutionConvergenceEvaluator.Evaluate(
                 pipeline,
                 state,
+                writer,
                 DateTime.UtcNow);
 
             Assert.Equal(AiExecutionStatus.Running, result.Status);
@@ -431,43 +447,32 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         /// </summary>
         private static async Task WaitUntilRetryWindowOpensAsync(
             IAiDagExecutionStore dagStore,
+            IAiExecutionStateWriter writer,
             string executionId,
             string stepName,
             CancellationToken cancellationToken = default)
         {
             for (var i = 0; i < 100; i++)
             {
-                var state = await dagStore.GetStateAsync(executionId, cancellationToken);
-                if (state is null)
-                {
-                    throw new InvalidOperationException($"State '{executionId}' was not found.");
-                }
+                var state = await dagStore.GetStateAsync(executionId, cancellationToken)
+                    ?? throw new InvalidOperationException($"State '{executionId}' not found.");
 
-                var step = state.GetOrCreateStep(stepName);
+                var step = writer.GetOrCreateStep(state, stepName);
 
                 if (!step.NextRetryAtUtc.HasValue)
-                {
                     return;
-                }
 
                 var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+
                 if (delay <= TimeSpan.Zero)
-                {
                     return;
-                }
 
-                var wait = delay < TimeSpan.FromMilliseconds(50)
+                await Task.Delay(delay < TimeSpan.FromMilliseconds(50)
                     ? delay
-                    : TimeSpan.FromMilliseconds(50);
-
-                if (wait > TimeSpan.Zero)
-                {
-                    await Task.Delay(wait, cancellationToken);
-                }
+                    : TimeSpan.FromMilliseconds(50), cancellationToken);
             }
 
-            throw new TimeoutException(
-                $"Retry window for step '{stepName}' in execution '{executionId}' did not open in time.");
+            throw new TimeoutException("Retry window did not open.");
         }
 
         /// <summary>
@@ -478,6 +483,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         private static async Task<AiExecutionRecord> WaitForTerminalFailureAsync(
             AiDagExecutionEngine engine,
             IAiDagExecutionStore dagStore,
+            IAiExecutionStateWriter writer,
             string executionId,
             CancellationToken cancellationToken = default)
         {
@@ -488,45 +494,37 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     var record = await engine.ExecuteNextAsync(executionId, cancellationToken);
 
                     if (record.IsTerminal)
-                    {
                         return record;
-                    }
                 }
                 catch
                 {
-                    // Expected:
-                    // failing debug steps may still throw while the store transitions
-                    // the step through waiting-for-retry and terminal failure.
+                    // expected
                 }
 
-                var state = await dagStore.GetStateAsync(executionId, cancellationToken);
-                if (state is null)
-                {
-                    throw new InvalidOperationException($"State '{executionId}' was not found.");
-                }
+                var state = await dagStore.GetStateAsync(executionId, cancellationToken)
+                    ?? throw new InvalidOperationException("State missing");
 
-                var step = state.GetOrCreateStep("start");
+                var step = writer.GetOrCreateStep(state, "start");
 
                 if (step.Status == AiStepExecutionStatus.WaitingForRetry)
                 {
                     await WaitUntilRetryWindowOpensAsync(
                         dagStore,
+                        writer,
                         executionId,
                         "start",
                         cancellationToken);
                 }
 
-                var recordSnapshot = await dagStore.GetRecordAsync(executionId, cancellationToken);
-                if (recordSnapshot?.IsTerminal == true)
-                {
-                    return recordSnapshot;
-                }
+                var snapshot = await dagStore.GetRecordAsync(executionId, cancellationToken);
+
+                if (snapshot?.IsTerminal == true)
+                    return snapshot;
 
                 await Task.Delay(50, cancellationToken);
             }
 
-            throw new TimeoutException(
-                $"Execution '{executionId}' did not converge to terminal failure in time.");
+            throw new TimeoutException("Did not converge.");
         }
 
         /// <summary>
@@ -549,6 +547,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             services.AddMemoryCache();
             services.AddOptions();
+
+            services.AddSingleton<IAiExecutionStateWriter, DefaultAiExecutionStateWriter>();
+            services.AddSingleton<IAiExecutionStateReader>(sp =>
+                new DefaultAiExecutionStateReader(new NoopPayloadResolver()));
 
             services.AddLogging(builder =>
             {
