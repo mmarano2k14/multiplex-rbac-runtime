@@ -248,6 +248,87 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             Assert.Equal(0, payloadStore.LoadStepAsyncCallCount);
         }
 
+        /// <summary>
+        /// Verifies that resolver returns null when step is not found
+        /// in both hot state and archive index.
+        ///
+        /// WHY THIS MATTERS:
+        /// - Prevents unexpected exceptions
+        /// - Allows DAG to handle missing steps safely
+        /// </summary>
+        [Fact]
+        public async Task GetStepAsync_Should_Return_Null_When_Step_Not_Found()
+        {
+            var state = new AiExecutionState
+            {
+                ExecutionId = "execution-1",
+                Steps = new Dictionary<string, AiStepState>()
+            };
+
+            var indexStore = new TestStepPayloadIndexStore(
+                new Dictionary<string, AiArchivedStepPayloadIndex>());
+
+            var payloadStore = new TestStepPayloadStore();
+
+            var resolver = new DefaultAiExecutionStepResolver(
+                indexStore,
+                payloadStore
+                );
+
+            var step = await resolver.GetStepAsync(
+                state.ExecutionId,
+                "unknown-step",
+                state,
+                CancellationToken.None);
+
+            Assert.Null(step);
+
+            Assert.Equal(1, indexStore.GetAsyncCallCount);
+            Assert.Equal(0, payloadStore.LoadStepAsyncCallCount);
+        }
+
+        /// <summary>
+        /// Verifies that resolver handles missing payload gracefully
+        /// when archive index exists but payload load returns null.
+        ///
+        /// WHY THIS MATTERS:
+        /// - Protects against partial corruption (index exists but payload missing)
+        /// - Prevents crashes in production
+        /// </summary>
+        [Fact]
+        public async Task GetStepAsync_Should_Handle_Missing_Payload_Gracefully()
+        {
+            var state = new AiExecutionState
+            {
+                ExecutionId = "execution-1",
+                Steps = new Dictionary<string, AiStepState>()
+            };
+
+            var indexStore = new TestStepPayloadIndexStore(
+                new Dictionary<string, AiArchivedStepPayloadIndex>
+                {
+                    ["step-1"] = CreateIndex("execution-1", "step-1", new AiStoredPayload())
+                });
+
+            var payloadStore = new NullReturningPayloadStore();
+
+            var resolver = new DefaultAiExecutionStepResolver(
+                indexStore,
+                payloadStore
+                );
+
+            var step = await resolver.GetStepAsync(
+                state.ExecutionId,
+                "step-1",
+                state,
+                CancellationToken.None);
+
+            Assert.Null(step);
+
+            Assert.Equal(1, indexStore.GetAsyncCallCount);
+            Assert.Equal(1, payloadStore.LoadStepAsyncCallCount);
+        }
+
         private static AiArchivedStepPayloadIndex CreateIndex(
             string executionId,
             string stepName,
@@ -302,6 +383,30 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                             Data = payload.InlineValue as Dictionary<string, object?>
                         }
                     });
+            }
+        }
+
+        private sealed class NullReturningPayloadStore : IAiStepPayloadStore
+        {
+            public int LoadStepAsyncCallCount { get; private set; }
+
+            Task<AiStoredPayload> IAiStepPayloadStore.SaveStepAsync(
+                string executionId,
+                string stepName,
+                AiStepState step,
+                CancellationToken cancellationToken)
+            {
+                throw new NotImplementedException();
+            }
+
+            public Task<AiStepState?> LoadStepAsync(
+                string executionId,
+                string stepName,
+                AiStoredPayload payload,
+                CancellationToken cancellationToken = default)
+            {
+                LoadStepAsyncCallCount++;
+                return Task.FromResult<AiStepState?>(null);
             }
         }
 

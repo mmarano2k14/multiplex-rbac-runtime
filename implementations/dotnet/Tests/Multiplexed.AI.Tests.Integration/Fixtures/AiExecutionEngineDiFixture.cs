@@ -253,6 +253,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
 
             services.AddMultiplexAI(options);
 
+            services.TryAddEnumerable(
+                 ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>());
+
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>());
+
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>());
+
             services.AddAiExecutionCleanup(cleanup =>
             {
                 cleanup.AutoCleanupOnCompleted = options.Cleanup.AutoCleanupOnCompleted;
@@ -313,14 +322,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         }
 
         private static void EnsureDefaultPayloadStoreOptions(
-    AiEngineOptions options,
-    string? mongoConnectionString,
-    string? mongoDatabaseName)
+            AiEngineOptions options,
+            string? mongoConnectionString,
+            string? mongoDatabaseName)
         {
             options.PayloadStore ??= new AiPayloadStoreOptions();
 
             options.PayloadStore.Enabled = true;
-            options.PayloadStore.Provider ??= "mongo-redis";
+            if (string.IsNullOrWhiteSpace(options.PayloadStore.Provider) || string.Equals(options.PayloadStore.Provider, "inmemory", StringComparison.OrdinalIgnoreCase))
+            {
+                options.PayloadStore.Provider = "mongo-redis";
+            }
             options.PayloadStore.RequireReplaySafePayloads = true;
 
             if (options.PayloadStore.MaxInlineSizeBytes <= 0)
