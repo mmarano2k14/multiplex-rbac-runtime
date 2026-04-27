@@ -1,5 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads

@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+
+namespace Multiplexed.Abstractions.AI.Execution.Payloads
 {
     /// <summary>
     /// Decides how execution data should be stored.

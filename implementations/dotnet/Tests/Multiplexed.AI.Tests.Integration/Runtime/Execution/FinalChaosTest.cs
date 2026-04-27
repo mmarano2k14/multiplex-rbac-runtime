@@ -1,5 +1,9 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
@@ -626,6 +630,38 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     AutoCleanupOnCompleted = false,
                     AutoCleanupOnFailed = false,
                     SuppressCleanupExceptions = true
+                },
+
+                PayloadStore = new AiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    Provider = "mongo-redis",
+                    RequireReplaySafePayloads = true,
+                    MaxInlineSizeBytes = 512,
+
+                    Mongo = new MongoAiPayloadStoreOptions
+                    {
+                        Enabled = true,
+                        ConnectionString = ConnectionString,
+                        DatabaseName = DatabaseName,
+                        CollectionName = $"payloads_chaos_{Guid.NewGuid():N}"
+                    },
+
+                    RedisCache = new RedisAiPayloadCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = $"test:ai:payload:chaos:{Guid.NewGuid():N}",
+                        ExpirationSeconds = 120,
+                        MaxCacheablePayloadBytes = 1024 * 1024
+                    },
+
+                    StepIndexCache = new RedisAiStepPayloadIndexCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = $"test:ai:step-index:chaos:{Guid.NewGuid():N}",
+                        ExpirationSeconds = 120,
+                        RefreshTtlOnRead = true
+                    }
                 }
             };
         }

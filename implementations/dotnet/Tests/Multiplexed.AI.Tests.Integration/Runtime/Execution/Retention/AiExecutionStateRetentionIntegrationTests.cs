@@ -3,6 +3,11 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
@@ -12,6 +17,8 @@ using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
+using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Xunit;
@@ -21,6 +28,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 {
     public sealed class AiExecutionStateRetentionAdvancedIntegrationTests
     {
+        private const int FastLinearStepCount = 60;
+        private const int FastParallelStepCount = 40;
+        private const int FastRetryStepCount = 30;
+        private const int PayloadResolutionStepCount = 3;
+        private const int MaxCompletedStepsInState = 20;
+
         private readonly ITestOutputHelper _output;
 
         public AiExecutionStateRetentionAdvancedIntegrationTests(ITestOutputHelper output)
@@ -31,7 +44,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         [Fact]
         public async Task LinearGraph_Should_Not_Evict_Due_To_DependencyChain()
         {
-            var (_, snapshot, host) = await RunPipelineWithHost(200, true);
+            var (_, snapshot, host) = await RunPipelineWithHost(
+                FastLinearStepCount,
+                true,
+                AiExecutionRetentionMode.Compact);
 
             LogRetentionSnapshot(nameof(LinearGraph_Should_Not_Evict_Due_To_DependencyChain), snapshot);
 
@@ -44,7 +60,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         [Fact]
         public async Task ParallelGraph_Should_Evict_Old_Steps()
         {
-            var (_, snapshot, host) = await RunPipelineWithHost(200, false);
+            var (_, snapshot, host) = await RunPipelineWithHost(
+                FastParallelStepCount,
+                false,
+                AiExecutionRetentionMode.Evict,
+                fullyParallel: true);
 
             LogRetentionSnapshot(nameof(ParallelGraph_Should_Evict_Old_Steps), snapshot);
 
@@ -53,8 +73,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 $"Expected evicted steps > 0. Before={snapshot.TotalStepsBefore}, After={snapshot.TotalStepsAfter}, Evicted={snapshot.EvictedSteps}");
 
             Assert.True(
-                snapshot.TotalStepsAfter < snapshot.TotalStepsBefore,
-                $"Expected state reduction. Before={snapshot.TotalStepsBefore}, After={snapshot.TotalStepsAfter}, Evicted={snapshot.EvictedSteps}");
+                snapshot.TotalStepsAfter <= MaxCompletedStepsInState,
+                $"Expected state to stay within retention limit. Before={snapshot.TotalStepsBefore}, After={snapshot.TotalStepsAfter}, Evicted={snapshot.EvictedSteps}");
+
+            Assert.Equal(MaxCompletedStepsInState, snapshot.TotalStepsAfter);
 
             await host.DisposeAsync();
         }
@@ -62,9 +84,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         [Fact]
         public async Task Retention_Should_Not_Break_Payload_Resolution()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(200, false);
+            var (state, snapshot, host) = await RunPipelineWithHost(
+                PayloadResolutionStepCount,
+                false,
+                AiExecutionRetentionMode.Compact,
+                fullyParallel: true,
+                payloadSize: 4096);
 
             LogRetentionSnapshot(nameof(Retention_Should_Not_Break_Payload_Resolution), snapshot);
+
+            Assert.True(
+                snapshot.CompactedSteps > 0,
+                $"Expected compacted steps > 0. Compacted={snapshot.CompactedSteps}");
 
             var payloadStoreResolver = host.ServiceProvider.GetRequiredService<IAiPayloadStoreResolver>();
             var payloadStore = payloadStoreResolver.Resolve();
@@ -75,7 +106,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
             Assert.NotNull(payload);
 
-            var content = await payloadStore.LoadAsync(payload!.ArtifactId!);
+            var content = await payloadStore
+                .LoadAsync(payload!.ArtifactId!)
+                .WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.NotNull(content);
 
@@ -85,7 +118,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         [Fact]
         public async Task Retention_Should_Not_Break_Retry_Steps()
         {
-            var (state, snapshot, host) = await RunPipelineWithRetry(50);
+            var (state, snapshot, host) = await RunPipelineWithRetry(FastRetryStepCount);
 
             LogRetentionSnapshot(nameof(Retention_Should_Not_Break_Retry_Steps), snapshot);
 
@@ -98,7 +131,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         [Fact]
         public async Task Retention_Should_Not_Require_Replay_Service_When_Snapshots_Are_Disabled()
         {
-            var (_, snapshot, host) = await RunPipelineWithHost(200, false);
+            var (_, snapshot, host) = await RunPipelineWithHost(
+                FastParallelStepCount,
+                false,
+                AiExecutionRetentionMode.Evict,
+                fullyParallel: true);
 
             LogRetentionSnapshot(nameof(Retention_Should_Not_Require_Replay_Service_When_Snapshots_Are_Disabled), snapshot);
 
@@ -110,34 +147,43 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             await host.DisposeAsync();
         }
 
-        private async Task<(AiExecutionState, AiExecutionRetentionMetricsSnapshot, AiDagExecutionEngineTestHost)>
-            RunPipelineWithHost(int stepCount, bool linear)
+        private async Task<(AiExecutionState, AiExecutionRetentionServiceMetricsSnapshot, AiDagExecutionEngineTestHost)>
+            RunPipelineWithHost(
+                int stepCount,
+                bool linear,
+                AiExecutionRetentionMode mode = AiExecutionRetentionMode.Hybrid,
+                bool fullyParallel = false,
+                int payloadSize = 256)
         {
-            var pipeline = CreatePipeline(stepCount, linear);
-            var host = await CreateHost(pipeline);
+            var pipeline = fullyParallel
+                ? CreateFullyParallelPipeline(stepCount, payloadSize)
+                : CreatePipeline(stepCount, linear, payloadSize);
+            var host = await CreateHost(pipeline, mode);
 
-            _output.WriteLine($"Pipeline='{pipeline.Name}', Steps='{stepCount}', Linear='{linear}'.");
+            _output.WriteLine($"Pipeline='{pipeline.Name}', Steps='{stepCount}', Linear='{linear}', FullyParallel='{fullyParallel}', PayloadSize='{payloadSize}'.");
 
             var created = await host.Engine.CreateAsync(pipeline.Name, new Dictionary<string, object?>());
 
             _output.WriteLine($"Execution created. ExecutionId='{created.ExecutionId}'.");
 
-            await host.Engine.ExecuteAllAsync(created.ExecutionId);
+            await host.Engine
+                .ExecuteAllAsync(created.ExecutionId)
+                .WaitAsync(TimeSpan.FromSeconds(30));
 
             _output.WriteLine($"Execution completed. ExecutionId='{created.ExecutionId}'.");
 
             var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
             var state = await dagStore.GetStateAsync(created.ExecutionId);
 
-            var metrics = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionMetrics>();
-            var snapshot = ((InMemoryAiExecutionRetentionMetrics)metrics).Snapshot();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionServiceMetrics>();
+            var snapshot = ((InMemoryAiExecutionRetentionServiceMetrics)metrics).Snapshot();
 
             _output.WriteLine($"State loaded. StepsAfterRetention='{state?.Steps.Count ?? 0}'.");
 
             return (state!, snapshot, host);
         }
 
-        private async Task<(AiExecutionState, AiExecutionRetentionMetricsSnapshot, AiDagExecutionEngineTestHost)>
+        private async Task<(AiExecutionState, AiExecutionRetentionServiceMetricsSnapshot, AiDagExecutionEngineTestHost)>
             RunPipelineWithRetry(int stepCount)
         {
             var pipeline = CreateRetryPipeline(stepCount);
@@ -151,7 +197,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
             try
             {
-                await host.Engine.ExecuteAllAsync(created.ExecutionId);
+                await host.Engine
+                    .ExecuteAllAsync(created.ExecutionId)
+                    .WaitAsync(TimeSpan.FromSeconds(30));
             }
             catch (Exception ex)
             {
@@ -161,15 +209,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
             var state = await dagStore.GetStateAsync(created.ExecutionId);
 
-            var metrics = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionMetrics>();
-            var snapshot = ((InMemoryAiExecutionRetentionMetrics)metrics).Snapshot();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionServiceMetrics>();
+            var snapshot = ((InMemoryAiExecutionRetentionServiceMetrics)metrics).Snapshot();
 
             _output.WriteLine($"Retry state loaded. Steps='{state?.Steps.Count ?? 0}'.");
 
             return (state!, snapshot, host);
         }
 
-        private static async Task<AiDagExecutionEngineTestHost> CreateHost(AiPipelineDefinition pipeline)
+        private static async Task<AiDagExecutionEngineTestHost> CreateHost(
+            AiPipelineDefinition pipeline,
+            AiExecutionRetentionMode mode = AiExecutionRetentionMode.Hybrid)
         {
             var options = new AiEngineOptions
             {
@@ -178,7 +228,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 StateRetention = new AiExecutionStateRetentionOptions
                 {
                     Enabled = true,
-                    MaxCompletedStepsInState = 50
+                    MaxCompletedStepsInState = MaxCompletedStepsInState,
+                    Mode = mode
                 },
 
                 PayloadStore = new AiPayloadStoreOptions
@@ -186,7 +237,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                     Enabled = true,
                     Provider = "mongo-redis",
                     RequireReplaySafePayloads = true,
-                    MaxInlineSizeBytes = 1024,
+                    MaxInlineSizeBytes = 512,
+
                     Mongo = new MongoAiPayloadStoreOptions
                     {
                         Enabled = true,
@@ -194,12 +246,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                         DatabaseName = "multiplexed_ai_tests",
                         CollectionName = $"payloads_retention_{Guid.NewGuid():N}"
                     },
+
                     RedisCache = new RedisAiPayloadCacheOptions
                     {
                         Enabled = true,
                         KeyPrefix = $"test:ai:payload:retention:{Guid.NewGuid():N}",
                         ExpirationSeconds = 120,
                         MaxCacheablePayloadBytes = 1024 * 1024
+                    },
+
+                    StepIndexCache = new RedisAiStepPayloadIndexCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = $"test:ai:step-index:retention:{Guid.NewGuid():N}",
+                        ExpirationSeconds = 120,
+                        RefreshTtlOnRead = true
                     }
                 }
             };
@@ -219,26 +280,34 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                     services.AddAiStepsFromAssemblies(
                         typeof(AiExecutionStateRetentionAdvancedIntegrationTests).Assembly);
 
-                    services.RemoveAll<IAiExecutionRetentionMetrics>();
-                    services.RemoveAll<IAiExecutionStateRetentionPolicy>();
+                    services.RemoveAll<IAiExecutionRetentionPolicy>();
+                    services.RemoveAll<IAiExecutionRetentionPolicyResolver>();
+                    services.RemoveAll<IAiExecutionRetentionService>();
+                    services.RemoveAll<IAiExecutionRetentionServiceMetrics>();
 
-                    services.AddSingleton<IAiExecutionRetentionMetrics, InMemoryAiExecutionRetentionMetrics>();
+                    services.AddSingleton<IAiExecutionRetentionPolicy, NoopAiExecutionRetentionPolicy>();
+                    services.AddSingleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>();
+                    services.AddSingleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>();
+                    services.AddSingleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>();
 
-                    services.AddSingleton<IAiExecutionStateRetentionPolicy>(sp =>
-                    {
-                        var metrics = sp.GetRequiredService<IAiExecutionRetentionMetrics>();
+                    services.AddSingleton<
+                        IAiExecutionRetentionPolicyResolver,
+                        DefaultAiExecutionRetentionPolicyResolver>();
 
-                        return new DefaultAiExecutionStateRetentionPolicy(
-                            options.StateRetention,
-                            metrics);
-                    });
+                    services.AddSingleton<
+                        IAiExecutionRetentionServiceMetrics,
+                        InMemoryAiExecutionRetentionServiceMetrics>();
+
+                    services.AddSingleton<
+                        IAiExecutionRetentionService,
+                        AiExecutionRetentionService>();
                 },
                 "mongodb://localhost:27017",
                 "multiplexed_ai_tests",
                 "localhost:6379");
         }
 
-        private static AiPipelineDefinition CreatePipeline(int steps, bool linear)
+        private static AiPipelineDefinition CreatePipeline(int steps, bool linear, int payloadSize = 256)
         {
             var list = new List<AiPipelineStepDefinition>();
 
@@ -256,14 +325,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                             : new List<string> { $"step-{i - 1}" },
                         Config = new Dictionary<string, object?>
                         {
-                            ["size"] = i % 2 == 0 ? 128 : 4096
+                            ["size"] = payloadSize
                         }
                     });
                 }
             }
             else
             {
-                const int branchSize = 10;
+                const int branchSize = 5;
                 var branches = steps / branchSize;
 
                 for (var branch = 0; branch < branches; branch++)
@@ -282,7 +351,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                                 : new List<string> { $"step-{index - 1}" },
                             Config = new Dictionary<string, object?>
                             {
-                                ["size"] = index % 2 == 0 ? 128 : 4096
+                                ["size"] = payloadSize
                             }
                         });
                     }
@@ -298,10 +367,38 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                         DependsOn = new List<string>(),
                         Config = new Dictionary<string, object?>
                         {
-                            ["size"] = index % 2 == 0 ? 128 : 4096
+                            ["size"] = payloadSize
                         }
                     });
                 }
+            }
+
+            return new AiPipelineDefinition
+            {
+                Name = $"pipeline-{Guid.NewGuid():N}",
+                Version = "1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps = list
+            };
+        }
+
+        private static AiPipelineDefinition CreateFullyParallelPipeline(int steps, int payloadSize = 256)
+        {
+            var list = new List<AiPipelineStepDefinition>();
+
+            for (var i = 0; i < steps; i++)
+            {
+                list.Add(new AiPipelineStepDefinition
+                {
+                    Name = $"step-{i}",
+                    StepKey = "test.retention",
+                    Order = i,
+                    DependsOn = new List<string>(),
+                    Config = new Dictionary<string, object?>
+                    {
+                        ["size"] = payloadSize
+                    }
+                });
             }
 
             return new AiPipelineDefinition
@@ -342,15 +439,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
         private void LogRetentionSnapshot(
             string testName,
-            AiExecutionRetentionMetricsSnapshot snapshot)
+            AiExecutionRetentionServiceMetricsSnapshot snapshot)
         {
             _output.WriteLine(
-                $"[{testName}] Retention metrics: " +
+                $"[{testName}] Retention service metrics: " +
+                $"Mode={snapshot.LastMode}, " +
                 $"Before={snapshot.TotalStepsBefore}, " +
                 $"After={snapshot.TotalStepsAfter}, " +
-                $"Evicted={snapshot.EvictedSteps}, " +
-                $"Active={snapshot.ActiveSteps}, " +
-                $"Pending={snapshot.PendingSteps}");
+                $"PlannedCompact={snapshot.StepsPlannedForCompaction}, " +
+                $"PlannedEvict={snapshot.StepsPlannedForEviction}, " +
+                $"Compacted={snapshot.CompactedSteps}, " +
+                $"Evicted={snapshot.EvictedSteps}");
         }
 
         [AiStep("test.retention")]

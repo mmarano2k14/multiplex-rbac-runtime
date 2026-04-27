@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+
+namespace Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers
 {
     /// <summary>
     /// Resolves stored execution payloads into materialized runtime values.

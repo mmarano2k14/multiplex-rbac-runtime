@@ -6,35 +6,11 @@ namespace Multiplexed.AI.Runtime.Pipeline
 {
     /// <summary>
     /// Provides deterministic DAG step selection for an AI pipeline.
-    ///
-    /// PURPOSE:
-    /// - Determines which pipeline steps are eligible for execution.
-    /// - Evaluates dependency completion and step runtime status.
-    /// - Handles local retry readiness checks.
-    ///
-    /// DESIGN:
-    /// - Deterministic: steps are evaluated in resolved pipeline order.
-    /// - Stateless selector: no internal state is stored by this class.
-    /// - Writer-backed mutation: any missing step state is created through
-    ///   <see cref="IAiExecutionStateWriter"/>.
-    ///
-    /// IMPORTANT:
-    /// - This selector does not execute steps.
-    /// - This selector is a local readiness helper.
-    /// - Distributed multi-worker safety must still be enforced by the claim layer
-    ///   such as Redis Lua atomic claim scripts.
-    ///
-    /// MUTATION:
-    /// - Missing step states may be initialized through the state writer.
-    /// - WaitingForRetry may be promoted to Ready when retry time is due.
-    /// - None may be promoted to Ready when dependencies are satisfied.
     /// </summary>
     public static class AiPipelineDagStepSelector
     {
         /// <summary>
-        /// Selects all steps currently eligible for execution.
-        ///
-        /// The returned list follows deterministic pipeline order.
+        /// Selects all steps currently eligible for execution using hot state only.
         /// </summary>
         public static IReadOnlyList<ResolvedAiPipelineStep> SelectReadySteps(
             ResolvedAiPipeline pipeline,
@@ -52,12 +28,53 @@ namespace Multiplexed.AI.Runtime.Pipeline
             {
                 var stepState = stateWriter.GetOrCreateStep(state, step.Name);
 
-                if (!IsStepEligible(
+                if (!IsStepEligible(stepState, step, state, stateWriter, utcNow))
+                {
+                    continue;
+                }
+
+                readySteps.Add(step);
+            }
+
+            return readySteps;
+        }
+
+        /// <summary>
+        /// Selects all steps currently eligible for execution using hot state plus archived step resolution.
+        ///
+        /// PURPOSE:
+        /// - Supports step eviction through the external step payload index.
+        /// - Allows dependency checks to resolve evicted completed steps.
+        /// - Avoids full archived step payload loading when only dependency status is needed.
+        /// - Preserves the same retry and readiness mutation rules as the hot-state selector.
+        /// </summary>
+        public static async Task<IReadOnlyList<ResolvedAiPipelineStep>> SelectReadyStepsAsync(
+            ResolvedAiPipeline pipeline,
+            AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
+            IAiExecutionStepResolver resolver,
+            DateTime utcNow,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(pipeline);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            var readySteps = new List<ResolvedAiPipelineStep>();
+
+            foreach (var step in pipeline.Steps.OrderBy(x => x.Order))
+            {
+                var stepState = stateWriter.GetOrCreateStep(state, step.Name);
+
+                if (!await IsStepEligibleAsync(
                         stepState,
                         step,
                         state,
                         stateWriter,
-                        utcNow))
+                        resolver,
+                        utcNow,
+                        cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
@@ -86,11 +103,30 @@ namespace Multiplexed.AI.Runtime.Pipeline
         }
 
         /// <summary>
-        /// Determines whether all resolved pipeline steps completed successfully.
-        ///
-        /// NOTE:
-        /// - Missing step states are created through the writer to keep state access centralized.
-        /// - Completion is derived from durable step state, not from the global record.
+        /// Selects the next eligible step using deterministic pipeline order and archived step resolution.
+        /// </summary>
+        public static async Task<ResolvedAiPipelineStep?> SelectNextReadyStepAsync(
+            ResolvedAiPipeline pipeline,
+            AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
+            IAiExecutionStepResolver resolver,
+            DateTime utcNow,
+            CancellationToken cancellationToken = default)
+        {
+            var readySteps = await SelectReadyStepsAsync(
+                    pipeline,
+                    state,
+                    stateWriter,
+                    resolver,
+                    utcNow,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return readySteps.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Determines whether all resolved pipeline steps completed successfully using hot state only.
         /// </summary>
         public static bool IsCompleted(
             ResolvedAiPipeline pipeline,
@@ -115,19 +151,46 @@ namespace Multiplexed.AI.Runtime.Pipeline
         }
 
         /// <summary>
-        /// Determines whether a step is currently eligible for execution.
+        /// Determines whether all resolved pipeline steps completed successfully using hot state plus archived step status.
         ///
-        /// ELIGIBILITY RULES:
-        /// - Completed steps are never eligible.
-        /// - Failed steps are never eligible.
-        /// - Running steps are never eligible.
-        /// - WaitingForRetry steps are eligible only when their retry window is due.
-        /// - None steps are promoted to Ready when dependencies are satisfied.
-        /// - All declared dependencies must already be completed.
-        ///
-        /// MUTATION:
-        /// - Retry-ready steps may be promoted from WaitingForRetry to Ready.
-        /// - Newly schedulable steps may be promoted from None to Ready.
+        /// IMPORTANT:
+        /// - Uses lightweight archived status when possible.
+        /// - Does not load full archived step payloads just to verify completion.
+        /// </summary>
+        public static async Task<bool> IsCompletedAsync(
+            ResolvedAiPipeline pipeline,
+            AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
+            IAiExecutionStepResolver resolver,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(pipeline);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            foreach (var step in pipeline.Steps)
+            {
+                var stepState = await resolver.GetStepStatusAsync(
+                        state.ExecutionId,
+                        step.Name,
+                        state,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                stepState ??= stateWriter.GetOrCreateStep(state, step.Name);
+
+                if (!stepState.IsCompleted)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Determines whether a step is currently eligible for execution using hot state only.
         /// </summary>
         private static bool IsStepEligible(
             AiStepState stepState,
@@ -168,6 +231,87 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 foreach (var dependencyName in step.DependsOn)
                 {
                     var dependencyState = stateWriter.GetOrCreateStep(
+                        state,
+                        dependencyName);
+
+                    if (!dependencyState.IsCompleted)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.None)
+            {
+                stepState.Status = AiStepExecutionStatus.Ready;
+                stepState.UpdatedAtUtc = utcNow;
+                state.UpdatedAtUtc = utcNow;
+            }
+
+            return stepState.IsSchedulable;
+        }
+
+        /// <summary>
+        /// Determines whether a step is currently eligible for execution using hot state plus archived dependency status.
+        ///
+        /// IMPORTANT:
+        /// - Dependencies only require status checks.
+        /// - Uses GetStepStatusAsync to avoid loading full archived payloads.
+        /// </summary>
+        private static async Task<bool> IsStepEligibleAsync(
+            AiStepState stepState,
+            ResolvedAiPipelineStep step,
+            AiExecutionState state,
+            IAiExecutionStateWriter stateWriter,
+            IAiExecutionStepResolver resolver,
+            DateTime utcNow,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(stepState);
+            ArgumentNullException.ThrowIfNull(step);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stateWriter);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            if (stepState.Status == AiStepExecutionStatus.Completed ||
+                stepState.Status == AiStepExecutionStatus.Failed)
+            {
+                return false;
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.Running)
+            {
+                return false;
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
+            {
+                if (stepState.NextRetryAtUtc.HasValue &&
+                    stepState.NextRetryAtUtc.Value > utcNow)
+                {
+                    return false;
+                }
+
+                stepState.PromoteRetryToReadyIfDue(utcNow);
+            }
+
+            if (step.DependsOn.Count > 0)
+            {
+                foreach (var dependencyName in step.DependsOn)
+                {
+                    AiStepState? dependencyState;
+
+                    if (!state.Steps.TryGetValue(dependencyName, out dependencyState))
+                    {
+                        dependencyState = await resolver.GetStepStatusAsync(
+                                state.ExecutionId,
+                                dependencyName,
+                                state,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    dependencyState ??= stateWriter.GetOrCreateStep(
                         state,
                         dependencyName);
 

@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution.Payloads;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;

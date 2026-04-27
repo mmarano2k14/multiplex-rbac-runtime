@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using MongoDB.Driver.Core.Clusters;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
@@ -45,58 +46,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
     /// </summary>
     public sealed class AiDagExecutionEngine : AiExecutionEngine
     {
-        private readonly IAiDagExecutionStore? _dagStore;
-        private readonly IAiExecutionCleanupService _cleanupService;
-        private readonly AiEngineOptions _aiOptions;
-        private readonly IAiRuntimeMetrics _metrics;
-        private readonly IAiExecutionSnapshotService<ExecutionContextSnapshot>? _snapshotService;
-        private readonly IAiStepResultPayloadCompactor _payloadCompactor;
-        private readonly IAiExecutionStateRetentionPolicy _retentionPolicy;
 
-        private readonly IAiExecutionStateReader _stateReader;
-        private readonly IAiExecutionStateWriter _stateWriter;
+        private readonly IAiDagExecutionEngineServices _engineServices;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
         /// </summary>
-        public AiDagExecutionEngine(
-            IAiExecutionStore store,
-            IContextStore contextStore,
-            IExecutionContextAccessor accessor,
-            IExecutionContextFactory contextFactory,
-            IServiceProvider services,
-            IAiSequentialPipelineExecutor pipelineExecutor,
-            IAiRuntimeLogger logger,
-            IAiExecutionCleanupService cleanupService,
-            IOptions<AiEngineOptions> aiOptions,
-            IAiRuntimeMetrics metrics,
-            IAiStepResultPayloadCompactor payloadCompactor,
-            IAiExecutionStateReader stateReader,
-            IAiExecutionStateWriter stateWriter,
-            IAiDagExecutionStore? dagStore = null,
-            IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
+        public AiDagExecutionEngine(IAiDagExecutionEngineServices engineServices)
             : base(
-                store,
-                contextStore,
-                accessor,
-                contextFactory,
-                services,
-                pipelineExecutor,
-                logger, stateReader, stateWriter)
+                engineServices.Store,
+                engineServices.ContextStore,
+                engineServices.Accessor,
+                engineServices.ContextFactory,
+                engineServices.Services,
+                engineServices.PipelineExecutor,
+                engineServices.Logger,
+                engineServices.StateReader,
+                engineServices.StateWriter)
         {
-            _cleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
-            _aiOptions = aiOptions?.Value ?? throw new ArgumentNullException(nameof(aiOptions));
-            _dagStore = dagStore;
-            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
-            _payloadCompactor = payloadCompactor ?? throw new ArgumentNullException(nameof(payloadCompactor));
-            _snapshotService = snapshotService;
-            _retentionPolicy = Services.GetService(typeof(IAiExecutionStateRetentionPolicy))
-                as IAiExecutionStateRetentionPolicy ?? throw new InvalidOperationException("IAiExecutionStateRetentionPolicy service is not registered.");
-
-            _stateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
-            _stateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
-
-
+            _engineServices = engineServices;
         }
 
         /// <inheritdoc />
@@ -114,7 +82,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             return CreateInternalAsync(
                 pipelineName,
-                state => _stateWriter.SetData(state,AiExecutionKeys.Input, input),
+                state => _engineServices.StateWriter.SetData(state,AiExecutionKeys.Input, input),
                 cancellationToken);
         }
 
@@ -158,7 +126,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                                 nameof(input));
                         }
 
-                        _stateWriter.SetData(state, pair.Key, pair.Value);
+                        _engineServices.StateWriter.SetData(state, pair.Key, pair.Value);
                     }
                 },
                 cancellationToken);
@@ -250,18 +218,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             foreach (var step in preparedPipeline.Steps)
             {
 
-                _stateWriter.EnsureStepInitialized(state, step);
+                _engineServices.StateWriter.EnsureStepInitialized(state, step);
 
                 // Persist DAG dependency metadata directly in step state
                 // so both local and distributed execution paths can evaluate readiness
                 // without reintroducing global "current step" semantics.
-                var stepState = _stateWriter.GetOrCreateStep(state, step.Name);
+                var stepState = _engineServices.StateWriter.GetOrCreateStep(state, step.Name);
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
             }
 
-            if (_dagStore is not null)
+            if (_engineServices.DagStore is not null)
             {
-                await _dagStore.CreateAsync(record, state, cancellationToken);
+                await _engineServices.DagStore.CreateAsync(record, state, cancellationToken);
             }
             else
             {
@@ -283,7 +251,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             string executionId,
             CancellationToken cancellationToken = default)
         {
-            return _dagStore is not null
+            return _engineServices.DagStore is not null
                 ? await ExecuteNextDistributedAsync(executionId, cancellationToken)
                 : await ExecuteNextLocalAsync(executionId, cancellationToken);
         }
@@ -383,7 +351,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 var nextStep = AiPipelineDagStepSelector.SelectNextReadyStep(
                     resolvedPipeline,
                     state,
-                    _stateWriter,
+                    _engineServices.StateWriter,
                     utcNow);
 
                 // -------------------------------------------------------------
@@ -394,13 +362,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 // - the DAG is globally failed
                 // - execution is waiting for retry timing or dependency completion
                 // -------------------------------------------------------------
+                AiDagExecutionConvergenceResult? convergence = null;
+
                 if (nextStep is null)
                 {
-                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                    convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
                         resolvedPipeline,
                         state,
-                        _stateWriter,
-                        utcNow);
+                        _engineServices.StateWriter,
+                        _engineServices.StepResolver,
+                        DateTime.UtcNow,
+                        cancellationToken);
 
                     Logger.Engine.LogInformation(
                         $"[AI DAG] No local runnable step. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{convergence.Status}'.");
@@ -435,7 +407,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     return record;
                 }
 
-                var stepState = _stateWriter.GetOrCreateStep(state, nextStep.Name);
+                var stepState = _engineServices.StateWriter.GetOrCreateStep(state, nextStep.Name);
 
                 // Synthetic local claim metadata is used only so local execution
                 // keeps the same per-step lifecycle structure as distributed execution.
@@ -459,7 +431,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         stepContext,
                         cancellationToken);
 
-                    await _payloadCompactor.CompactAsync(
+                    await _engineServices.PayloadCompactor.CompactAsync(
                         stepResult,
                         cancellationToken);
                 }
@@ -472,7 +444,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _metrics.IncrementRetry(nextStep.Name);
+                        _engineServices.Metrics.IncrementRetry(nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -491,13 +463,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
+                    convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+                        resolvedPipeline,
+                        state,
+                        _engineServices.StateWriter,
+                        _engineServices.StepResolver,
+                        DateTime.UtcNow,
+                        cancellationToken);
+
                     ApplyConvergenceToRecord(
                         record,
-                        AiDagExecutionConvergenceEvaluator.Evaluate(
-                            resolvedPipeline,
-                            state,
-                            _stateWriter,
-                            DateTime.UtcNow),
+                        convergence,
                         state);
 
                     record.TouchVersion();
@@ -533,7 +509,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _metrics.IncrementRetry(nextStep.Name);
+                        _engineServices.Metrics.IncrementRetry(nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -564,13 +540,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
+
+                convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+                       resolvedPipeline,
+                       state,
+                       _engineServices.StateWriter,
+                       _engineServices.StepResolver,
+                       DateTime.UtcNow,
+                       cancellationToken);
+
                 ApplyConvergenceToRecord(
                     record,
-                    AiDagExecutionConvergenceEvaluator.Evaluate(
-                        resolvedPipeline,
-                        state,
-                        _stateWriter,
-                        DateTime.UtcNow),
+                    convergence,
                     state);
 
                 record.TouchVersion();
@@ -641,7 +622,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         {
             ValidateExecutionId(executionId);
 
-            var record = await _dagStore!.GetRecordAsync(executionId, cancellationToken)
+            var record = await _engineServices.DagStore!.GetRecordAsync(executionId, cancellationToken)
                 ?? throw new InvalidOperationException($"Execution '{executionId}' was not found.");
 
             if (record.IsTerminal)
@@ -666,7 +647,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 cancellationToken);
 
             // Best-effort timeout recovery before any new distributed claim attempt.
-            var recoveredCount = await _dagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
+            var recoveredCount = await _engineServices.DagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
 
             if (recoveredCount > 0)
             {
@@ -676,7 +657,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
             }
 
-            var claimed = await _dagStore.TryClaimNextReadyStepAsync(
+            var claimed = await _engineServices.DagStore.TryClaimNextReadyStepAsync(
                 executionId,
                 workerId: Environment.MachineName,
                 cancellationToken: cancellationToken);
@@ -691,12 +672,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             }
 
             // Reload fresh distributed state after recovery / claim attempt.
-            var state = await _dagStore.GetStateAsync(executionId, cancellationToken)
+            var state = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken)
                 ?? new AiExecutionState
                 {
                     ExecutionId = executionId,
                     PipelineName = record.PipelineName
                 };
+
+            await _engineServices.StepResolver.WarmAsync(
+                executionId,
+                state,
+                cancellationToken);
 
             Accessor.Set(rbacContext);
 
@@ -716,11 +702,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
-                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
-                        resolvedPipeline,
-                        state,
-                        _stateWriter,
-                        utcNow);
+                    var convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+                           resolvedPipeline,
+                           state,
+                           _engineServices.StateWriter,
+                           _engineServices.StepResolver,
+                           utcNow,
+                           cancellationToken);
 
                     Logger.Engine.LogInformation(
                         $"[AI DAG] No distributed claim acquired. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{convergence.Status}', Worker='{Environment.MachineName}'.");
@@ -781,7 +769,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                                     stepContext,
                                     cancellationToken);
 
-                    await _payloadCompactor.CompactAsync(
+                    await _engineServices.PayloadCompactor.CompactAsync(
                         stepResult,
                         cancellationToken);
                 }
@@ -790,7 +778,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Distributed failure path:
                     // step failure is persisted through the DAG store so ownership checks
                     // and retry scheduling remain atomic and multi-worker safe.
-                    await _dagStore.TryFailStepAsync(
+                    await _engineServices.DagStore.TryFailStepAsync(
                         executionId,
                         claimed.StepName,
                         claimed.ClaimToken,
@@ -802,14 +790,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         claimed.StepName,
                         ex);
 
-                    var failedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var failedState = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+
+                    await ApplyRetentionPersistAndWarmAsync(
+                        executionId,
+                        failedState,
+                        cancellationToken);
+
+                    await _engineServices.DagStore.SaveStateAsync(
+                        executionId,
+                        failedState,
+                        cancellationToken);
+
                     var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
                         ? reloadedFailedStep
                         : null;
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _metrics.IncrementRetry(claimed.StepName);
+                        _engineServices.Metrics.IncrementRetry(claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -823,11 +822,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
-                    var convergence = AiDagExecutionConvergenceEvaluator.Evaluate(
-                        resolvedPipeline,
-                        failedState,
-                        _stateWriter,
-                        DateTime.UtcNow);
+                    var convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+                          resolvedPipeline,
+                          failedState,
+                          _engineServices.StateWriter,
+                          _engineServices.StepResolver,
+                           DateTime.UtcNow,
+                          cancellationToken);
 
                     ApplyConvergenceToRecord(
                         record,
@@ -865,7 +866,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Distributed unsuccessful result:
                     // use the DAG store so retry scheduling and ownership validation
                     // remain centralized and atomic.
-                    await _dagStore.TryFailStepAsync(
+                    await _engineServices.DagStore.TryFailStepAsync(
                         executionId,
                         claimed.StepName,
                         claimed.ClaimToken,
@@ -877,14 +878,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         claimed.StepName,
                         stepResult.Error);
 
-                    var failedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var failedState = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken) ?? state;
                     var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
                         ? reloadedFailedStep
                         : null;
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _metrics.IncrementRetry(claimed.StepName);
+                        _engineServices.Metrics.IncrementRetry(claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -901,7 +902,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 }
                 else
                 {
-                    var completed = await _dagStore.TryCompleteStepAsync(
+                    var completed = await _engineServices.DagStore.TryCompleteStepAsync(
                         executionId,
                         claimed.StepName,
                         claimed.ClaimToken,
@@ -918,7 +919,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         record,
                         claimed.StepName);
 
-                    var completedState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                    var completedState = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+
+                    await ApplyRetentionPersistAndWarmAsync(
+                        executionId,
+                        completedState,
+                        cancellationToken);
+
+                    await _engineServices.DagStore.SaveStateAsync(
+                        executionId,
+                        completedState,
+                        cancellationToken);
+
                     var completedStepState = completedState.Steps.TryGetValue(claimed.StepName, out var reloadedCompletedStep)
                         ? reloadedCompletedStep
                         : null;
@@ -932,15 +944,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 // Reload final authoritative distributed state snapshot
                 // after completion / failure.
-                var finalState = await _dagStore.GetStateAsync(executionId, cancellationToken) ?? state;
+                var finalState = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken) ?? state;
 
                 record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
-                var finalConvergence = AiDagExecutionConvergenceEvaluator.Evaluate(
+                var finalConvergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
                     resolvedPipeline,
                     finalState,
-                    _stateWriter,
-                    DateTime.UtcNow);
+                    _engineServices.StateWriter,
+                    _engineServices.StepResolver,
+                    DateTime.UtcNow,
+                    cancellationToken);
 
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Distributed convergence evaluated. ExecutionId='{record.ExecutionId}', ConvergenceStatus='{finalConvergence.Status}'.");
@@ -1076,12 +1090,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 return;
             }
 
-            if (!_aiOptions.Snapshots.Enabled)
+            if (!_engineServices.AiOptions.Value.Snapshots.Enabled)
             {
                 return;
             }
 
-            if (_snapshotService is null)
+            if (_engineServices.SnapshotService is null)
             {
                 return;
             }
@@ -1095,7 +1109,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     contextSnapshot = ContextFactory.CreateSnapshot(Accessor.Current);
                 }
 
-                await _snapshotService.TryPersistAsync(
+                await _engineServices.SnapshotService.TryPersistAsync(
                     record,
                     state,
                     record.ContextKey,
@@ -1143,8 +1157,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             }
 
             var shouldCleanup =
-                (record.Status == AiExecutionStatus.Completed && _aiOptions.Cleanup.AutoCleanupOnCompleted) ||
-                (record.Status == AiExecutionStatus.Failed && _aiOptions.Cleanup.AutoCleanupOnFailed);
+                (record.Status == AiExecutionStatus.Completed && _engineServices.AiOptions.Value.Cleanup.AutoCleanupOnCompleted) ||
+                (record.Status == AiExecutionStatus.Failed && _engineServices.AiOptions.Value.Cleanup.AutoCleanupOnFailed);
 
             if (!shouldCleanup)
             {
@@ -1165,7 +1179,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             try
             {
-                await _cleanupService.DeleteExecutionBundleAsync(
+                await _engineServices.CleanupService.DeleteExecutionBundleAsync(
                     record.ExecutionId,
                     cancellationToken);
 
@@ -1180,7 +1194,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     ex,
                     $"[AI CLEANUP] Failed for execution '{record.ExecutionId}'.");
 
-                if (!_aiOptions.Cleanup.SuppressCleanupExceptions)
+                if (!_engineServices.AiOptions.Value.Cleanup.SuppressCleanupExceptions)
                 {
                     throw;
                 }
@@ -1235,7 +1249,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             var utcNow = DateTime.UtcNow;
 
             // Fallback for local / non-distributed execution.
-            if (_dagStore is null)
+            if (_engineServices.DagStore is null)
             {
                 record.TouchVersion();
                 record.RenewExecutionStepKey();
@@ -1288,7 +1302,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
 
                 // RETENTION HERE
-                TryApplyStateRetention(state);
+                await ApplyRetentionPersistAndWarmAsync(
+                    record.ExecutionId,
+                    state,
+                    cancellationToken);
+                // IMPORTANT:
+                // Retention mutates the in-memory state.
+                // Persist it immediately before finalizing the record.
+                // Do NOT wait until after TryFinalizeExecutionAsync.
+                await _engineServices.DagStore.SaveStateAsync(
+                    record.ExecutionId,
+                    state,
+                    cancellationToken);
 
                 var request = new AiDagExecutionFinalizationRequest
                 {
@@ -1301,7 +1326,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     WorkerId = Environment.MachineName
                 };
 
-                var success = await _dagStore.TryFinalizeExecutionAsync(
+                var success = await _engineServices.DagStore.TryFinalizeExecutionAsync(
                     request,
                     cancellationToken);
 
@@ -1313,7 +1338,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         $"[AI DAG] Finalization race lost. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
 
                     // Another worker won the finalization race -> reload authoritative record.
-                    var refreshed = await _dagStore.GetRecordAsync(
+                    var refreshed = await _engineServices.DagStore.GetRecordAsync(
                         record.ExecutionId,
                         cancellationToken);
 
@@ -1334,7 +1359,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     $"[AI DAG] Finalization succeeded. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}'.");
 
                 // Reload final authoritative record after successful finalization.
-                var updated = await _dagStore.GetRecordAsync(
+                var updated = await _engineServices.DagStore.GetRecordAsync(
                     record.ExecutionId,
                     cancellationToken);
 
@@ -1362,7 +1387,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             record.TouchVersion();
             record.RenewExecutionStepKey();
 
-            await _dagStore.SaveRecordAsync(record, cancellationToken);
+            await _engineServices.DagStore.SaveRecordAsync(record, cancellationToken);
         }
 
         /// <summary>
@@ -1387,21 +1412,129 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// - This method must never throw or interrupt execution finalization.
         /// </summary>
         /// <param name="state">The execution state to apply retention to.</param>
-        private void TryApplyStateRetention(AiExecutionState state)
+        private async Task<AiExecutionRetentionApplyResult> TryApplyStateRetentionAsync(
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
         {
             if (state is null)
-                return;
+            {
+                return AiExecutionRetentionApplyResult.Empty;
+            }
 
-            if (_retentionPolicy is null)
-                return;
+            if (_engineServices.RetentionService is null)
+            {
+                return AiExecutionRetentionApplyResult.Empty;
+            }
 
             try
             {
-                _retentionPolicy.Apply(state);
+                return await _engineServices.RetentionService.ApplyAsync(
+                    state,
+                    _engineServices.AiOptions.Value.StateRetention.Mode,
+                    cancellationToken);
             }
             catch
             {
-                // Intentionally swallow exceptions to preserve engine stability.
+                return AiExecutionRetentionApplyResult.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Applies execution state retention, persists the updated state,
+        /// and incrementally refreshes the step resolver cache.
+        ///
+        /// PURPOSE:
+        /// - Centralize the retention workflow into a single, safe operation
+        /// - Guarantee correct ordering of critical operations in distributed execution
+        /// - Ensure the resolver remains consistent with newly archived steps
+        ///
+        /// ORDER OF OPERATIONS (CRITICAL):
+        /// 1. Apply retention:
+        ///    - Compact step payloads (if needed)
+        ///    - Persist full step payloads externally
+        ///    - Write archived step index entries
+        ///    - Remove evicted steps from hot state
+        ///
+        /// 2. Persist state:
+        ///    - The updated execution state MUST be saved after retention
+        ///    - Ensures consistency across distributed workers
+        ///
+        /// 3. Incremental cache warm:
+        ///    - Only refresh resolver cache for steps actually evicted
+        ///    - Avoids full index reload (critical for large DAGs)
+        ///
+        /// DESIGN:
+        /// - Retention is NOT destructive:
+        ///   Evicted steps are still accessible via payload store + index
+        ///
+        /// - Resolver cache is NOT authoritative:
+        ///   It must be explicitly refreshed when new archived steps appear
+        ///
+        /// - This method enforces a deterministic consistency boundary:
+        ///   - Before call: state may contain evictable steps
+        ///   - After call: state + resolver are aligned
+        ///
+        /// PERFORMANCE:
+        /// - Avoids full WarmAsync calls (O(N))
+        /// - Uses incremental warm (O(evictedSteps))
+        /// - Suitable for large DAGs (10k+ steps)
+        ///
+        /// SAFETY:
+        /// - Prevents stale resolver cache after retention
+        /// - Ensures no step becomes "invisible" after eviction
+        /// - Protects convergence evaluation from partial state visibility
+        ///
+        /// IMPORTANT:
+        /// - MUST be used wherever retention is applied
+        /// - MUST NOT reorder operations
+        /// - MUST NOT skip incremental warm
+        ///
+        /// FAILURE BEHAVIOR:
+        /// - If retention fails → no changes applied
+        /// - If save fails → execution consistency may be compromised
+        /// - If warm fails → resolver may miss archived steps (should be retried)
+        ///
+        /// The combination of retention + persistence + incremental warm
+        /// guarantees that:
+        /// - The DAG remains fully resolvable
+        /// - Convergence remains deterministic
+        /// - No step is lost or hidden
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="state">The current execution state.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        private async Task ApplyRetentionPersistAndWarmAsync(
+            string executionId,
+            AiExecutionState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(state);
+
+            // 1) Apply retention
+            var result = await TryApplyStateRetentionAsync(
+                state,
+                cancellationToken).ConfigureAwait(false);
+
+            // 2) Persist state (optional)
+            var dagStore = _engineServices.DagStore;
+
+            if (dagStore is not null)
+            {
+                await dagStore.SaveStateAsync(
+                    executionId,
+                    state,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            // 3) Incremental warm (MANDATORY if eviction happened)
+            if (result.EvictedSteps.Count > 0)
+            {
+                await _engineServices.StepResolver.WarmStepsAsync(
+                    executionId,
+                    state,
+                    result.EvictedSteps,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 

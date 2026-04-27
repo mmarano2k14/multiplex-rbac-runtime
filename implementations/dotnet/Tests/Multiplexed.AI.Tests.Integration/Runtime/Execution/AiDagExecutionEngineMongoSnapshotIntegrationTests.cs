@@ -1,40 +1,66 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
-using System.Numerics;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 {
-    /// <summary>
-    /// Verifies that the DAG execution engine persists terminal snapshots
-    /// through the real MongoDB snapshot store when snapshot persistence is enabled.
-    /// </summary>
     public sealed class AiDagExecutionEngineMongoSnapshotIntegrationTests
     {
         private const string ConnectionString = "mongodb://localhost:27017";
         private const string DatabaseName = "multiplexed_ai_tests";
         private const string CollectionName = "ai_execution_engine_snapshots_tests";
 
-        [Fact]
-        public async Task ExecuteNextAsync_Should_Persist_Terminal_Snapshot_To_Mongo_When_Enabled()
+        private static AiEngineOptions CreateOptions(bool snapshotsEnabled)
         {
-            var options = new AiEngineOptions
+            return new AiEngineOptions
             {
                 JsonPipelineDefinitionFilePath = "config\\dag-complex-10-steps.json",
                 Snapshots = new AiExecutionSnapshotOptions
                 {
-                    Enabled = true,
+                    Enabled = snapshotsEnabled,
                     Mongo = new AiExecutionSnapshotMongoOptions
                     {
-                        Enabled = true,
+                        Enabled = snapshotsEnabled,
                         CollectionName = CollectionName
+                    }
+                },
+                // 🔥 FIX: ensure payload store is configured for all integration tests
+                PayloadStore = new AiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    Provider = "mongo-redis",
+                    RequireReplaySafePayloads = true,
+                    MaxInlineSizeBytes = 512,
+                    Mongo = new MongoAiPayloadStoreOptions
+                    {
+                        Enabled = true,
+                        ConnectionString = ConnectionString,
+                        DatabaseName = DatabaseName,
+                        CollectionName = "payloads_snapshot_tests"
+                    },
+                    RedisCache = new RedisAiPayloadCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = "test:ai:payload:snapshot",
+                        ExpirationSeconds = 120,
+                        MaxCacheablePayloadBytes = 1024 * 1024
+                    },
+                    StepIndexCache = new RedisAiStepPayloadIndexCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = "test:ai:step-index:snapshot",
+                        ExpirationSeconds = 120,
+                        RefreshTtlOnRead = true
                     }
                 },
                 Cleanup = new AiExecutionCleanupOptions
@@ -44,6 +70,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     SuppressCleanupExceptions = true
                 }
             };
+        }
+
+        [Fact]
+        public async Task ExecuteNextAsync_Should_Persist_Terminal_Snapshot_To_Mongo_When_Enabled()
+        {
+            var options = CreateOptions(snapshotsEnabled: true);
 
             await using var host = await AiDagExecutionEngineFixture.CreateAsync(
                 options,
@@ -87,25 +119,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         [Fact]
         public async Task ExecuteAllAsync_Should_Not_Persist_Snapshot_When_Disabled()
         {
-            var options = new AiEngineOptions
-            {
-                JsonPipelineDefinitionFilePath = "config\\dag-complex-10-steps.json",
-                Snapshots = new AiExecutionSnapshotOptions
-                {
-                    Enabled = false,
-                    Mongo = new AiExecutionSnapshotMongoOptions
-                    {
-                        Enabled = false,
-                        CollectionName = CollectionName
-                    }
-                },
-                Cleanup = new AiExecutionCleanupOptions
-                {
-                    AutoCleanupOnCompleted = false,
-                    AutoCleanupOnFailed = false,
-                    SuppressCleanupExceptions = true
-                }
-            };
+            var options = CreateOptions(snapshotsEnabled: false);
 
             await using var host = await AiDagExecutionEngineFixture.CreateAsync(
                 options,
@@ -119,12 +133,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             Assert.True(result.IsTerminal);
 
-            if(options.Snapshots.Enabled && options.Snapshots.Mongo.Enabled)
-            {
-                var snapshotStore =
-                host.ServiceProvider.GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
-                var snapshot = await snapshotStore.GetAsync(result.ExecutionId);
+            var snapshotStore =
+                host.ServiceProvider.GetService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
 
+            if (snapshotStore is not null)
+            {
+                var snapshot = await snapshotStore.GetAsync(result.ExecutionId);
                 Assert.Null(snapshot);
             }
         }

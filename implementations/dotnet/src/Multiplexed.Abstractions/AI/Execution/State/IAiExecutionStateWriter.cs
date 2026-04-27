@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution.Payloads;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 

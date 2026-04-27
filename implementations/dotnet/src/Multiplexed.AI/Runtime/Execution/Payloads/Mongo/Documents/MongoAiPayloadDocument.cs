@@ -1,6 +1,6 @@
 ﻿using MongoDB.Bson.Serialization.Attributes;
 
-namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo
+namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Documents
 {
     /// <summary>
     /// MongoDB document used to persist externalized AI execution payloads.

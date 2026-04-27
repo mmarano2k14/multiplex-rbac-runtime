@@ -352,6 +352,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 {
                     ["AiEngine:DefaultPipelineDefinitionSource"] = "Json",
                     ["AiEngine:JsonPipelineDefinitionFilePath"] = $"config/{pipelineFileName}",
+
+                    // 🔥 FIX PAYLOAD STORE (CRITICAL)
+                    ["AiEngine:PayloadStore:Enabled"] = "true",
+                    ["AiEngine:PayloadStore:Provider"] = "mongo-redis",
+                    ["AiEngine:PayloadStore:MaxInlineSizeBytes"] = "512",
+
+                    ["AiEngine:PayloadStore:Mongo:Enabled"] = "true",
+                    ["AiEngine:PayloadStore:Mongo:ConnectionString"] = "mongodb://localhost:27017",
+                    ["AiEngine:PayloadStore:Mongo:DatabaseName"] = "multiplexed_ai_tests",
+                    ["AiEngine:PayloadStore:Mongo:CollectionName"] = "payloads_redis_convergence_tests",
+
+                    ["AiEngine:PayloadStore:RedisCache:Enabled"] = "true",
+                    ["AiEngine:PayloadStore:RedisCache:KeyPrefix"] = "test:ai:payload:redis",
+                    ["AiEngine:PayloadStore:RedisCache:ExpirationSeconds"] = "120",
+
+                    ["AiEngine:PayloadStore:StepIndexCache:Enabled"] = "true",
+                    ["AiEngine:PayloadStore:StepIndexCache:KeyPrefix"] = "test:ai:step-index:redis",
+                    ["AiEngine:PayloadStore:StepIndexCache:ExpirationSeconds"] = "120",
+
+                    // Cleanup
                     ["AiExecutionCleanup:AutoCleanupOnCompleted"] = "false",
                     ["AiExecutionCleanup:AutoCleanupOnFailed"] = "false",
                     ["AiExecutionCleanup:SuppressCleanupExceptions"] = "true"

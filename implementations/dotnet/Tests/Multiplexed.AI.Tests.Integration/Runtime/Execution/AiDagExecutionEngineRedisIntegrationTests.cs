@@ -3,6 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -21,6 +25,7 @@ using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
@@ -28,6 +33,8 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -507,10 +514,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         private async Task RunGeneratedDagScenarioAsync(
-            string pipelineName,
-            int stepCount,
-            int seed,
-            GeneratedDagMode mode)
+     string pipelineName,
+     int stepCount,
+     int seed,
+     GeneratedDagMode mode)
         {
             var definition = CreateGeneratedDagPipeline(
                 pipelineName,
@@ -541,7 +548,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var classifier = new DefaultAiRetryExceptionClassifier();
 
             var dataPolicy = new InlineAiExecutionDataPolicy();
-
             var stepExecutor = new AiStepExecutor(classifier, logger);
 
             var services = new ServiceCollection();
@@ -574,15 +580,47 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new AiRuntimeMetrics();
 
+            var payloadStoreOptions = Options.Create(new AiPayloadStoreOptions
+            {
+                Enabled = true,
+                Provider = "mongo",
+                RequireReplaySafePayloads = true,
+                MaxInlineSizeBytes = 1024,
+                Mongo = new MongoAiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    ConnectionString = "mongodb://localhost:27017",
+                    DatabaseName = "multiplexed_ai_tests",
+                    CollectionName = $"payloads_generated_dag_{Guid.NewGuid():N}"
+                }
+            });
+
             var metricsPayload = new InMemoryAiPayloadMetrics();
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
+            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(
+                dataPolicy,
+                metricsPayload);
+
+            var payloadStore = new MongoAiPayloadStore(payloadStoreOptions);
+            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
+
+            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
+            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadStoreOptions);
+
+            var stepResolver = new DefaultAiExecutionStepResolver(
+                stepPayloadIndexStore,
+                stepPayloadStore);
 
             var stateWriter = new DefaultAiExecutionStateWriter();
             var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
             var retentionPolicy = CreateDisabledRetentionPolicy();
 
-            var engine = new AiDagExecutionEngine(
+            var retentionService = CreateRetentionService(
+                payloadCompactor,
+                payloadStoreResolver,
+                stepPayloadIndexStore);
+
+            var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,
                 accessor,
@@ -602,7 +640,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadCompactor,
                 stateReader,
                 stateWriter,
+                stepResolver,
+                retentionService,
                 dagStore);
+
+            var engine = new AiDagExecutionEngine(engineServices);
 
             accessor.Set(CreateRuntimeContext());
 
@@ -826,16 +868,23 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new AiRuntimeMetrics();
 
-            var payloadStore = new InMemoryAiPayloadStore();
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
             var payloadOptions = Options.Create(new AiPayloadStoreOptions
             {
                 Enabled = true,
-                Provider = "inmemory",
-                RequireReplaySafePayloads = false,
-                MaxInlineSizeBytes = 2048
+                Provider = "mongo",
+                RequireReplaySafePayloads = true,
+                MaxInlineSizeBytes = 2048,
+                Mongo = new MongoAiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    ConnectionString = "mongodb://localhost:27017",
+                    DatabaseName = "multiplexed_ai_tests",
+                    CollectionName = $"payloads_dag_{Guid.NewGuid():N}"
+                }
             });
+
+            var payloadStore = new MongoAiPayloadStore(payloadOptions);
+            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
 
             var dataPolicy = new SmartInlineAiExecutionDataPolicy(
                 payloadStoreResolver,
@@ -844,12 +893,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var metricsPayload = new InMemoryAiPayloadMetrics();
             var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
 
+            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
+            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadOptions);
+
+            var stepResolver = new DefaultAiExecutionStepResolver(
+                stepPayloadIndexStore,
+                stepPayloadStore);
+
             var stateWriter = new DefaultAiExecutionStateWriter();
             var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
             var retentionPolicy = CreateDisabledRetentionPolicy();
 
-            return new AiDagExecutionEngine(
+            var retentionService = CreateRetentionService(
+                payloadCompactor,
+                payloadStoreResolver,
+                stepPayloadIndexStore);
+
+            var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,
                 accessor,
@@ -869,7 +930,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadCompactor,
                 stateReader,
                 stateWriter,
+                stepResolver,
+                retentionService,
                 dagStore);
+
+            return new AiDagExecutionEngine(engineServices);
         }
 
         private IAiExecutionStore GetExecutionStore()
@@ -895,6 +960,47 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 logger,
                 metrics,
                 normalizers);
+        }
+
+        private static IAiExecutionRetentionService CreateRetentionService(
+            IAiStepResultPayloadCompactor payloadCompactor,
+            IAiPayloadStoreResolver payloadStoreResolver,
+            IAiStepPayloadIndexStore stepPayloadIndexStore)
+        {
+            ArgumentNullException.ThrowIfNull(payloadCompactor);
+            ArgumentNullException.ThrowIfNull(payloadStoreResolver);
+            ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
+
+            var options = Options.Create(new AiEngineOptions
+            {
+                StateRetention = new AiExecutionStateRetentionOptions
+                {
+                    Enabled = true,
+                    MaxCompletedStepsInState = 20,
+                    Mode = AiExecutionRetentionMode.Evict
+                }
+            });
+
+            var policies = new IAiExecutionRetentionPolicy[]
+            {
+                new NoopAiExecutionRetentionPolicy(),
+                new CompactAiExecutionRetentionPolicy(),
+                new EvictAiExecutionRetentionPolicy(options),
+                new HybridAiExecutionRetentionPolicy(options)
+            };
+
+            var policyResolver = new DefaultAiExecutionRetentionPolicyResolver(policies);
+
+            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
+
+            var metrics = new InMemoryAiExecutionRetentionServiceMetrics();
+
+            return new AiExecutionRetentionService(
+                policyResolver,
+                stepPayloadStore,
+                stepPayloadIndexStore,
+                payloadCompactor,
+                metrics);
         }
 
         private static IAiExecutionStateRetentionPolicy CreateDisabledRetentionPolicy()

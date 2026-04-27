@@ -1,8 +1,9 @@
 ﻿using Microsoft.Extensions.Options;
 using MongoDB.Driver;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Documents;
 
-namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo
+namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
 {
     /// <summary>
     /// MongoDB-backed payload store.

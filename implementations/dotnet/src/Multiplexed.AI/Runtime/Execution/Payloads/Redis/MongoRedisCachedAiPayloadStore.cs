@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
-using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis

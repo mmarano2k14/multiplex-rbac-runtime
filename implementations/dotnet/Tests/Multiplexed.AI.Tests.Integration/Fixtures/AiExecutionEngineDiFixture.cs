@@ -5,6 +5,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
@@ -16,7 +22,11 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Providers.Llm.OpenAI.DI;
 using Multiplexed.AI.Runtime.DependencyInjection;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Payloads;
+using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Prompt;
+using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime.DI;
@@ -236,6 +246,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                     ];
                 });
 
+            EnsureDefaultPayloadStoreOptions(
+                options,
+                mongoConnectionString,
+                mongoDatabaseName);
+
             services.AddMultiplexAI(options);
 
             services.AddAiExecutionCleanup(cleanup =>
@@ -295,6 +310,59 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 services.AddAiExecutionReplay();
                 services.AddAiStepsFromAssemblies(typeof(AiRuntimeAssemblyMarker).Assembly);
             }
+        }
+
+        private static void EnsureDefaultPayloadStoreOptions(
+    AiEngineOptions options,
+    string? mongoConnectionString,
+    string? mongoDatabaseName)
+        {
+            options.PayloadStore ??= new AiPayloadStoreOptions();
+
+            options.PayloadStore.Enabled = true;
+            options.PayloadStore.Provider ??= "mongo-redis";
+            options.PayloadStore.RequireReplaySafePayloads = true;
+
+            if (options.PayloadStore.MaxInlineSizeBytes <= 0)
+            {
+                options.PayloadStore.MaxInlineSizeBytes = 512;
+            }
+
+            options.PayloadStore.Mongo ??= new MongoAiPayloadStoreOptions();
+            options.PayloadStore.Mongo.Enabled = true;
+            options.PayloadStore.Mongo.ConnectionString ??=
+                mongoConnectionString ?? "mongodb://localhost:27017";
+            options.PayloadStore.Mongo.DatabaseName ??=
+                mongoDatabaseName ?? "multiplexed_ai_tests";
+            options.PayloadStore.Mongo.CollectionName ??=
+                $"payloads_tests_{Guid.NewGuid():N}";
+
+            options.PayloadStore.RedisCache ??= new RedisAiPayloadCacheOptions();
+            options.PayloadStore.RedisCache.Enabled = true;
+            options.PayloadStore.RedisCache.KeyPrefix ??=
+                $"test:ai:payload:{Guid.NewGuid():N}";
+
+            if (options.PayloadStore.RedisCache.ExpirationSeconds <= 0)
+            {
+                options.PayloadStore.RedisCache.ExpirationSeconds = 120;
+            }
+
+            if (options.PayloadStore.RedisCache.MaxCacheablePayloadBytes <= 0)
+            {
+                options.PayloadStore.RedisCache.MaxCacheablePayloadBytes = 1024 * 1024;
+            }
+
+            options.PayloadStore.StepIndexCache ??= new RedisAiStepPayloadIndexCacheOptions();
+            options.PayloadStore.StepIndexCache.Enabled = true;
+            options.PayloadStore.StepIndexCache.KeyPrefix ??=
+                $"test:ai:step-index:{Guid.NewGuid():N}";
+
+            if (options.PayloadStore.StepIndexCache.ExpirationSeconds <= 0)
+            {
+                options.PayloadStore.StepIndexCache.ExpirationSeconds = 120;
+            }
+
+            options.PayloadStore.StepIndexCache.RefreshTtlOnRead = true;
         }
     }
 
@@ -360,6 +428,27 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 throw new InvalidOperationException(
                     "Payload resolution is not expected in this test.");
             }
+        }
+
+        public static IAiExecutionRetentionService CreateRetentionService(
+            IAiExecutionRetentionPolicyResolver policyResolver,
+            IAiStepPayloadStore stepPayloadStore,
+            IAiStepPayloadIndexStore stepPayloadIndexStore,
+            IAiStepResultPayloadCompactor payloadCompactor,
+            IAiExecutionRetentionServiceMetrics metrics)
+        {
+            ArgumentNullException.ThrowIfNull(policyResolver);
+            ArgumentNullException.ThrowIfNull(stepPayloadStore);
+            ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
+            ArgumentNullException.ThrowIfNull(payloadCompactor);
+            ArgumentNullException.ThrowIfNull(metrics);
+
+            return new AiExecutionRetentionService(
+                policyResolver,
+                stepPayloadStore,
+                stepPayloadIndexStore,
+                payloadCompactor,
+                metrics);
         }
     }
 }

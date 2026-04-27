@@ -1,7 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
-using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads

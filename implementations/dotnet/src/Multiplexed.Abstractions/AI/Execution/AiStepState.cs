@@ -1,5 +1,6 @@
 ﻿using System.Text.Json.Serialization;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Steps;
 
 namespace Multiplexed.Abstractions.AI.Execution

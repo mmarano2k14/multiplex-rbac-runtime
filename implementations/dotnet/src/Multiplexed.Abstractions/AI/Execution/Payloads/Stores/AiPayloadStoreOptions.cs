@@ -1,4 +1,7 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+
+namespace Multiplexed.Abstractions.AI.Execution.Payloads.Stores
 {
     /// <summary>
     /// Configures execution payload storage.
@@ -59,5 +62,10 @@
         /// - Keeps production defaults safe while allowing integration tests to force externalization.
         /// </summary>
         public int MaxInlineSizeBytes { get; set; } = 2048;
+
+        // <summary>
+        /// Gets or sets Redis step index payload cache options.
+        /// </summary>
+        public RedisAiStepPayloadIndexCacheOptions StepIndexCache { get; set; } = new();
     }
 }

@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+
+namespace Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers
 {
     /// <summary>
     /// Resolves the active execution payload store.

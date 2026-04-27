@@ -3,6 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -19,6 +23,7 @@ using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
@@ -26,6 +31,9 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Policies;
+using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
@@ -115,21 +123,33 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     AutoCleanupOnCompleted = false,
                     AutoCleanupOnFailed = false,
                     SuppressCleanupExceptions = true
+                },
+                StateRetention = new AiExecutionStateRetentionOptions
+                {
+                    Enabled = false,
+                    Mode = AiExecutionRetentionMode.None
                 }
             };
 
             var metrics = new AiRuntimeMetrics();
 
-            var payloadStore = new InMemoryAiPayloadStore();
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
             var payloadOptions = Options.Create(new AiPayloadStoreOptions
             {
                 Enabled = true,
-                Provider = "inmemory",
-                RequireReplaySafePayloads = false,
-                MaxInlineSizeBytes = 2048
+                Provider = "mongo",
+                RequireReplaySafePayloads = true,
+                MaxInlineSizeBytes = 2048,
+                Mongo = new MongoAiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    ConnectionString = "mongodb://localhost:27017",
+                    DatabaseName = "multiplexed_ai_tests",
+                    CollectionName = $"payloads_basic_dag_{Guid.NewGuid():N}"
+                }
             });
+
+            var payloadStore = new MongoAiPayloadStore(payloadOptions);
+            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
 
             var dataPolicy = new SmartInlineAiExecutionDataPolicy(
                 payloadStoreResolver,
@@ -141,28 +161,65 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 dataPolicy,
                 metricsPayload);
 
+            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
+            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadOptions);
+
+            var stepResolver = new DefaultAiExecutionStepResolver(
+                stepPayloadIndexStore,
+                stepPayloadStore);
+
             var retentionPolicy = new DefaultAiExecutionStateRetentionPolicy(
-                new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
-                },
+                aiOptions.StateRetention,
                 new InMemoryAiExecutionRetentionMetrics());
 
             IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
+
             IAiExecutionStateReader stateReader =
                 new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
-            return new AiDagExecutionEngine(
+            var options = Options.Create(new AiEngineOptions
+            {
+                StateRetention = new AiExecutionStateRetentionOptions
+                {
+                    Enabled = true,
+                    MaxCompletedStepsInState = 20,
+                    Mode = AiExecutionRetentionMode.Evict
+                }
+            });
+
+            var policies = new IAiExecutionRetentionPolicy[]
+            {
+            new NoopAiExecutionRetentionPolicy(),
+            new CompactAiExecutionRetentionPolicy(),
+            new EvictAiExecutionRetentionPolicy(options),
+            new HybridAiExecutionRetentionPolicy(options)
+            };
+
+            var policyResolver = new DefaultAiExecutionRetentionPolicyResolver(policies);
+            var retentionMetrics = new InMemoryAiExecutionRetentionServiceMetrics();
+
+            var retentionService = CreateRetentionService(
+                policyResolver,
+                stepPayloadStore,
+                stepPayloadIndexStore,
+                payloadCompactor,
+                retentionMetrics);
+
+            var serviceProvider = CreateServiceProvider(
+                accessor,
+                executionStore,
+                retentionPolicy,
+                stateReader,
+                stateWriter,
+                retentionService,
+                stepResolver);
+
+            var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,
                 accessor,
                 contextFactory,
-                CreateServiceProvider(
-                    accessor,
-                    executionStore,
-                    retentionPolicy,
-                    stateReader,
-                    stateWriter),
+                serviceProvider,
                 pipelineExecutor,
                 logger,
                 cleanupService,
@@ -171,7 +228,32 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadCompactor,
                 stateReader,
                 stateWriter,
+                stepResolver,
+                retentionService,
                 null);
+
+            return new AiDagExecutionEngine(engineServices);
+        }
+
+        private static IAiExecutionRetentionService CreateRetentionService(
+            IAiExecutionRetentionPolicyResolver policyResolver,
+            IAiStepPayloadStore stepPayloadStore,
+            IAiStepPayloadIndexStore stepPayloadIndexStore,
+            IAiStepResultPayloadCompactor payloadCompactor,
+            IAiExecutionRetentionServiceMetrics metrics)
+        {
+            ArgumentNullException.ThrowIfNull(policyResolver);
+            ArgumentNullException.ThrowIfNull(stepPayloadStore);
+            ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
+            ArgumentNullException.ThrowIfNull(payloadCompactor);
+            ArgumentNullException.ThrowIfNull(metrics);
+
+            return new AiExecutionRetentionService(
+                policyResolver,
+                stepPayloadStore,
+                stepPayloadIndexStore,
+                payloadCompactor,
+                metrics);
         }
 
         private static IServiceProvider CreateServiceProvider(
@@ -179,20 +261,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             MemoryAiExecutionStore store,
             IAiExecutionStateRetentionPolicy retentionPolicy,
             IAiExecutionStateReader stateReader,
-            IAiExecutionStateWriter stateWriter)
+            IAiExecutionStateWriter stateWriter,
+            IAiExecutionRetentionService retentionService,
+            IAiExecutionStepResolver stepResolver)
         {
-            var provider = new TestServiceProvider(new Dictionary<Type, object>
+            return new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
                 [typeof(MemoryAiExecutionStore)] = store,
+                [typeof(IAiExecutionStore)] = store,
                 [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy,
                 [typeof(IAiExecutionStateReader)] = stateReader,
-                [typeof(IAiExecutionStateWriter)] = stateWriter
+                [typeof(IAiExecutionStateWriter)] = stateWriter,
+                [typeof(IAiExecutionRetentionService)] = retentionService,
+                [typeof(IAiExecutionStepResolver)] = stepResolver
             });
-
-            provider.RegisterSelf();
-
-            return provider;
         }
 
         private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector()

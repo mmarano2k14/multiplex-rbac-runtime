@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis

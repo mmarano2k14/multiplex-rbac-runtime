@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads.Models
 {
     /// <summary>
     /// Represents a payload stored by the AI execution runtime.

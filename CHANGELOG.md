@@ -5,7 +5,218 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
-## [1.0.3.1 ] - 2026-04-26
+## [1.0.3.3 ] - 2026-04-27
+
+# 🚀 Release — State Retention, Step Archiving & Lazy Resolution
+
+## 🧠 Overview
+
+This release introduces a complete execution state lifecycle for the AI runtime:
+
+From unbounded in-memory execution state  
+to bounded, persisted, archived, cached, and lazily-resolved state.
+
+The runtime can now handle larger DAG executions with lower memory pressure, safer retention, and faster step visibility through Redis-optimized archive indexes.
+
+---
+
+## 🔥 Added
+
+### State Retention System
+
+- Added execution state retention support.
+- Added retention modes:
+  - `Compact`
+  - `Evict`
+  - `Hybrid`
+- Added config-driven retention threshold using:
+
+```csharp
+AiEngineOptions.StateRetention.MaxCompletedStepsInState
+```
+
+Removed hardcoded retention thresholds.  
+Added retention policy resolver support.  
+Added targeted unit tests for retention policies.  
+
+---
+
+### Safe Step Archiving
+
+Added AiExecutionRetentionService.  
+
+Added safe eviction flow:  
+Persist step payload  
+→ Write archived step index  
+→ Remove step from hot state  
+
+Added step payload externalization before eviction.  
+Added archived step metadata through AiArchivedStepPayloadIndex.  
+
+Added tests proving:  
+- save happens before removal  
+- archive index happens before removal  
+- save failure does not remove the hot-state step  
+- archive index failure does not remove the hot-state step  
+
+---
+
+### Archived Step Index
+
+Added Mongo-backed archived step index store.  
+Added Redis cached archived step index.  
+Added CachedAiStepPayloadIndexStore as Mongo + Redis decorator.  
+Added batch index retrieval.  
+Added index lookup support for evicted steps.  
+Added delete and execution-scoped index lookup support.  
+
+---
+
+### Redis Index Cache Optimization
+
+Added Redis batch lookup using MGET.  
+Added Redis pipeline writes.  
+Added TTL refresh on read.  
+Added batch TTL refresh behavior.  
+Replaced N Redis calls with batch operations where possible.  
+
+---
+
+### Lazy Step Resolution
+
+Added DefaultAiExecutionStepResolver.  
+
+Added multi-layer step resolution:  
+Hot state  
+→ warmed/cache metadata  
+→ archived step index  
+→ payload store  
+
+Added lazy status resolution via GetStepStatusAsync.  
+Added full archived step resolution via GetStepAsync.  
+Added incremental warm behavior via WarmStepsAsync.  
+
+Added resolver tests proving:  
+- status lookup does not load full payload  
+- full step lookup loads payload only on demand  
+- warm uses batch GetManyAsync  
+- warm avoids N+1 index calls  
+
+---
+
+### DAG Engine Integration
+
+Integrated retention into the DAG execution flow.  
+Added retention + persist + warm behavior through ApplyRetentionPersistAndWarmAsync.  
+Updated DAG selector to use lazy step status resolution.  
+Updated convergence evaluation to avoid unnecessary full payload loading.  
+Ensured evicted steps remain visible to selector and convergence logic.  
+
+---
+
+### Test Infrastructure
+
+Centralized default payload store configuration in AiDagExecutionEngineFixture.  
+Stabilized integration tests by reducing payload size and step counts for functional scenarios.  
+Separated functional retention validation from stress-level scenarios.  
+Added targeted tests instead of relying only on large DAG tests.  
+
+---
+
+## 🛡️ Safety Improvements
+
+- Retention now guarantees persistence before eviction.
+- Retention now guarantees archive index write before eviction.
+- Hot-state step removal is skipped if persistence fails.
+- Hot-state step removal is skipped if archive indexing fails.
+- Eviction never removes non-terminal steps.
+- Eviction protects completed parents required by active children.
+- No compact + evict overlap in Hybrid mode.
+- Archived steps remain resolvable.
+- Step status available without full payload load.
+- Resolver prevents lost visibility.
+
+---
+
+## ⚡ Performance Improvements
+
+- Reduced hot execution state size.
+- Reduced memory pressure.
+- Avoided full payload loading.
+- Batch Redis operations (MGET + pipeline).
+- Batch warm-up for metadata.
+- Avoided N+1 index lookups.
+
+---
+
+## 🧪 Tests Added
+
+- AiExecutionRetentionPolicyTests
+- AiExecutionRetentionServiceTests
+- AiExecutionStepResolverTests
+
+---
+
+## 🔧 Changed
+
+- Retention now uses IOptions<AiEngineOptions>.
+- Threshold is config-driven.
+- Hybrid planning separated.
+- DAG uses lazy resolver.
+- Tests simplified and stabilized.
+
+---
+
+## 🐛 Fixed
+
+- Hardcoded thresholds removed.
+- Unsafe eviction fixed.
+- Retention loops fixed.
+- Hybrid overlap fixed.
+- Resolver visibility fixed.
+- Payload store config fixed.
+- Data loss risks fixed.
+
+---
+
+## ⚠️ Breaking Changes
+
+- IAiStepPayloadIndexCache moved to Abstractions.
+- Retention requires IOptions<AiEngineOptions>.
+- Behavior depends on StateRetention config.
+
+---
+
+## 🚀 What This Enables
+
+- Large DAG executions
+- Long-running workflows
+- Bounded state
+- Archived recovery
+- Lazy evaluation
+- Redis optimized lookup
+- Safer distributed execution
+
+---
+
+## 🧭 Next Steps
+
+- End-to-end retention tests
+- Stress scenarios
+- Redis Lua optimizations
+- Adaptive retention
+- Better observability
+
+---
+
+## 💬 Summary
+
+This release transforms execution state management into a bounded, archived, cached, and lazily-resolved model.
+
+The AI runtime is now safer, more scalable, and production-ready for large deterministic DAG executions.
+
+---
+## [1.0.3.2 ] - 2026-04-26
 
 ## Major Runtime Refactor — State + Step Context Architecture
 

@@ -1,6 +1,10 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
@@ -430,6 +434,37 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Snapshots = new AiExecutionSnapshotOptions
                 {
                     Enabled = false
+                },
+                PayloadStore = new AiPayloadStoreOptions
+                {
+                    Enabled = true,
+                    Provider = "mongo-redis",
+                    RequireReplaySafePayloads = true,
+                    MaxInlineSizeBytes = 512,
+
+                    Mongo = new MongoAiPayloadStoreOptions
+                    {
+                        Enabled = true,
+                        ConnectionString = ConnectionString,
+                        DatabaseName = DatabaseName,
+                        CollectionName = $"payloads_prompt_tests_{Guid.NewGuid():N}"
+                    },
+
+                    RedisCache = new RedisAiPayloadCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = $"test:ai:payload:prompt:{Guid.NewGuid():N}",
+                        ExpirationSeconds = 120,
+                        MaxCacheablePayloadBytes = 1024 * 1024
+                    },
+
+                    StepIndexCache = new RedisAiStepPayloadIndexCacheOptions
+                    {
+                        Enabled = true,
+                        KeyPrefix = $"test:ai:step-index:prompt:{Guid.NewGuid():N}",
+                        ExpirationSeconds = 120,
+                        RefreshTtlOnRead = true
+                    }
                 },
                 Cleanup = new AiExecutionCleanupOptions
                 {

@@ -324,15 +324,35 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         private ServiceProvider CreateTestServiceProvider(string pipelineFileName)
         {
             var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["AiEngine:DefaultPipelineDefinitionSource"] = "Json",
-                    ["AiEngine:JsonPipelineDefinitionFilePath"] = $"config/{pipelineFileName}",
-                    ["AiExecutionCleanup:AutoCleanupOnCompleted"] = "false",
-                    ["AiExecutionCleanup:AutoCleanupOnFailed"] = "false",
-                    ["AiExecutionCleanup:SuppressCleanupExceptions"] = "true"
-                })
-                .Build();
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AiEngine:DefaultPipelineDefinitionSource"] = "Json",
+                ["AiEngine:JsonPipelineDefinitionFilePath"] = $"config/{pipelineFileName}",
+
+                // 🔥 AJOUT ICI
+                ["AiEngine:PayloadStore:Enabled"] = "true",
+                ["AiEngine:PayloadStore:Provider"] = "mongo-redis",
+                ["AiEngine:PayloadStore:MaxInlineSizeBytes"] = "512",
+
+                ["AiEngine:PayloadStore:Mongo:Enabled"] = "true",
+                ["AiEngine:PayloadStore:Mongo:ConnectionString"] = "mongodb://localhost:27017",
+                ["AiEngine:PayloadStore:Mongo:DatabaseName"] = "multiplexed_ai_tests",
+                ["AiEngine:PayloadStore:Mongo:CollectionName"] = "payloads_retry_tests",
+
+                ["AiEngine:PayloadStore:RedisCache:Enabled"] = "true",
+                ["AiEngine:PayloadStore:RedisCache:KeyPrefix"] = "test:ai:payload:retry",
+                ["AiEngine:PayloadStore:RedisCache:ExpirationSeconds"] = "120",
+
+                ["AiEngine:PayloadStore:StepIndexCache:Enabled"] = "true",
+                ["AiEngine:PayloadStore:StepIndexCache:KeyPrefix"] = "test:ai:step-index:retry",
+                ["AiEngine:PayloadStore:StepIndexCache:ExpirationSeconds"] = "120",
+
+                // Cleanup
+                ["AiExecutionCleanup:AutoCleanupOnCompleted"] = "false",
+                ["AiExecutionCleanup:AutoCleanupOnFailed"] = "false",
+                ["AiExecutionCleanup:SuppressCleanupExceptions"] = "true"
+            })
+            .Build();
 
             var services = new ServiceCollection();
 

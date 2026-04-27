@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads.Redis
 {
     /// <summary>
     /// Configures Redis as a bounded cache for execution payloads.

@@ -8,6 +8,8 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
@@ -29,7 +31,7 @@ using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
-using Multiplexed.AI.Runtime.Execution.Payloads.Mongo;
+using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.State;
@@ -39,6 +41,8 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -54,9 +58,6 @@ namespace Multiplexed.AI.DI
         /// <summary>
         /// Adds the AI runtime module to the service collection from application configuration.
         /// </summary>
-        /// <param name="services">Target service collection.</param>
-        /// <param name="configuration">Application configuration.</param>
-        /// <returns>The same service collection instance.</returns>
         public static IServiceCollection AddMultiplexAI(
             this IServiceCollection services,
             IConfiguration configuration)
@@ -78,9 +79,6 @@ namespace Multiplexed.AI.DI
         /// <summary>
         /// Adds the AI runtime module to the service collection from strongly typed options.
         /// </summary>
-        /// <param name="services">Target service collection.</param>
-        /// <param name="options">Strongly typed AI engine options.</param>
-        /// <returns>The same service collection instance.</returns>
         public static IServiceCollection AddMultiplexAI(
             this IServiceCollection services,
             AiEngineOptions options)
@@ -89,30 +87,94 @@ namespace Multiplexed.AI.DI
             ArgumentNullException.ThrowIfNull(options);
 
             // ------------------------------------------------------------
+            // Options
+            // ------------------------------------------------------------
+
+            services.AddSingleton<IOptions<AiEngineOptions>>(Options.Create(options));
+            services.AddSingleton<IOptions<AiExecutionCleanupOptions>>(
+                Options.Create(options.Cleanup ?? new AiExecutionCleanupOptions()));
+
+            // ------------------------------------------------------------
             // State readers and writers
+            //
+            // IMPORTANT:
+            // - These services only manipulate hot execution state.
+            // - They must not become payload/index/store abstractions.
+            // - Retention remains external to this reader/writer layer.
             // ------------------------------------------------------------
 
             services.TryAddScoped<IAiExecutionStateReader, DefaultAiExecutionStateReader>();
             services.TryAddScoped<IAiExecutionStateWriter, DefaultAiExecutionStateWriter>();
 
             // ------------------------------------------------------------
-            // Execution State retention policy
+            // Legacy execution state retention policy
+            //
+            // IMPORTANT:
+            // - Kept for backward compatibility with existing constructors/tests.
+            // - This is the old state-level retention policy.
+            // - The new retention system below is policy/resolver/service based.
             // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiExecutionStateRetentionPolicy>(sp =>
             {
-                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
-                return new DefaultAiExecutionStateRetentionPolicy(options.StateRetention);
+                var resolvedOptions = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                return new DefaultAiExecutionStateRetentionPolicy(resolvedOptions.StateRetention);
             });
 
             // ------------------------------------------------------------
-            // Options
+            // New execution retention system
+            //
+            // DESIGN:
+            // - IAiExecutionRetentionPolicy = pure decision.
+            // - IAiExecutionRetentionPolicyResolver = selects policy by mode.
+            // - IAiExecutionRetentionService = applies compaction / eviction safely.
+            //
+            // IMPORTANT:
+            // - Policies must not mutate state.
+            // - Policies must not write payloads.
+            // - The service applies the plan in the safe order:
+            //   1. compact result payloads
+            //   2. persist full step payloads
+            //   3. evict from hot state
             // ------------------------------------------------------------
-            services.AddSingleton<IOptions<AiEngineOptions>>(Options.Create(options));
-            services.AddSingleton<IOptions<AiExecutionCleanupOptions>>(
-                Options.Create(options.Cleanup ?? new AiExecutionCleanupOptions()));
+
+            services.TryAddSingleton<IAiExecutionRetentionPolicy, NoopAiExecutionRetentionPolicy>();
+            services.TryAddSingleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>();
+            services.TryAddSingleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>();
+            services.TryAddSingleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>();
+
+            services.TryAddSingleton<IAiExecutionRetentionPolicyResolver, DefaultAiExecutionRetentionPolicyResolver>();
 
             // ------------------------------------------------------------
-            // Payload store : policies and resolvers
+            // Retention metrics (NEW SYSTEM)
+            //
+            // PURPOSE:
+            // - Tracks Compact / Evict / Hybrid activity.
+            // - Allows integration tests to validate the new retention system.
+            // - Provides runtime observability for state reduction.
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton<
+                IAiExecutionRetentionServiceMetrics,
+                InMemoryAiExecutionRetentionServiceMetrics>();
+
+            // ------------------------------------------------------------
+            // Retention service (NEW SYSTEM)
+            //
+            // IMPORTANT:
+            // - Depends on policy resolver, step payload store, compactor, and metrics.
+            // - Applies retention in the safe order:
+            //   1. compact
+            //   2. persist step payload
+            //   3. evict from hot state
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton<
+                IAiExecutionRetentionService,
+                AiExecutionRetentionService>();
+
+            // ------------------------------------------------------------
+            // Payload store: options
             // ------------------------------------------------------------
 
             services.Configure<AiPayloadStoreOptions>(opts =>
@@ -124,9 +186,17 @@ namespace Multiplexed.AI.DI
 
                 opts.Mongo = options.PayloadStore.Mongo;
                 opts.RedisCache = options.PayloadStore.RedisCache;
+                opts.StepIndexCache = options.PayloadStore.StepIndexCache;
             });
 
-            // Concrete stores (NE PAS exposer IAiPayloadStore ici)
+            // ------------------------------------------------------------
+            // Payload store: concrete stores
+            //
+            // IMPORTANT:
+            // - Do not expose IAiPayloadStore directly here.
+            // - IAiPayloadStore must be resolved only through IAiPayloadStoreResolver.
+            // - This keeps provider selection centralized.
+            // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiPayloadMetrics, InMemoryAiPayloadMetrics>();
             services.TryAddSingleton<InMemoryAiPayloadStore>();
@@ -134,17 +204,97 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<RedisAiPayloadStore>();
             services.TryAddSingleton<MongoRedisCachedAiPayloadStore>();
 
-           
+            // ------------------------------------------------------------
+            // Step payload index store
+            //
+            // PURPOSE:
+            // - Keeps AiExecutionState.Steps as hot state only.
+            // - Preserves knowledge of evicted / archived steps outside the state.
+            // - Allows selector, convergence, replay, and diagnostics to resolve
+            //   steps after retention eviction.
+            //
+            // DESIGN:
+            // - MongoAiStepPayloadIndexStore is the durable source of truth.
+            // - RedisAiStepPayloadIndexCache is an optional fast mirror with TTL.
+            // - RedisCachedAiStepPayloadIndex decorates Mongo with Redis cache.
+            //
+            // IMPORTANT:
+            // - The index is not the payload store.
+            // - The full serialized step state is stored by IAiStepPayloadStore.
+            // - The index stores only the external payload reference.
+            // ------------------------------------------------------------
+
+            // Durable store (Mongo)
+            services.TryAddSingleton<MongoAiStepPayloadIndexStore>();
+
+            // Redis cache implementation
+            services.TryAddSingleton<
+                IAiStepPayloadIndexCache,
+                RedisCachedAiStepPayloadIndex>();
+
+            // Decorator store (Mongo + Redis)
+            services.TryAddSingleton<CachedAiStepPayloadIndexStore>();
+
+            // Resolver binding
+            services.TryAddSingleton<IAiStepPayloadIndexStore>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiPayloadStoreOptions>>().Value;
+
+                if (options.StepIndexCache.Enabled &&
+                    options.RedisCache.Enabled)
+                {
+                    return sp.GetRequiredService<CachedAiStepPayloadIndexStore>();
+                }
+
+                return sp.GetRequiredService<MongoAiStepPayloadIndexStore>();
+            });
+
+            // ------------------------------------------------------------
+            // Step resolver
+            //
+            // PURPOSE:
+            // - Resolves steps from hot state first.
+            // - Falls back to the archived step index and step payload store.
+            // - Keeps DAG selector and convergence correct after eviction.
+            // ------------------------------------------------------------
+
+            //services.TryAddSingleton<IAiExecutionStepResolver, DefaultAiExecutionStepResolver>();
+            services.TryAddScoped<IAiExecutionStepResolver, DefaultAiExecutionStepResolver>();
+
+            // ------------------------------------------------------------
+            // Payload compaction
+            //
+            // PURPOSE:
+            // - Externalizes heavy AiStepResult payloads.
+            // - Used by compact/hybrid retention modes.
+            // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiStepResultPayloadCompactor, DefaultAiStepResultPayloadCompactor>();
 
-            // Resolver (point d’entrée UNIQUE)
+            // ------------------------------------------------------------
+            // Step payload store
+            //
+            // PURPOSE:
+            // - Step-aware wrapper used by retention eviction.
+            // - Saves and loads complete AiStepState objects externally.
+            //
+            // IMPORTANT:
+            // - IAiStepPayloadStore uses IAiPayloadStoreResolver internally.
+            // - It does not replace the generic payload store.
+            // - It does not mutate AiExecutionState.
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton<IAiStepPayloadStore, DefaultAiStepPayloadStore>();
+
+            // ------------------------------------------------------------
+            // Payload resolver
+            //
+            // Resolver = unique entry point for payload provider selection.
+            // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiPayloadStoreResolver, DefaultAiPayloadStoreResolver>();
-
-
-            // Payload policy + resolver
             services.TryAddSingleton<IAiExecutionDataPolicy, SmartInlineAiExecutionDataPolicy>();
             services.TryAddSingleton<IAiExecutionPayloadResolver, DefaultAiExecutionPayloadResolver>();
-
 
             // ------------------------------------------------------------
             // Memory system
@@ -159,24 +309,28 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Retry / step execution infrastructure
             // ------------------------------------------------------------
+
             services.AddSingleton<IAiRetryExceptionClassifier, DefaultAiRetryExceptionClassifier>();
             services.AddScoped<IAiStepExecutor, AiStepExecutor>();
 
             // ------------------------------------------------------------
             // Provider / service abstraction
             // ------------------------------------------------------------
+
             services.AddScoped<IAiProvider, FakeAIProvider>();
             services.AddScoped<IAiService, AiService>();
 
             // ------------------------------------------------------------
             // Step discovery / registry
             // ------------------------------------------------------------
+
             services.AddAiStepsFromAssemblies(
                 typeof(AiRuntimeAssemblyMarker).Assembly);
 
             // ------------------------------------------------------------
             // Pipeline definition / resolution / execution
             // ------------------------------------------------------------
+
             services.AddScoped<InMemoryAiPipelineDefinitionProvider>();
 
             services.AddScoped<JsonAiPipelineDefinitionProvider>(sp =>
@@ -200,6 +354,7 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Stores
             // ------------------------------------------------------------
+
             services.AddSingleton<MemoryAiExecutionStore>();
             services.AddSingleton<RedisAiExecutionStore>();
             services.AddSingleton<IAiDagExecutionStore, RedisAiDagExecutionStore>();
@@ -209,6 +364,7 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Cleanup
             // ------------------------------------------------------------
+
             services.AddScoped<IAiExecutionCleanupService, AiExecutionCleanupService>();
             services.AddScoped<IAiDagDistributedStateCleanup, AiDagDistributedStateCleanup>();
             services.TryAddSingleton<IAiOwnedResourceLocator, NoopAiOwnedResourceLocator>();
@@ -220,6 +376,7 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Logger
             // ------------------------------------------------------------
+
             services.AddScoped<IRuntimeEventContext, RealtimeEventContext>();
             services.AddScoped<IAiExecutionEngineLogger, AiExecutionEngineLogger>();
             services.AddScoped<IAiPipelineLogger, AiPipelineLogger>();
@@ -233,17 +390,20 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
             // Metrics
             // ------------------------------------------------------------
+
             services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
 
             // ------------------------------------------------------------
-            // ContextHelpers
+            // Context helpers
             // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiContextValueResolver, DefaultAiContextValueResolver>();
             services.TryAddSingleton<IAiStepContextHelperFactory, DefaultAiStepContextHelperFactory>();
 
             // ------------------------------------------------------------
             // Execution runtime
             // ------------------------------------------------------------
+
             services.AddScoped<AiSequentialExecutionEngine>();
             services.AddScoped<AiDagExecutionEngine>();
 
@@ -251,10 +411,19 @@ namespace Multiplexed.AI.DI
             // Keep this if the default IAiExecutionEngine must remain sequential.
             services.AddScoped<IAiExecutionEngine, AiSequentialExecutionEngine>();
 
+            // ------------------------------------------------------------
             // Step result normalization
+            // ------------------------------------------------------------
+
             services.TryAddSingleton<IAiStepResultNormalizerPipeline, DefaultAiStepResultNormalizerPipeline>();
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IAiStepResultNormalizer, RagStepResultNormalizer>());
+
+
+            // ------------------------------------------------------------
+            // global execution engine services
+            // ------------------------------------------------------------
+            services.TryAddScoped<IAiDagExecutionEngineServices, AiDagExecutionEngineServices>();
 
             return services;
         }

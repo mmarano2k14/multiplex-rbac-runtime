@@ -20,6 +20,11 @@
         public bool Enabled { get; set; }
 
         /// <summary>
+        /// Defines retention strategy (None, Compact, Evict, Hybrid).
+        /// </summary>
+        public AiExecutionRetentionMode Mode { get; set; } = AiExecutionRetentionMode.Compact;
+
+        /// <summary>
         /// Gets or sets the maximum number of completed steps retained in state. defaults to 200.
         ///
         /// Retention should keep the most recent completed steps, but may remove older ones beyond this limit.

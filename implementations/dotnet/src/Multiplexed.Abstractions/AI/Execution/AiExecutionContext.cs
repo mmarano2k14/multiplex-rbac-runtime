@@ -1,4 +1,5 @@
-﻿using Multiplexed.Abstractions.AI.Execution.State;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Steps;
 
@@ -140,7 +141,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Stores or replaces a payload-backed execution data value.
         /// </summary>
-        public void SetDataPayload(string key, Payloads.AiStoredPayload payload)
+        public void SetDataPayload(string key, AiStoredPayload payload)
         {
             StateWriter.SetDataPayload(State, key, payload);
         }

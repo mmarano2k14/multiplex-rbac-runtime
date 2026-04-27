@@ -1,5 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using System.Globalization;
 using System.Text.Json;

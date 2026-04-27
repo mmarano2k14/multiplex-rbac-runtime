@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads
+﻿namespace Multiplexed.Abstractions.AI.Execution.Payloads.Mongo
 {
     /// <summary>
     /// Configures MongoDB-backed payload storage.
