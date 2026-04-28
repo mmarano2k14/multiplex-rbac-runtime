@@ -3,9 +3,15 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
+using Multiplexed.AI.Tests.Models;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
@@ -75,13 +81,17 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             var stepPayloadIndexStore = new TestStepPayloadIndexStore(callLog, state);
             var payloadCompactor = new TestPayloadCompactor(callLog);
             var metrics = new TestRetentionMetrics();
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
 
             var service = new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
 
             await service.ApplyAsync(
                 state,
@@ -154,13 +164,17 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             var stepPayloadIndexStore = new TestStepPayloadIndexStore(callLog, state);
             var payloadCompactor = new TestPayloadCompactor(callLog);
             var metrics = new TestRetentionMetrics();
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
 
             var service = new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 service.ApplyAsync(
@@ -227,12 +241,17 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             var payloadCompactor = new TestPayloadCompactor(callLog);
             var metrics = new TestRetentionMetrics();
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             var service = new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 service.ApplyAsync(

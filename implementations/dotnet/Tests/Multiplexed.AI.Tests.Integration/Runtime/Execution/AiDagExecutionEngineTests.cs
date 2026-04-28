@@ -8,6 +8,10 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -32,9 +36,11 @@ using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
@@ -248,12 +254,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             ArgumentNullException.ThrowIfNull(payloadCompactor);
             ArgumentNullException.ThrowIfNull(metrics);
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             return new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
         }
 
         private static IServiceProvider CreateServiceProvider(

@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Retention
+﻿namespace Multiplexed.Abstractions.AI.Execution.Retention.Models
 {
     /// <summary>
     /// Represents the concrete result of applying execution retention.

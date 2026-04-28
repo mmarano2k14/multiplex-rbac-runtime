@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Xunit;

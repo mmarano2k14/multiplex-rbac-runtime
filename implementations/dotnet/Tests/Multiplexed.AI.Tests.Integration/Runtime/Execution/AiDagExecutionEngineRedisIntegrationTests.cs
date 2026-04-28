@@ -8,6 +8,9 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -34,6 +37,7 @@ using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
@@ -41,6 +45,7 @@ using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.AI.Tests.Integration.Models;
+using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores;
@@ -995,12 +1000,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var metrics = new InMemoryAiExecutionRetentionServiceMetrics();
 
-            return new AiExecutionRetentionService(
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
+            var service = new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
+
+            return service;
         }
 
         private static IAiExecutionStateRetentionPolicy CreateDisabledRetentionPolicy()

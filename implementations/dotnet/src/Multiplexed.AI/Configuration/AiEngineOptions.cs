@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.AI.Runtime.Configuration;
 
 namespace Multiplexed.AI.Configuration
@@ -61,5 +62,10 @@ namespace Multiplexed.AI.Configuration
         /// Gets or sets execution state retention options.
         /// </summary>
         public AiExecutionStateRetentionOptions StateRetention { get; set; } = new();
+
+        // <summary>
+        /// Gets or sets execution retention trigger options.
+        /// </summary>
+        public AiExecutionRetentionTriggerOptions RetentionTrigger { get; set; } = new();
     }
 }

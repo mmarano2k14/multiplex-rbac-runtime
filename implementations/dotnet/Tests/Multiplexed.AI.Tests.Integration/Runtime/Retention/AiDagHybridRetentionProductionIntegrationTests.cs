@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
@@ -59,6 +60,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
             options.PayloadStore.Provider = "mongo-redis";
             options.StateRetention.MaxCompletedStepsInState = 3;
+            options.RetentionTrigger.MaxCompletedStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxInlinePayloadBytes = 1;
 
             await using var host = await AiDagExecutionEngineFixture.CreateAsync(
                 options,
@@ -149,6 +153,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         public async Task ExecuteAllAsync_Should_Remain_Idempotent_After_Hybrid_Retention()
         {
             var options = CreateOptions();
+            options.RetentionTrigger.MaxCompletedStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxInlinePayloadBytes = 1;
 
             await using var host = await AiDagExecutionEngineFixture.CreateAsync(
                 options,

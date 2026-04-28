@@ -1,7 +1,8 @@
-﻿using System.Threading;
+﻿using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using System.Threading;
 using System.Threading.Tasks;
 
-namespace Multiplexed.Abstractions.AI.Execution.Retention
+namespace Multiplexed.Abstractions.AI.Execution.Retention.Services
 {
     /// <summary>
     /// Applies execution state retention to an <see cref="AiExecutionState"/>.

@@ -10,7 +10,11 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
+using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -42,7 +46,10 @@ using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
+using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
 using Multiplexed.AI.Runtime.Retention.Policies;
+using Multiplexed.AI.Runtime.Retention.Triggers;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -106,6 +113,73 @@ namespace Multiplexed.AI.DI
             services.TryAddScoped<IAiExecutionStateReader, DefaultAiExecutionStateReader>();
             services.TryAddScoped<IAiExecutionStateWriter, DefaultAiExecutionStateWriter>();
 
+            // ------------------------------------------------------------
+            // Execution retention trigger
+            //
+            // PURPOSE:
+            // - Decides when the new retention service should run.
+            // - Keeps retention trigger thresholds separate from retention policy options.
+            // - Uses AiEngineOptions.RetentionTrigger as the configuration source.
+            //
+            // IMPORTANT:
+            // - Trigger does not apply retention.
+            // - Trigger does not mutate execution state.
+            // - Trigger only decides whether retention evaluation should continue.
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+
+                var trigger = options.RetentionTrigger ?? new AiExecutionRetentionTriggerOptions();
+
+                // ------------------------------------------------------------
+                // ALIGNMENT: Trigger ↔ StateRetention
+                //
+                // PURPOSE:
+                // - Ensure retention is actually triggered when state exceeds limits
+                // - Avoid situations where retention never runs
+                // - Keep configuration consistent without forcing duplication in tests
+                // ------------------------------------------------------------
+
+                if (options.StateRetention.Enabled &&
+                    options.StateRetention.MaxCompletedStepsInState > 0)
+                {
+                    trigger.MaxCompletedStepsInState =
+                        options.StateRetention.MaxCompletedStepsInState;
+
+                    trigger.MaxStepsInState =
+                        Math.Min(
+                            trigger.MaxStepsInState,
+                            options.StateRetention.MaxCompletedStepsInState);
+                }
+
+                return trigger;
+            });
+
+            services.TryAddSingleton<
+                IAiExecutionRetentionTrigger,
+                DefaultAiExecutionRetentionTrigger>();
+
+            services.TryAddSingleton<
+                IAiExecutionRetentionDecisionEvaluator,
+                CompositeAiExecutionRetentionDecisionEvaluator>();
+
+            services.TryAddSingleton<
+                IAiExecutionRetentionDecisionService,
+                DefaultAiExecutionRetentionDecisionService>();
+
+            services.TryAddSingleton<SizeBasedAiExecutionRetentionDecisionPolicy>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                var trigger = options.RetentionTrigger ?? new AiExecutionRetentionTriggerOptions();
+
+                return new SizeBasedAiExecutionRetentionDecisionPolicy(
+                    trigger.MaxInlinePayloadBytes);
+            });
+
+            services.TryAddSingleton<IAiExecutionRetentionDecisionPolicy>(sp =>
+                sp.GetRequiredService<SizeBasedAiExecutionRetentionDecisionPolicy>());
             // ------------------------------------------------------------
             // Legacy execution state retention policy
             //

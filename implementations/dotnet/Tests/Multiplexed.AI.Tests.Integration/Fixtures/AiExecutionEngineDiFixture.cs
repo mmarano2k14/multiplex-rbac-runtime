@@ -10,7 +10,11 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
+using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
@@ -28,6 +32,7 @@ using Multiplexed.AI.Runtime.Pipeline.Steps.Prompt;
 using Multiplexed.AI.Runtime.Retention;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Tests.Fakes;
+using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime.DI;
 using Multiplexed.Rbac.Core.Runtime.Messaging.NServiceBus.DI;
@@ -447,20 +452,22 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             IAiStepPayloadStore stepPayloadStore,
             IAiStepPayloadIndexStore stepPayloadIndexStore,
             IAiStepResultPayloadCompactor payloadCompactor,
-            IAiExecutionRetentionServiceMetrics metrics)
+            IAiExecutionRetentionServiceMetrics metrics,
+            IAiExecutionRetentionDecisionService decisionService)
         {
             ArgumentNullException.ThrowIfNull(policyResolver);
             ArgumentNullException.ThrowIfNull(stepPayloadStore);
             ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
             ArgumentNullException.ThrowIfNull(payloadCompactor);
             ArgumentNullException.ThrowIfNull(metrics);
+            ArgumentNullException.ThrowIfNull(decisionService);
 
             return new AiExecutionRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                metrics);
+                metrics, decisionService);
         }
     }
 }

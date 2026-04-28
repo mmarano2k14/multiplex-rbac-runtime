@@ -1,4 +1,7 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Retention
+﻿using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+
+namespace Multiplexed.Abstractions.AI.Execution.Retention.Resolvers
 {
     /// <summary>
     /// Resolves the appropriate retention policy based on the configured mode.

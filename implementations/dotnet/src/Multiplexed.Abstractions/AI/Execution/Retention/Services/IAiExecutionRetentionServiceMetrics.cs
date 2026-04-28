@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Retention
+﻿using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+
+namespace Multiplexed.Abstractions.AI.Execution.Retention.Services
 {
     /// <summary>
     /// Records metrics emitted by the new execution retention service.

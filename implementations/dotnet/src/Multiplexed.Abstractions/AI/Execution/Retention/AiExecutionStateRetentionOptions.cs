@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Retention
+﻿using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+
+namespace Multiplexed.Abstractions.AI.Execution.Retention
 {
     /// <summary>
     /// Defines retention options for AI execution state.

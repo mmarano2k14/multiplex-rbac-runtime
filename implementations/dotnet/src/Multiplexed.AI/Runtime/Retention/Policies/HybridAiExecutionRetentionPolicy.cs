@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.AI.Configuration;
 
 namespace Multiplexed.AI.Runtime.Retention.Policies

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
@@ -6,6 +7,8 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
@@ -32,7 +35,9 @@ using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
+using Multiplexed.AI.Runtime.Retention.Triggers;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -569,13 +574,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var policyResolver = new DefaultAiExecutionRetentionPolicyResolver(policies);
             var retentionMetrics = new InMemoryAiExecutionRetentionServiceMetrics();
+            var retentionTrigger = new DefaultAiExecutionRetentionTrigger(options.Value.RetentionTrigger);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(retentionTrigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
 
             var retentionService = Fixtures.AiDagExecutionEngineTestHost.CreateRetentionService(
                 policyResolver,
                 stepPayloadStore,
                 stepPayloadIndexStore,
                 payloadCompactor,
-                retentionMetrics);
+                retentionMetrics, decisionService);
+
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,

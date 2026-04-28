@@ -4,12 +4,18 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
+using Multiplexed.AI.Tests.Models;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
@@ -75,12 +81,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             var compactor = new NoopStepResultPayloadCompactor();
             var metrics = new NoopRetentionMetrics();
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             var retentionService = new AiExecutionRetentionService(
                 policyResolver,
                 payloadStore,
                 indexStore,
                 compactor,
-                metrics);
+                metrics, decisionService);
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
@@ -226,12 +237,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             var compactor = new NoopStepResultPayloadCompactor();
             var metrics = new NoopRetentionMetrics();
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             var retentionService = new AiExecutionRetentionService(
                 policyResolver,
                 payloadStore,
                 indexStore,
                 compactor,
-                metrics);
+                metrics, decisionService);
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
@@ -322,12 +338,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             var compactor = new TrackingStepResultPayloadCompactor();
             var metrics = new NoopRetentionMetrics();
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             var retentionService = new AiExecutionRetentionService(
                 policyResolver,
                 payloadStore,
                 indexStore,
                 compactor,
-                metrics);
+                metrics, decisionService);
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
@@ -449,12 +470,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             var compactor = new TrackingStepResultPayloadCompactor();
             var metrics = new NoopRetentionMetrics();
 
+            var trigger = new TestExecutionRetentionTrigger(true);
+            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
+                new CompositeAiExecutionRetentionDecisionEvaluator(
+                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
+
             var retentionService = new AiExecutionRetentionService(
                 policyResolver,
                 payloadStore,
                 indexStore,
                 compactor,
-                metrics);
+                metrics, decisionService);
 
             // Act
             var result = await retentionService.ApplyAsync(

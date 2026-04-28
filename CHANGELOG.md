@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+
+## [1.0.3.5] - 2026-04-27 - AI Runtime Retention Evolution
+
+### 🚀 Added
+- Introduced adaptive retention decision layer:
+  - `IAiExecutionRetentionDecisionService`
+  - `IAiExecutionRetentionDecisionEvaluator`
+  - `IAiExecutionRetentionDecisionPolicy`
+- Added `SizeBasedAiExecutionRetentionDecisionPolicy` as first adaptive compaction policy.
+- Added `RetentionTrigger` configuration under `AiEngineOptions`.
+- Added full retention safety integration test suite:
+  - End-to-end retention pipeline validation (Trigger → Decision → Policy → Execution)
+  - Safe eviction validation (persist → index → remove invariant)
+  - Archived step resolution via `IAiExecutionStepResolver`
+  - Hybrid retention validation (compaction + eviction ordering)
+  - Retention idempotence validation
+  - Reload/replay validation with archived step resolution
+
+---
+
+### ♻️ Changed
+- Refactored `AiExecutionRetentionService`:
+  - Now depends on `IAiExecutionRetentionDecisionService`
+  - Removed direct dependency on trigger/evaluator logic
+- Refactored DI registration:
+  - Introduced explicit decision service, evaluator, and policy wiring
+  - Removed fragile `TryAddEnumerable` factory patterns
+- Updated retention trigger behavior:
+  - Aligned `RetentionTrigger` thresholds with `StateRetention` limits
+  - Ensured retention is consistently executed when state exceeds limits
+- Improved test design:
+  - Removed artificial compaction forcing (`MaxInlinePayloadBytes = 1`)
+  - Introduced realistic thresholds and scenario-driven payload sizes:
+    - Small payloads → eviction-focused tests
+    - Large payloads → compaction/hybrid tests
+- Updated test assertions:
+  - Now validate applied operations (`CompactedSteps`, `EvictedSteps`)
+  - Avoid reliance on last-evaluation metrics (`StepsPlanned*`)
+
+---
+
+### 🐛 Fixed
+- Fixed DI conflicts when registering decision policies with factory-based descriptors
+- Fixed retention not triggering due to mismatched thresholds between trigger and state retention
+- Fixed hybrid retention test instability caused by incorrect assumptions on planned metrics
+- Fixed archived step lookup tests using incorrect index store methods
+
+---
+
+### 🧠 Result
+- Retention system is now:
+  - Deterministic
+  - Fully testable
+  - Logically lossless (no data loss after eviction)
+  - Production-safe
+  - Extensible via pluggable decision policies
+
+---
+
+### 🔮 Next
+- Introduce advanced memory policies:
+  - Temporal decay
+  - Usage-based retention
+  - Supersession graph (state evolution)
+- Extend retention to RAG memory handling
+- Introduce intelligent eviction strategies based on semantic value
+
+---
+
 ## [1.0.3.4] - 2026-04-27
 
 # 🚀 Test Stabilization — Hybrid Retention & Payload Metrics

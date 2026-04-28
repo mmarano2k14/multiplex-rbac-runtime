@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
-using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
 
 namespace Multiplexed.AI.Runtime.Retention
 {

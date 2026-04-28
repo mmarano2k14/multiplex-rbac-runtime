@@ -1,8 +1,8 @@
-﻿using System.Threading;
+﻿using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.Abstractions.AI.Execution.Retention
+namespace Multiplexed.Abstractions.AI.Execution.Retention.Policies
 {
     /// <summary>
     /// Defines a retention policy responsible for analyzing execution state

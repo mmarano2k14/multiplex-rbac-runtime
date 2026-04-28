@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Retention
+﻿namespace Multiplexed.Abstractions.AI.Execution.Retention.Policies
 {
     /// <summary>
     /// Applies retention rules to an execution state.

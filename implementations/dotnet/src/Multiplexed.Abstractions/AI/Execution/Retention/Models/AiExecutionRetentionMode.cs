@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Multiplexed.Abstractions.AI.Execution.Retention
+namespace Multiplexed.Abstractions.AI.Execution.Retention.Models
 {
     /// <summary>
     /// Defines how execution steps should be retained in memory.

@@ -1,4 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Metrics;
@@ -9,6 +14,12 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Retention;
+using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
+using Multiplexed.Abstractions.AI.Execution.Retention.Models;
+using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
+using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Retention.Services;
+using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
@@ -18,7 +29,10 @@ using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Retention;
+using Multiplexed.AI.Runtime.Retention.Decisions;
+using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
 using Multiplexed.AI.Runtime.Retention.Policies;
+using Multiplexed.AI.Runtime.Retention.Triggers;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Xunit;
@@ -265,6 +279,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 }
             };
 
+            options.RetentionTrigger.MaxCompletedStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxStepsInState = options.StateRetention.MaxCompletedStepsInState;
+            options.RetentionTrigger.MaxInlinePayloadBytes = 1;
+
             return await AiDagExecutionEngineFixture.CreateAsync(
                 options,
                 services =>
@@ -285,6 +303,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                     services.RemoveAll<IAiExecutionRetentionService>();
                     services.RemoveAll<IAiExecutionRetentionServiceMetrics>();
 
+                    services.RemoveAll<IAiExecutionRetentionTrigger>();
+                    services.RemoveAll<IAiExecutionRetentionDecisionEvaluator>();
+                    services.RemoveAll<IAiExecutionRetentionDecisionService>();
+                    services.RemoveAll<IAiExecutionRetentionDecisionPolicy>();
+
+                    services.AddSingleton<IAiExecutionRetentionTrigger, DefaultAiExecutionRetentionTrigger>();
+
                     services.AddSingleton<IAiExecutionRetentionPolicy, NoopAiExecutionRetentionPolicy>();
                     services.AddSingleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>();
                     services.AddSingleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>();
@@ -293,6 +318,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                     services.AddSingleton<
                         IAiExecutionRetentionPolicyResolver,
                         DefaultAiExecutionRetentionPolicyResolver>();
+
+                    services.AddSingleton<
+                        IAiExecutionRetentionDecisionEvaluator,
+                        CompositeAiExecutionRetentionDecisionEvaluator>();
+
+                    services.AddSingleton<
+                        IAiExecutionRetentionDecisionService,
+                        DefaultAiExecutionRetentionDecisionService>();
+
+                    services.AddSingleton<IAiExecutionRetentionDecisionPolicy>(
+                        new SizeBasedAiExecutionRetentionDecisionPolicy(1));
 
                     services.AddSingleton<
                         IAiExecutionRetentionServiceMetrics,
