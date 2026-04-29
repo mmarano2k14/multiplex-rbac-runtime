@@ -847,14 +847,16 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (claimed is not null)
                 {
-                    _metrics.IncrementClaimSuccess(claimed.StepName);
+                    _metrics.Execution.RecordStepClaimed(
+                        executionId,
+                        claimed.StepName);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Step claimed. ExecutionId='{executionId}', StepName='{claimed.StepName}', WorkerId='{workerId}', ClaimToken='{claimed.ClaimToken}'.");
                 }
                 else
                 {
-                    _metrics.IncrementClaimMiss();
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
                 }
 
                 return claimed;
@@ -873,14 +875,16 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (claimed is not null)
                 {
-                    _metrics.IncrementClaimSuccess(claimed.StepName);
+                    _metrics.Execution.RecordStepClaimed(
+                        executionId,
+                        claimed.StepName);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Step claimed after NOSCRIPT reload. ExecutionId='{executionId}', StepName='{claimed.StepName}', WorkerId='{workerId}', ClaimToken='{claimed.ClaimToken}'.");
                 }
                 else
                 {
-                    _metrics.IncrementClaimMiss();
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
                 }
 
                 return claimed;
@@ -1020,7 +1024,7 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (recovered > 0)
                 {
-                    _metrics.IncrementRecovery(executionId, recovered);
+                    _metrics.Execution.RecordStepsRecovered(executionId, recovered);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recovered}'.");
@@ -1036,7 +1040,7 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (recovered > 0)
                 {
-                    _metrics.IncrementRecovery(executionId, recovered);
+                    _metrics.Execution.RecordStepsRecovered(executionId, recovered);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Timed-out steps recovered after NOSCRIPT reload. ExecutionId='{executionId}', RecoveredCount='{recovered}'.");
@@ -1087,7 +1091,7 @@ namespace Multiplexed.AI.Stores.Cache
                 request.CompletedSteps ?? Array.Empty<string>(),
                 _jsonOptions);
 
-            _metrics.IncrementFinalizeAttempt();
+            _metrics.Execution.RecordFinalizeAttempt(request.ExecutionId);
 
             _logger.Engine.LogInformation(
                 $"[AI DAG STORE] Finalization attempt. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
@@ -1110,13 +1114,15 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (success)
                 {
-                    _metrics.IncrementFinalizeSuccess();
+                    _metrics.Execution.RecordFinalizeSuccess(request.ExecutionId);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Finalization succeeded. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
                 }
                 else
                 {
+                    _metrics.Execution.RecordFinalizeConflict(request.ExecutionId);
+
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Finalization skipped or race lost. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
                 }
@@ -1143,13 +1149,15 @@ namespace Multiplexed.AI.Stores.Cache
 
                 if (success)
                 {
-                    _metrics.IncrementFinalizeSuccess();
+                    _metrics.Execution.RecordFinalizeSuccess(request.ExecutionId);
 
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Finalization succeeded after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
                 }
                 else
                 {
+                    _metrics.Execution.RecordFinalizeConflict(request.ExecutionId);
+
                     _logger.Engine.LogInformation(
                         $"[AI DAG STORE] Finalization skipped or race lost after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
                 }

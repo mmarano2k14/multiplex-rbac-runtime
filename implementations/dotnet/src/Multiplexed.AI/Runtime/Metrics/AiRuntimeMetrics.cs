@@ -1,138 +1,69 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.ObjectModel;
-using System.Threading;
+﻿using System;
+using Multiplexed.AI.Runtime.Metrics.Execution;
+using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Metrics.Resolvers;
+using Multiplexed.AI.Runtime.Metrics.Retention;
+using Multiplexed.AI.Runtime.Metrics.Storage;
 
 namespace Multiplexed.AI.Runtime.Metrics
 {
     /// <summary>
-    /// Default in-memory implementation of IAiRuntimeMetrics.
+    /// Default implementation of <see cref="IAiRuntimeMetrics"/>.
     ///
-    /// Design goals:
-    /// - Thread-safe (multi-worker safe)
-    /// - Lock-free where possible (Interlocked / ConcurrentDictionary)
-    /// - Low overhead (safe for hot paths like claim/retry)
-    /// - Snapshot-friendly for debug endpoints
+    /// PURPOSE:
+    /// - Acts as the central facade for all AI runtime metrics.
+    /// - Exposes specialized metric domains through strongly typed properties.
+    /// - Keeps runtime observability structured and maintainable.
     ///
-    /// This implementation is intentionally simple.
-    /// It can later be replaced by a Prometheus/OpenTelemetry adapter.
+    /// DESIGN:
+    /// - This class does not record metrics directly.
+    /// - This class does not own counters or aggregation logic.
+    /// - Domain-specific metrics belong in their dedicated implementations.
+    ///
+    /// IMPORTANT:
+    /// - Keep this class lightweight.
+    /// - Do not reintroduce execution, retention, storage, hot-state, or resolver counters here.
     /// </summary>
     public sealed class AiRuntimeMetrics : IAiRuntimeMetrics
     {
-        // ===== GLOBAL COUNTERS =====
-
-        private long _finalizeAttempts;
-        private long _finalizeSuccess;
-        private long _claimMiss;
-
-        // ===== DIMENSIONAL METRICS =====
-
         /// <summary>
-        /// Retry count per step (StepName → count).
+        /// Initializes a new instance of the <see cref="AiRuntimeMetrics"/> class.
         /// </summary>
-        private readonly ConcurrentDictionary<string, long> _retryByStep =
-            new(StringComparer.Ordinal);
-
-        /// <summary>
-        /// Successful claims per step (StepName → count).
-        /// </summary>
-        private readonly ConcurrentDictionary<string, long> _claimSuccessByStep =
-            new(StringComparer.Ordinal);
-
-        /// <summary>
-        /// Recovery count per execution (ExecutionId → recovered steps count).
-        /// </summary>
-        private readonly ConcurrentDictionary<string, long> _recoveryByExecution =
-            new(StringComparer.Ordinal);
-
-        // ===== WRITE API =====
-
-        public void IncrementRetry(string stepName)
+        /// <param name="execution">Execution lifecycle metrics.</param>
+        /// <param name="retention">Retention lifecycle metrics.</param>
+        /// <param name="storage">Storage and payload metrics.</param>
+        /// <param name="hotState">Hot execution state metrics.</param>
+        /// <param name="resolver">Resolver and input binding metrics.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when one of the required metric domains is <c>null</c>.
+        /// </exception>
+        public AiRuntimeMetrics(
+            IAiExecutionMetrics execution,
+            IAiRetentionMetrics retention,
+            IAiStorageMetrics storage,
+            IAiHotStateMetrics hotState,
+            IAiResolverMetrics resolver)
         {
-            if (string.IsNullOrWhiteSpace(stepName))
-                return;
-
-            _retryByStep.AddOrUpdate(
-                stepName,
-                1,
-                (_, current) => current + 1);
+            Execution = execution ?? throw new ArgumentNullException(nameof(execution));
+            Retention = retention ?? throw new ArgumentNullException(nameof(retention));
+            Storage = storage ?? throw new ArgumentNullException(nameof(storage));
+            HotState = hotState ?? throw new ArgumentNullException(nameof(hotState));
+            Resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         }
 
-        public void IncrementRecovery(string executionId, int recoveredCount)
-        {
-            if (string.IsNullOrWhiteSpace(executionId) || recoveredCount <= 0)
-                return;
+        /// <inheritdoc />
+        public IAiExecutionMetrics Execution { get; }
 
-            _recoveryByExecution.AddOrUpdate(
-                executionId,
-                recoveredCount,
-                (_, current) => current + recoveredCount);
-        }
+        /// <inheritdoc />
+        public IAiRetentionMetrics Retention { get; }
 
-        public void IncrementFinalizeAttempt()
-        {
-            Interlocked.Increment(ref _finalizeAttempts);
-        }
+        /// <inheritdoc />
+        public IAiStorageMetrics Storage { get; }
 
-        public void IncrementFinalizeSuccess()
-        {
-            Interlocked.Increment(ref _finalizeSuccess);
-        }
+        /// <inheritdoc />
+        public IAiHotStateMetrics HotState { get; }
 
-        public void IncrementClaimSuccess(string stepName)
-        {
-            if (string.IsNullOrWhiteSpace(stepName))
-                return;
-
-            _claimSuccessByStep.AddOrUpdate(
-                stepName,
-                1,
-                (_, current) => current + 1);
-        }
-
-        public void IncrementClaimMiss()
-        {
-            Interlocked.Increment(ref _claimMiss);
-        }
-
-        // ===== READ API =====
-
-        /// <summary>
-        /// Total number of finalization attempts.
-        /// </summary>
-        public long GetFinalizeAttempts()
-            => Interlocked.Read(ref _finalizeAttempts);
-
-        /// <summary>
-        /// Total number of successful finalizations.
-        /// </summary>
-        public long GetFinalizeSuccess()
-            => Interlocked.Read(ref _finalizeSuccess);
-
-        /// <summary>
-        /// Total number of claim misses.
-        /// </summary>
-        public long GetClaimMiss()
-            => Interlocked.Read(ref _claimMiss);
-
-        /// <summary>
-        /// Snapshot of retry counts per step.
-        /// </summary>
-        public IReadOnlyDictionary<string, long> GetRetryByStep()
-            => new ReadOnlyDictionary<string, long>(
-                new Dictionary<string, long>(_retryByStep));
-
-        /// <summary>
-        /// Snapshot of successful claims per step.
-        /// </summary>
-        public IReadOnlyDictionary<string, long> GetClaimSuccessByStep()
-            => new ReadOnlyDictionary<string, long>(
-                new Dictionary<string, long>(_claimSuccessByStep));
-
-        /// <summary>
-        /// Snapshot of recovered steps per execution.
-        /// </summary>
-        public IReadOnlyDictionary<string, long> GetRecoveryByExecution()
-            => new ReadOnlyDictionary<string, long>(
-                new Dictionary<string, long>(_recoveryByExecution));
+        /// <inheritdoc />
+        public IAiResolverMetrics Resolver { get; }
     }
 }

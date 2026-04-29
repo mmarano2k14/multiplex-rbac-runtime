@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Metrics;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads
 {
@@ -18,12 +19,21 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
     /// - Externalized values are NOT removed without trace.
     /// - The result keeps a minimal summary in Value/Data so the state remains inspectable.
     /// - The full content is stored in Payload/DataPayloads and resolved through IAiExecutionPayloadResolver.
+    /// - The original CompactAsync(AiStepResult, CancellationToken) signature is preserved for compatibility.
     /// </summary>
     public sealed class DefaultAiStepResultPayloadCompactor : IAiStepResultPayloadCompactor
     {
         private readonly IAiExecutionDataPolicy _dataPolicy;
         private readonly IAiPayloadMetrics _payloadMetrics;
+        private readonly IAiRuntimeMetrics? _runtimeMetrics;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiStepResultPayloadCompactor"/> class.
+        ///
+        /// PURPOSE:
+        /// - Preserves the original constructor signature.
+        /// - Allows existing tests, DI registrations, and callers to continue working unchanged.
+        /// </summary>
         public DefaultAiStepResultPayloadCompactor(
             IAiExecutionDataPolicy dataPolicy,
             IAiPayloadMetrics payloadMetrics)
@@ -32,15 +42,69 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
             _payloadMetrics = payloadMetrics ?? throw new ArgumentNullException(nameof(payloadMetrics));
         }
 
-        public async Task CompactAsync(
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiStepResultPayloadCompactor"/> class
+        /// with runtime metrics support.
+        ///
+        /// PURPOSE:
+        /// - Preserves existing payload metrics.
+        /// - Adds runtime storage observability when <see cref="IAiRuntimeMetrics"/> is available.
+        /// </summary>
+        public DefaultAiStepResultPayloadCompactor(
+            IAiExecutionDataPolicy dataPolicy,
+            IAiPayloadMetrics payloadMetrics,
+            IAiRuntimeMetrics runtimeMetrics)
+            : this(dataPolicy, payloadMetrics)
+        {
+            _runtimeMetrics = runtimeMetrics ?? throw new ArgumentNullException(nameof(runtimeMetrics));
+        }
+
+        /// <inheritdoc />
+        public Task CompactAsync(
             AiStepResult result,
             CancellationToken cancellationToken = default)
         {
+            return CompactInternalAsync(
+                executionId: null,
+                stepId: null,
+                result,
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Compacts a step result and records runtime storage metrics using execution and step identity.
+        ///
+        /// PURPOSE:
+        /// - Allows DAG / distributed execution paths to emit storage metrics with execution context.
+        /// - Keeps the original interface method backward compatible.
+        /// </summary>
+        public Task CompactAsync(
+            string executionId,
+            string stepId,
+            AiStepResult result,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepId);
+
+            return CompactInternalAsync(
+                executionId,
+                stepId,
+                result,
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Applies payload compaction to Value and Data entries.
+        /// </summary>
+        private async Task CompactInternalAsync(
+            string? executionId,
+            string? stepId,
+            AiStepResult result,
+            CancellationToken cancellationToken)
+        {
             ArgumentNullException.ThrowIfNull(result);
 
-            // -----------------------------------------------------
-            // VALUE → Payload
-            // -----------------------------------------------------
             if (result.Value is not null && result.Payload is null)
             {
                 var payload = await _dataPolicy.StoreAsync(
@@ -48,7 +112,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                     cancellationToken);
 
                 result.Payload = payload;
-                RecordPayloadCompaction(payload);
+                RecordPayloadCompaction(payload, executionId, stepId);
 
                 if (!payload.IsInline)
                 {
@@ -56,9 +120,6 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                 }
             }
 
-            // -----------------------------------------------------
-            // DATA → DataPayloads
-            // -----------------------------------------------------
             if (result.Data is null || result.Data.Count == 0)
             {
                 return;
@@ -75,7 +136,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                     entry.Value,
                     cancellationToken);
 
-                RecordPayloadCompaction(payload);
+                RecordPayloadCompaction(payload, executionId, stepId);
 
                 if (payload.IsInline)
                 {
@@ -85,25 +146,17 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                 result.DataPayloads ??= new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal);
                 result.DataPayloads[entry.Key] = payload;
 
-                // Keep minimal state summary.
                 result.Data[entry.Key] = CreatePayloadSummary(payload);
             }
         }
 
         /// <summary>
         /// Records payload compaction metrics according to the storage decision.
-        ///
-        /// PURPOSE:
-        /// - Counts payloads kept inline inside the execution state.
-        /// - Counts payloads externalized to durable payload storage.
-        /// - Tracks byte distribution between inline state and external payload storage.
-        ///
-        /// IMPORTANT:
-        /// - The compactor is the correct place for this metric because it owns the
-        ///   state compaction decision and knows whether the runtime state will keep
-        ///   the original value or replace it with an externalized payload summary.
         /// </summary>
-        private void RecordPayloadCompaction(AiStoredPayload payload)
+        private void RecordPayloadCompaction(
+            AiStoredPayload payload,
+            string? executionId,
+            string? stepId)
         {
             var sizeBytes = payload.SizeBytes ?? 0L;
 
@@ -114,6 +167,12 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
             }
 
             _payloadMetrics.RecordExternalizedPayload(sizeBytes);
+
+            _runtimeMetrics?.Storage.RecordPayloadStored(
+                NormalizeMetricValue(executionId, "unknown-execution"),
+                NormalizeMetricValue(stepId, "unknown-step"),
+                "externalized-payload",
+                sizeBytes);
         }
 
         /// <summary>
@@ -130,6 +189,16 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                 ["sizeBytes"] = payload.SizeBytes,
                 ["contentType"] = payload.ContentType
             };
+        }
+
+        /// <summary>
+        /// Normalizes metric dimensions so storage metrics never receive empty keys.
+        /// </summary>
+        private static string NormalizeMetricValue(string? value, string fallback)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? fallback
+                : value.Trim();
         }
     }
 }

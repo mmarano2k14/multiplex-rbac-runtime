@@ -6,6 +6,7 @@ using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Tests.Integration.Helpers;
 using StackExchange.Redis;
 using System.Data.Common;
 using System.Reflection.PortableExecutable;
@@ -49,7 +50,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             _testPrefix = $"test:dag:recovery:{Guid.NewGuid():N}";
             _keyBuilder = new TestAiExecutionKeyBuilder(_testPrefix);
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
             _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics, normalizers);
         }

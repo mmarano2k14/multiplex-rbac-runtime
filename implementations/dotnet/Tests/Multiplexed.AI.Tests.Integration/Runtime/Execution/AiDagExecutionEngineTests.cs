@@ -40,6 +40,7 @@ using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
@@ -137,7 +138,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
 
             var payloadOptions = Options.Create(new AiPayloadStoreOptions
             {

@@ -2,6 +2,7 @@
 using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Documents;
+using Multiplexed.AI.Runtime.Metrics;
 
 namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
 {
@@ -25,10 +26,18 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
     /// </summary>
     public sealed class MongoAiPayloadStore : IAiPayloadStore
     {
+        private const string UnknownExecutionId = "unknown-execution";
+        private const string MongoStorageKind = "mongo";
+
         private readonly IMongoCollection<MongoAiPayloadDocument> _collection;
+        private readonly IAiRuntimeMetrics? _runtimeMetrics;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MongoAiPayloadStore"/> class.
+        ///
+        /// PURPOSE:
+        /// - Creates a MongoDB-backed payload store without runtime metrics.
+        /// - Preserves backward compatibility with existing registrations.
         /// </summary>
         public MongoAiPayloadStore(
             IOptions<AiPayloadStoreOptions> options)
@@ -67,6 +76,21 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="MongoAiPayloadStore"/> class with runtime metrics.
+        ///
+        /// PURPOSE:
+        /// - Enables storage-level observability.
+        /// - Tracks payload persistence, reads, and failures.
+        /// </summary>
+        public MongoAiPayloadStore(
+            IOptions<AiPayloadStoreOptions> options,
+            IAiRuntimeMetrics runtimeMetrics)
+            : this(options)
+        {
+            _runtimeMetrics = runtimeMetrics ?? throw new ArgumentNullException(nameof(runtimeMetrics));
+        }
+
+        /// <summary>
         /// Saves serialized payload content to MongoDB and returns the payload id.
         /// </summary>
         public async Task<string> SaveAsync(
@@ -88,11 +112,30 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
                 UpdatedAtUtc = now
             };
 
-            await _collection.InsertOneAsync(
-                document,
-                cancellationToken: cancellationToken);
+            try
+            {
+                await _collection.InsertOneAsync(
+                    document,
+                    cancellationToken: cancellationToken);
 
-            return id;
+                _runtimeMetrics?.Storage.RecordPayloadStored(
+                    UnknownExecutionId,
+                    id,
+                    MongoStorageKind,
+                    document.SizeBytes);
+
+                return id;
+            }
+            catch (Exception ex)
+            {
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    id,
+                    MongoStorageKind,
+                    ex);
+
+                throw;
+            }
         }
 
         /// <summary>
@@ -106,11 +149,39 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
-            var document = await _collection
-                .Find(x => x.Id == key)
-                .FirstOrDefaultAsync(cancellationToken);
+            try
+            {
+                var document = await _collection
+                    .Find(x => x.Id == key)
+                    .FirstOrDefaultAsync(cancellationToken);
 
-            return document?.Content;
+                if (document is null)
+                {
+                    _runtimeMetrics?.Storage.RecordPayloadStoreMiss(
+                        UnknownExecutionId,
+                        key,
+                        MongoStorageKind);
+
+                    return null;
+                }
+
+                _runtimeMetrics?.Storage.RecordPayloadLoaded(
+                    UnknownExecutionId,
+                    key,
+                    MongoStorageKind);
+
+                return document.Content;
+            }
+            catch (Exception ex)
+            {
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    key,
+                    MongoStorageKind,
+                    ex);
+
+                throw;
+            }
         }
 
         /// <summary>
@@ -122,9 +193,22 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
-            await _collection.DeleteOneAsync(
-                x => x.Id == key,
-                cancellationToken);
+            try
+            {
+                await _collection.DeleteOneAsync(
+                    x => x.Id == key,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    key,
+                    MongoStorageKind,
+                    ex);
+
+                throw;
+            }
         }
     }
 }

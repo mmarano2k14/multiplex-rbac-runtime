@@ -42,6 +42,11 @@ using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.Execution;
+using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Metrics.Resolvers;
+using Multiplexed.AI.Runtime.Metrics.Retention;
+using Multiplexed.AI.Runtime.Metrics.Storage;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
@@ -492,6 +497,33 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<IAiStepResultNormalizerPipeline, DefaultAiStepResultNormalizerPipeline>();
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IAiStepResultNormalizer, RagStepResultNormalizer>());
+
+
+            // ------------------------------------------------------------
+            // Metrics: execution, retention, storage, hot state, resolvers
+            // ------------------------------------------------------------
+
+            // Execution metrics
+            services.TryAddSingleton<IAiExecutionMetrics, AiExecutionMetrics>();
+
+            // Retention metrics
+            services.TryAddSingleton<IAiRetentionTriggerMetrics, AiRetentionTriggerMetrics>();
+            services.TryAddSingleton<IAiRetentionDecisionMetrics, AiRetentionDecisionMetrics>();
+            services.TryAddSingleton<IAiRetentionPlanMetrics, AiRetentionPlanMetrics>();
+            services.TryAddSingleton<IAiRetentionExecutionMetrics, AiRetentionExecutionMetrics>();
+            services.TryAddSingleton<IAiRetentionMetrics, AiRetentionMetrics>();
+
+            // Storage metrics
+            services.TryAddSingleton<IAiStorageMetrics, AiStorageMetrics>();
+
+            // Hot state metrics
+            services.TryAddSingleton<IAiHotStateMetrics, AiHotStateMetrics>();
+
+            // Resolver metrics
+            services.TryAddSingleton<IAiResolverMetrics, AiResolverMetrics>();
+
+            // Metrics facade
+            services.TryAddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
 
 
             // ------------------------------------------------------------

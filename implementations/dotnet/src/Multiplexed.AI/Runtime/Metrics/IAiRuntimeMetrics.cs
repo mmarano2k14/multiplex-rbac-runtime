@@ -1,64 +1,53 @@
-﻿using System.Collections.Generic;
+﻿using Multiplexed.AI.Runtime.Metrics.Execution;
+using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Metrics.Resolvers;
+using Multiplexed.AI.Runtime.Metrics.Retention;
+using Multiplexed.AI.Runtime.Metrics.Storage;
 
 namespace Multiplexed.AI.Runtime.Metrics
 {
     /// <summary>
-    /// Defines runtime-level metrics for AI execution observability.
+    /// Central facade for all AI runtime metrics.
     ///
-    /// This interface is intentionally simple and in-memory:
-    /// - Used by Engine and Store to emit metrics
-    /// - Can later be backed by Prometheus / OpenTelemetry without changing callers
+    /// PURPOSE:
+    /// - Provide a single entry point for runtime observability.
+    /// - Expose specialized metric domains through strongly typed properties.
+    /// - Keep execution, retention, storage, hot-state, and resolver metrics separated.
+    ///
+    /// DESIGN:
+    /// - This interface does not expose flat counters.
+    /// - Each domain owns its own metrics contract.
+    /// - Runtime services should use the relevant domain property.
     ///
     /// IMPORTANT:
-    /// These metrics are for observability only.
-    /// They must NEVER drive business logic decisions.
+    /// - Metrics are observational only.
+    /// - Metrics must never drive business logic, execution decisions, or state transitions.
     /// </summary>
     public interface IAiRuntimeMetrics
     {
         /// <summary>
-        /// Increments retry counter for a specific step.
-        /// Called when a step transitions to WaitingForRetry.
+        /// Gets metrics related to AI execution lifecycle.
         /// </summary>
-        void IncrementRetry(string stepName);
+        IAiExecutionMetrics Execution { get; }
 
         /// <summary>
-        /// Increments recovery counter for a given execution.
-        /// Called when timed-out steps are recovered by the store.
+        /// Gets metrics related to retention, compaction, eviction, and archival.
         /// </summary>
-        void IncrementRecovery(string executionId, int recoveredCount);
+        IAiRetentionMetrics Retention { get; }
 
         /// <summary>
-        /// Increments the number of finalization attempts.
-        /// Called before attempting atomic DAG finalization.
+        /// Gets metrics related to payload and persistence storage.
         /// </summary>
-        void IncrementFinalizeAttempt();
+        IAiStorageMetrics Storage { get; }
 
         /// <summary>
-        /// Increments successful finalizations.
-        /// Called only when finalization succeeds.
+        /// Gets metrics related to hot execution state size and lifecycle.
         /// </summary>
-        void IncrementFinalizeSuccess();
+        IAiHotStateMetrics HotState { get; }
 
         /// <summary>
-        /// Increments successful claim for a step.
-        /// Called when a worker successfully claims a ready step.
+        /// Gets metrics related to runtime resolvers and input binding resolution.
         /// </summary>
-        void IncrementClaimSuccess(string stepName);
-
-        /// <summary>
-        /// Increments claim miss (no step available or lost race).
-        /// Useful to detect contention or idle workers.
-        /// </summary>
-        void IncrementClaimMiss();
-
-        // ===== READ API (for debug / observability) =====
-
-        long GetFinalizeAttempts();
-        long GetFinalizeSuccess();
-        long GetClaimMiss();
-
-        IReadOnlyDictionary<string, long> GetRetryByStep();
-        IReadOnlyDictionary<string, long> GetClaimSuccessByStep();
-        IReadOnlyDictionary<string, long> GetRecoveryByExecution();
+        IAiResolverMetrics Resolver { get; }
     }
 }

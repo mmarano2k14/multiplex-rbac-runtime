@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Metrics;
 
 namespace Multiplexed.AI.Runtime.Execution.State
 {
@@ -13,9 +14,42 @@ namespace Multiplexed.AI.Runtime.Execution.State
     /// - Applies all durable execution state mutations in one place.
     /// - Keeps <see cref="AiExecutionState"/> focused on persistence shape.
     /// - Ensures mutation timestamps are updated consistently.
+    ///
+    /// OBSERVABILITY:
+    /// - Records hot-state step additions when runtime metrics are available.
+    /// - Records hot-state size observations after step mutations.
+    ///
+    /// IMPORTANT:
+    /// - Metrics are optional and observational only.
+    /// - Metrics must never influence state mutation behavior.
+    /// - This writer does not apply retention or remove steps from hot state.
     /// </summary>
     public sealed class DefaultAiExecutionStateWriter : IAiExecutionStateWriter
     {
+        private readonly IAiRuntimeMetrics? _metrics;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiExecutionStateWriter"/> class.
+        ///
+        /// PURPOSE:
+        /// - Preserves existing behavior without requiring metrics registration.
+        /// </summary>
+        public DefaultAiExecutionStateWriter()
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiExecutionStateWriter"/> class
+        /// with runtime metrics support.
+        ///
+        /// PURPOSE:
+        /// - Enables hot-state observability without changing mutation semantics.
+        /// </summary>
+        public DefaultAiExecutionStateWriter(IAiRuntimeMetrics metrics)
+        {
+            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+        }
+
         /// <inheritdoc />
         public void SetData<T>(AiExecutionState state, string key, T value)
         {
@@ -24,6 +58,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
 
             state.Data[key] = value;
             Touch(state);
+            RecordStateSizeObserved(state);
         }
 
         /// <inheritdoc />
@@ -37,6 +72,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             if (removed)
             {
                 Touch(state);
+                RecordStateSizeObserved(state);
             }
 
             return removed;
@@ -53,6 +89,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             state.DataPayloads[key] = payload;
 
             Touch(state);
+            RecordStateSizeObserved(state);
         }
 
         /// <inheritdoc />
@@ -67,6 +104,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             if (removed)
             {
                 Touch(state);
+                RecordStateSizeObserved(state);
             }
 
             return removed;
@@ -80,6 +118,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
 
             state.Metadata[key] = value;
             Touch(state);
+            RecordStateSizeObserved(state);
         }
 
         /// <inheritdoc />
@@ -93,6 +132,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             if (removed)
             {
                 Touch(state);
+                RecordStateSizeObserved(state);
             }
 
             return removed;
@@ -109,6 +149,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             state.MetadataPayloads[key] = payload;
 
             Touch(state);
+            RecordStateSizeObserved(state);
         }
 
         /// <inheritdoc />
@@ -123,6 +164,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             if (removed)
             {
                 Touch(state);
+                RecordStateSizeObserved(state);
             }
 
             return removed;
@@ -142,6 +184,8 @@ namespace Multiplexed.AI.Runtime.Execution.State
                 return;
             }
 
+            var beforeSteps = state.Steps.Count;
+
             var stepState = new AiStepState
             {
                 StepName = stepDefinition.Name
@@ -156,6 +200,12 @@ namespace Multiplexed.AI.Runtime.Execution.State
             stepState.UpdatedAtUtc = DateTime.UtcNow;
 
             Touch(state);
+
+            _metrics?.HotState.RecordStateStepAdded(
+                state.ExecutionId,
+                stepDefinition.Name);
+
+            RecordStateSizeObserved(state);
         }
 
         /// <inheritdoc />
@@ -176,6 +226,12 @@ namespace Multiplexed.AI.Runtime.Execution.State
 
             state.Steps[stepName] = stepState;
             Touch(state);
+
+            _metrics?.HotState.RecordStateStepAdded(
+                state.ExecutionId,
+                stepName);
+
+            RecordStateSizeObserved(state);
 
             return stepState;
         }
@@ -200,6 +256,8 @@ namespace Multiplexed.AI.Runtime.Execution.State
             stepState.Result = result;
             stepState.UpdatedAtUtc = now;
             state.UpdatedAtUtc = now;
+
+            RecordStateSizeObserved(state);
         }
 
         /// <summary>
@@ -208,6 +266,21 @@ namespace Multiplexed.AI.Runtime.Execution.State
         private static void Touch(AiExecutionState state)
         {
             state.UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Records the current hot-state size when metrics are available.
+        ///
+        /// IMPORTANT:
+        /// - This uses step count only.
+        /// - Estimated byte size is intentionally omitted because this writer does not serialize state.
+        /// </summary>
+        private void RecordStateSizeObserved(AiExecutionState state)
+        {
+            _metrics?.HotState.RecordStateSizeObserved(
+                state.ExecutionId,
+                state.Steps.Count,
+                estimatedBytes: null);
         }
     }
 }

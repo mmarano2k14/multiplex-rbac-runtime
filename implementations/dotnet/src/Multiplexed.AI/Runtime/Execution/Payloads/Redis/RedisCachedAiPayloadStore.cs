@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.AI.Runtime.Metrics;
 using StackExchange.Redis;
 using System.Text;
 
@@ -11,14 +12,14 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
     /// Redis cache decorator for an existing durable payload store.
     ///
     /// PURPOSE:
-    /// - Adds Redis read-through/write-through cache behavior on top of another payload store.
+    /// - Adds Redis read-through/write-through cache behavior on top of a durable payload store.
     /// - Reduces reads against the durable source of truth during active executions.
     /// - Keeps Redis bounded using TTL and max cacheable payload size.
     ///
     /// DESIGN:
     /// - The wrapped store remains the source of truth.
     /// - Redis is used only as an opportunistic cache.
-    /// - Cache failures must never fail execution.
+    /// - Cache failures must never impact execution correctness.
     ///
     /// IMPORTANT:
     /// - This class is a decorator, not a standalone provider.
@@ -26,11 +27,23 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
     /// </summary>
     public sealed class RedisCachedAiPayloadStore : IAiPayloadStore
     {
+        private const string UnknownExecutionId = "unknown-execution";
+        private const string RedisCacheStorageKind = "redis-cache";
+        private const string DurableStoreStorageKind = "durable-store";
+
         private readonly IAiPayloadStore _innerStore;
         private readonly IConnectionMultiplexer _redis;
         private readonly RedisAiPayloadCacheOptions _options;
         private readonly IAiPayloadMetrics _payloadMetrics;
+        private readonly IAiRuntimeMetrics? _runtimeMetrics;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RedisCachedAiPayloadStore"/> class.
+        ///
+        /// PURPOSE:
+        /// - Preserves original constructor for backward compatibility.
+        /// - Enables cache-only behavior without runtime metrics dependency.
+        /// </summary>
         public RedisCachedAiPayloadStore(
             IAiPayloadStore innerStore,
             IConnectionMultiplexer redis,
@@ -48,6 +61,24 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
             _payloadMetrics = payloadMetrics;
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RedisCachedAiPayloadStore"/> class with runtime metrics.
+        ///
+        /// PURPOSE:
+        /// - Extends observability without breaking existing registrations.
+        /// - Enables storage-level metrics for cache and durable operations.
+        /// </summary>
+        public RedisCachedAiPayloadStore(
+            IAiPayloadStore innerStore,
+            IConnectionMultiplexer redis,
+            IOptions<AiPayloadStoreOptions> options,
+            IAiPayloadMetrics payloadMetrics,
+            IAiRuntimeMetrics runtimeMetrics)
+            : this(innerStore, redis, options, payloadMetrics)
+        {
+            _runtimeMetrics = runtimeMetrics ?? throw new ArgumentNullException(nameof(runtimeMetrics));
+        }
+
         /// <inheritdoc />
         public async Task<string> SaveAsync(
             string content,
@@ -55,6 +86,12 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
         {
             var id = await _innerStore.SaveAsync(content, cancellationToken)
                 .ConfigureAwait(false);
+
+            _runtimeMetrics?.Storage.RecordPayloadStored(
+                UnknownExecutionId,
+                id,
+                DurableStoreStorageKind,
+                Encoding.UTF8.GetByteCount(content));
 
             await TryCacheAsync(id, content).ConfigureAwait(false);
 
@@ -78,14 +115,31 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
                 if (cached.HasValue)
                 {
                     _payloadMetrics.RecordCacheHit();
+
+                    _runtimeMetrics?.Storage.RecordPayloadStoreHit(
+                        UnknownExecutionId,
+                        key,
+                        RedisCacheStorageKind);
+
                     return cached.ToString();
                 }
 
                 _payloadMetrics.RecordCacheMiss();
+
+                _runtimeMetrics?.Storage.RecordPayloadStoreMiss(
+                    UnknownExecutionId,
+                    key,
+                    RedisCacheStorageKind);
             }
-            catch
+            catch (Exception ex)
             {
                 _payloadMetrics.RecordCacheMiss();
+
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    key,
+                    RedisCacheStorageKind,
+                    ex);
             }
 
             _payloadMetrics.RecordCacheFallback();
@@ -95,8 +149,18 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
 
             if (content is null)
             {
+                _runtimeMetrics?.Storage.RecordPayloadStoreMiss(
+                    UnknownExecutionId,
+                    key,
+                    DurableStoreStorageKind);
+
                 return null;
             }
+
+            _runtimeMetrics?.Storage.RecordPayloadLoaded(
+                UnknownExecutionId,
+                key,
+                DurableStoreStorageKind);
 
             await TryCacheAsync(key, content).ConfigureAwait(false);
 
@@ -115,9 +179,13 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
                 await db.KeyDeleteAsync(BuildKey(key))
                     .ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // Cache delete is best-effort only.
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    key,
+                    RedisCacheStorageKind,
+                    ex);
             }
 
             await _innerStore.DeleteAsync(key, cancellationToken)
@@ -156,10 +224,20 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads.Redis
                     .ConfigureAwait(false);
 
                 _payloadMetrics.RecordCacheWrite();
+
+                _runtimeMetrics?.Storage.RecordPayloadStored(
+                    UnknownExecutionId,
+                    key,
+                    RedisCacheStorageKind,
+                    sizeBytes);
             }
-            catch
+            catch (Exception ex)
             {
-                // Cache write is best-effort only.
+                _runtimeMetrics?.Storage.RecordPayloadStoreFailure(
+                    UnknownExecutionId,
+                    key,
+                    RedisCacheStorageKind,
+                    ex);
             }
         }
 

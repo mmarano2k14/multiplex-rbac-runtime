@@ -3,6 +3,8 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -11,6 +13,23 @@ namespace Multiplexed.AI.Runtime.Execution.Context
 {
     /// <summary>
     /// Default implementation of the global AI context value resolver.
+    ///
+    /// PURPOSE:
+    /// - Resolve raw values or runtime path expressions from an AI step execution context.
+    /// - Support paths such as current.*, config.*, state.*, metadata.*, steps.*, and execution.*.
+    /// - Resolve externalized payload references transparently through IAiExecutionPayloadResolver.
+    /// - Convert JsonElement values into usable CLR values before traversal or conversion.
+    ///
+    /// OBSERVABILITY:
+    /// - Records resolver start, success, miss, and failure metrics when IAiRuntimeMetrics
+    ///   is available from the execution service provider.
+    /// - Metrics are observational only and must never influence resolution behavior.
+    ///
+    /// IMPORTANT:
+    /// - This resolver does not mutate execution state.
+    /// - If a string does not look like a runtime path, it is returned as a literal value.
+    /// - If a path cannot be resolved, the original raw value is returned to preserve
+    ///   backward-compatible binding behavior.
     /// </summary>
     public sealed class DefaultAiContextValueResolver : IAiContextValueResolver
     {
@@ -47,12 +66,42 @@ namespace Multiplexed.AI.Runtime.Execution.Context
                 return rawValue;
             }
 
-            if (await TryResolvePathAsync(context, text, cancellationToken).ConfigureAwait(false) is { Found: true } result)
-            {
-                return result.Value;
-            }
+            var metrics = GetMetrics(context);
 
-            return rawValue;
+            metrics?.RecordResolveStarted(
+                context.ExecutionId,
+                context.StepName,
+                text);
+
+            try
+            {
+                if (await TryResolvePathAsync(context, text, cancellationToken).ConfigureAwait(false) is { Found: true } result)
+                {
+                    metrics?.RecordResolveSuccess(
+                        context.ExecutionId,
+                        context.StepName,
+                        text);
+
+                    return result.Value;
+                }
+
+                metrics?.RecordResolveMiss(
+                    context.ExecutionId,
+                    context.StepName,
+                    text);
+
+                return rawValue;
+            }
+            catch (Exception ex)
+            {
+                metrics?.RecordResolveFailed(
+                    context.ExecutionId,
+                    context.StepName,
+                    text,
+                    ex);
+
+                throw;
+            }
         }
 
         /// <summary>
@@ -87,6 +136,18 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             }
 
             return value;
+        }
+
+        /// <summary>
+        /// Gets resolver metrics from the execution service provider when available.
+        ///
+        /// IMPORTANT:
+        /// - Metrics are optional.
+        /// - Missing metrics must never break resolution.
+        /// </summary>
+        private static IAiResolverMetrics? GetMetrics(AiStepExecutionContext context)
+        {
+            return context.Services.GetService<IAiRuntimeMetrics>()?.Resolver;
         }
 
         /// <summary>
@@ -490,7 +551,7 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         }
 
         /// <summary>
-        /// Traverses nested dictionaries, objects, and JsonElement values.
+        /// Traverses nested dictionaries, read-only dictionaries, JsonElement values, and public properties.
         /// </summary>
         private static (bool Found, object? Value) TryTraverse(
             object? source,
@@ -587,9 +648,6 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         /// <summary>
         /// Converts a resolved value to the requested type.
         /// </summary>
-        /// <summary>
-        /// Converts a resolved value to the requested type.
-        /// </summary>
         private static T? ConvertValue<T>(object? value)
         {
             value = ConvertJsonElementValue(value);
@@ -641,6 +699,9 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             return (T?)Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
         }
 
+        /// <summary>
+        /// Attempts to convert a value into a supported string collection shape.
+        /// </summary>
         private static bool TryConvertStringCollection<T>(
             object value,
             Type targetType,
@@ -694,6 +755,9 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             return false;
         }
 
+        /// <summary>
+        /// Determines whether a type can safely use Convert.ChangeType.
+        /// </summary>
         private static bool IsSimpleConvertibleType(Type type)
         {
             type = Nullable.GetUnderlyingType(type) ?? type;
@@ -773,7 +837,7 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         }
 
         /// <summary>
-        /// Reads a public property value using case-sensitive first, case-insensitive fallback.
+        /// Reads a public property value using case-sensitive lookup first and case-insensitive fallback.
         /// </summary>
         private static bool TryGetPublicPropertyValue(
             object source,
@@ -800,7 +864,7 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         }
 
         /// <summary>
-        /// Reads a dictionary value using case-sensitive first, case-insensitive fallback.
+        /// Reads a dictionary value using case-sensitive lookup first and case-insensitive fallback.
         /// </summary>
         private static bool TryGetDictionaryValue(
             IDictionary<string, object?> dict,
@@ -826,7 +890,7 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         }
 
         /// <summary>
-        /// Reads a read-only dictionary value using case-sensitive first, case-insensitive fallback.
+        /// Reads a read-only dictionary value using case-sensitive lookup first and case-insensitive fallback.
         /// </summary>
         private static bool TryGetReadOnlyDictionaryValue(
             IReadOnlyDictionary<string, object?> dict,

@@ -43,6 +43,7 @@ using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
+using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.AI.Tests.Integration.Models;
 using Multiplexed.AI.Tests.Models;
@@ -583,7 +584,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
 
             var payloadStoreOptions = Options.Create(new AiPayloadStoreOptions
             {
@@ -871,7 +872,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
 
             var payloadOptions = Options.Create(new AiPayloadStoreOptions
             {
@@ -954,7 +955,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         private IAiDagExecutionStore CreateDagStore()
         {
             var logger = new NoopLogger();
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
             var keyBuilder = new AiExecutionKeyBuilder();
 
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);

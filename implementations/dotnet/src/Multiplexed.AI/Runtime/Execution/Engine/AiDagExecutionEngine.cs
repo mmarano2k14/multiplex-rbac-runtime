@@ -239,6 +239,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             Logger.Engine.ExecutionCreated(record);
 
+            _engineServices.Metrics.Execution.RecordExecutionStarted(record.ExecutionId);
+
             Logger.Engine.LogInformation(
                 $"[AI DAG] Execution created. ExecutionId='{record.ExecutionId}', Pipeline='{record.PipelineName}', Mode='{record.ExecutionMode}', StepCount='{preparedPipeline.Steps.Count}', ContextKey='{record.ContextKey}'.");
 
@@ -401,6 +403,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -445,7 +448,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.IncrementRetry(nextStep.Name);
+                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -453,6 +456,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                             stepState.RetryCount,
                             stepState.NextRetryAtUtc);
                     }
+
+                    _engineServices.Metrics.Execution.RecordStepFailed(
+                        executionId,
+                        nextStep.Name);
 
                     Logger.Engine.StepException(
                         record.ExecutionId,
@@ -495,6 +502,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -510,7 +518,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.IncrementRetry(nextStep.Name);
+                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -518,6 +526,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                             stepState.RetryCount,
                             stepState.NextRetryAtUtc);
                     }
+
+                    _engineServices.Metrics.Execution.RecordStepFailed(
+                        executionId,
+                        nextStep.Name);
 
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
@@ -530,6 +542,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 else
                 {
                     stepState.MarkCompleted(stepResult);
+
+                    _engineServices.Metrics.Execution.RecordStepCompleted(
+                        executionId,
+                        nextStep.Name);
 
                     Logger.Engine.StepCompleted(
                         record,
@@ -573,6 +589,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
+                    _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                     await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
@@ -737,6 +754,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -786,6 +804,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         ex.Message,
                         cancellationToken);
 
+                    _engineServices.Metrics.Execution.RecordStepFailed(
+                        executionId,
+                        claimed.StepName);
+
                     Logger.Engine.StepException(
                         record.ExecutionId,
                         claimed.StepName,
@@ -798,18 +820,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         failedState,
                         cancellationToken);
 
-                    await _engineServices.DagStore.SaveStateAsync(
-                        executionId,
-                        failedState,
-                        cancellationToken);
-
                     var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
                         ? reloadedFailedStep
                         : null;
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.IncrementRetry(claimed.StepName);
+                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -854,6 +871,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
+                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, failedState, cancellationToken);
                     }
 
@@ -874,6 +892,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         stepResult.Error,
                         cancellationToken);
 
+
+                    // Record the failure in metrics regardless of retry policy outcome.
+                    _engineServices.Metrics.Execution.RecordStepFailed(
+                        executionId,
+                        claimed.StepName);
+
                     Logger.Engine.StepFailed(
                         record.ExecutionId,
                         claimed.StepName,
@@ -886,7 +910,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.IncrementRetry(claimed.StepName);
+                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -920,6 +944,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         record,
                         claimed.StepName);
 
+                    _engineServices.Metrics.Execution.RecordStepCompleted(
+                        executionId,
+                        claimed.StepName);
+
                     var completedState = await _engineServices.DagStore.GetStateAsync(executionId, cancellationToken) ?? state;
 
                     await ApplyRetentionPersistAndWarmAsync(
@@ -927,10 +955,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         completedState,
                         cancellationToken);
 
-                    await _engineServices.DagStore.SaveStateAsync(
-                        executionId,
-                        completedState,
-                        cancellationToken);
 
                     var completedStepState = completedState.Steps.TryGetValue(claimed.StepName, out var reloadedCompletedStep)
                         ? reloadedCompletedStep
@@ -965,6 +989,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     finalConvergence,
                     finalState);
 
+                if (record.Status == AiExecutionStatus.Failed)
+                {
+                    _engineServices.Metrics.Execution.RecordExecutionFailed(record.ExecutionId);
+                }
+
                 var expectedStepKeyFinal = record.ExecutionStepKey;
 
                 if (string.IsNullOrWhiteSpace(expectedStepKeyFinal))
@@ -983,6 +1012,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
+                    _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                     await TryPersistTerminalSnapshotAsync(record, finalState, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
@@ -1307,14 +1337,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     record.ExecutionId,
                     state,
                     cancellationToken);
-                // IMPORTANT:
-                // Retention mutates the in-memory state.
-                // Persist it immediately before finalizing the record.
-                // Do NOT wait until after TryFinalizeExecutionAsync.
-                await _engineServices.DagStore.SaveStateAsync(
-                    record.ExecutionId,
-                    state,
-                    cancellationToken);
+          
 
                 var request = new AiDagExecutionFinalizationRequest
                 {
@@ -1434,8 +1457,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     _engineServices.AiOptions.Value.StateRetention.Mode,
                     cancellationToken);
             }
-            catch
+            catch (Exception ex)
             {
+                _engineServices.Metrics.Retention.Execution.RecordRetentionFailed(
+                    state.ExecutionId,
+                    ex);
+
                 return AiExecutionRetentionApplyResult.Empty;
             }
         }
@@ -1512,10 +1539,88 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentNullException.ThrowIfNull(state);
 
+            _engineServices.Metrics.Retention.Trigger.RecordTriggered(
+                executionId,
+                "retention-invoked");
+
             // 1) Apply retention
             var result = await TryApplyStateRetentionAsync(
                 state,
                 cancellationToken).ConfigureAwait(false);
+
+            if (result == AiExecutionRetentionApplyResult.Empty)
+            {
+                _engineServices.Metrics.Retention.Trigger.RecordSkipped(
+                    executionId,
+                    "no-policy-or-no-op");
+            }
+            else
+            {
+                var totalSteps = state.Steps.Count;
+                var compactedCount = result.CompactedSteps?.Count ?? 0;
+                var evictedCount = result.EvictedSteps?.Count ?? 0;
+
+                // Decision
+                if (compactedCount > 0)
+                {
+                    _engineServices.Metrics.Retention.Decision.RecordCompactionRequired(
+                        executionId,
+                        totalSteps,
+                        compactedCount);
+                }
+
+                if (evictedCount > 0)
+                {
+                    _engineServices.Metrics.Retention.Decision.RecordEvictionRequired(
+                        executionId,
+                        totalSteps,
+                        evictedCount);
+                }
+
+                if (compactedCount == 0 && evictedCount == 0)
+                {
+                    _engineServices.Metrics.Retention.Decision.RecordNoActionRequired(
+                        executionId,
+                        totalSteps);
+                }
+
+                // Plan
+                _engineServices.Metrics.Retention.Plan.RecordPlanCreated(
+                    executionId,
+                    compactedCount,
+                    evictedCount,
+                    totalSteps);
+
+                // Execution
+
+                // Evicted + archived
+                foreach (var stepId in result.EvictedSteps ?? Array.Empty<string>())
+                {
+                    _engineServices.Metrics.Retention.Execution.RecordStepEvicted(
+                        executionId,
+                        stepId);
+
+                    _engineServices.Metrics.Retention.Execution.RecordStepMarkedArchived(
+                        executionId,
+                        stepId);
+                }
+
+                // Compacted (payload)
+                if (result.CompactedSteps is not null)
+                {
+                    foreach (var stepId in result.CompactedSteps)
+                    {
+                        _engineServices.Metrics.Retention.Execution.RecordPayloadCompacted(
+                            executionId,
+                            stepId,
+                            beforeBytes: 0,
+                            afterBytes: 0);
+                    }
+                }
+
+                _engineServices.Metrics.Retention.Execution.RecordRetentionCompleted(
+                    executionId);
+            }
 
             // 2) Persist state (optional)
             var dagStore = _engineServices.DagStore;
@@ -1529,12 +1634,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             }
 
             // 3) Incremental warm (MANDATORY if eviction happened)
-            if (result.EvictedSteps.Count > 0)
+            var evictedSteps = result.EvictedSteps;
+
+            if (evictedSteps is { Count: > 0 })
             {
                 await _engineServices.StepResolver.WarmStepsAsync(
                     executionId,
                     state,
-                    result.EvictedSteps,
+                    evictedSteps,
                     cancellationToken).ConfigureAwait(false);
             }
         }

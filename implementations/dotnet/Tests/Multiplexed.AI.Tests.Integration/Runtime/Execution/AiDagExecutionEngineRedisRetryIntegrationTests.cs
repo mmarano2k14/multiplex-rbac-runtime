@@ -42,6 +42,7 @@ using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
+using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
@@ -503,7 +504,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stepExecutor);
 
             var cleanupService = new NoOpAiExecutionCleanupService();
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
 
             var aiOptions = new AiEngineOptions
             {
@@ -627,7 +628,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         {
             var logger = new NoopLogger();
             var keyBuilder = new AiExecutionKeyBuilder();
-            var metrics = new AiRuntimeMetrics();
+            var metrics = MetricsFactory.Create();
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
             return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics, normalizers);
         }
