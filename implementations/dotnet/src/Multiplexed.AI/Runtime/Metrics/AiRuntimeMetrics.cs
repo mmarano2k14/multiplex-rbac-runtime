@@ -1,9 +1,12 @@
 ﻿using System;
+using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Resolvers;
+using Multiplexed.Abstractions.AI.Metrics.Retention;
+using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Multiplexed.AI.Runtime.Metrics.HotState;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
-using Multiplexed.AI.Runtime.Metrics.Retention;
-using Multiplexed.AI.Runtime.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Metrics;
 
 namespace Multiplexed.AI.Runtime.Metrics
 {

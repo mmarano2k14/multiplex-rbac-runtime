@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Multiplexed.AI.Runtime.Metrics.Resolvers
+namespace Multiplexed.Abstractions.AI.Metrics.Resolvers
 {
     /// <summary>
     /// Records metrics for runtime resolver operations.

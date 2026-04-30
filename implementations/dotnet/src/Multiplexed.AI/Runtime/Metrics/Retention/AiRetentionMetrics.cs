@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Metrics.Retention;
+using System;
 
 namespace Multiplexed.AI.Runtime.Metrics.Retention
 {

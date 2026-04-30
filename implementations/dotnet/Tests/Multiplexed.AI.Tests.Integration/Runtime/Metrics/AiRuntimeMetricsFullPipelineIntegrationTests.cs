@@ -13,8 +13,10 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
@@ -543,6 +545,194 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Metrics
             await Task.Delay(wait);
         }
 
+        [Fact]
+        public async Task ExecuteAllAsync_Should_Render_Trace_Timeline_To_Console()
+        {
+            const int stepCount = 10;
+
+            var pipeline = CreateLargePipeline(stepCount);
+
+            await using var host = await CreateHost(pipeline);
+
+            var timeline = host.ServiceProvider.GetRequiredService<IAiTraceTimeline>();
+
+            var created = await host.Engine.CreateAsync(
+                pipeline.Name,
+                new Dictionary<string, object?>());
+
+            var final = await host.Engine
+                .ExecuteAllAsync(created.ExecutionId)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.True(final.IsTerminal);
+
+            var events = timeline.Get(created.ExecutionId);
+
+            Assert.NotEmpty(events);
+
+            _output.WriteLine("");
+            _output.WriteLine("===== TRACE TIMELINE =====");
+
+            var start = events.Min(x => x.TimestampUtc);
+
+            foreach (var e in events)
+            {
+                var offset = (e.TimestampUtc - start).TotalMilliseconds;
+
+                var step = string.IsNullOrWhiteSpace(e.StepId)
+                    ? ""
+                    : $"[{e.StepId}]";
+
+                _output.WriteLine(
+                    $"[{offset,6:0} ms] {e.Category,-10} {e.Name,-25} {step}");
+            }
+
+            _output.WriteLine("==========================");
+        }
+
+        [Fact]
+        public async Task ExecuteNextAsync_Should_Render_Trace_Timeline_To_Console()
+        {
+            const int stepCount = 10;
+
+            var pipeline = CreateLargePipeline(stepCount);
+
+            await using var host = await CreateHost(pipeline);
+
+            var timeline = host.ServiceProvider.GetRequiredService<IAiTraceTimeline>();
+
+            var created = await host.Engine.CreateAsync(
+                pipeline.Name,
+                new Dictionary<string, object?>());
+
+            var executionId = created.ExecutionId;
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+
+            // -------------------------------
+            // MAIN EXECUTION LOOP
+            // -------------------------------
+            while (DateTime.UtcNow < deadline)
+            {
+                AiExecutionRecord? current = null;
+
+                try
+                {
+                    current = await host.Engine.ExecuteNextAsync(executionId);
+                }
+                catch
+                {
+                    // ignore transient errors (retry / race)
+                }
+
+                if (current?.IsTerminal == true)
+                {
+                    break;
+                }
+
+                var state = await host.ServiceProvider
+                    .GetRequiredService<IAiDagExecutionStore>()
+                    .GetStateAsync(executionId);
+
+                if (state is not null)
+                {
+                    await WaitForRetryWindowIfNeededAsync(state);
+                }
+            }
+
+            // -------------------------------
+            // 🔥 FORCE FINALIZATION LOOP
+            // -------------------------------
+            var finalizeDeadline = DateTime.UtcNow.AddSeconds(5);
+
+            while (DateTime.UtcNow < finalizeDeadline)
+            {
+                var tick = await host.Engine.ExecuteNextAsync(executionId);
+
+                // Stop once finalization happened
+                if (tick.IsTerminal)
+                {
+                    break;
+                }
+
+                await Task.Delay(10);
+            }
+
+            var final = await host.ServiceProvider
+                .GetRequiredService<IAiDagExecutionStore>()
+                .GetRecordAsync(executionId);
+
+            Assert.NotNull(final);
+            Assert.True(final!.IsTerminal);
+
+            var events = timeline.Get(executionId);
+
+            Assert.NotEmpty(events);
+
+            // -------------------------------
+            // 🔥 ASSERT FINALIZATION EXISTS
+            // -------------------------------
+            Assert.Contains(events, e =>
+                string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&
+                e.Name.StartsWith("TryClaimNextReadyStep", StringComparison.Ordinal));
+
+            Assert.Contains(events, e =>
+                string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&
+                e.Name.StartsWith("TryCompleteStep", StringComparison.Ordinal));
+
+            Assert.Contains(events, e =>
+                string.Equals(e.Category, "step", StringComparison.OrdinalIgnoreCase) &&
+                e.Name.StartsWith("execute", StringComparison.Ordinal));
+
+            Assert.Contains(events, e =>
+                string.Equals(e.Category, "retention", StringComparison.OrdinalIgnoreCase));
+
+            var hasFinalize = events.Any(e =>
+            string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&
+            e.Name.StartsWith("TryFinalizeExecution", StringComparison.Ordinal));
+
+            _output.WriteLine($"Finalize trace present: {hasFinalize}");
+
+            // -------------------------------
+            // 🔥 RENDER CONSOLE
+            // -------------------------------
+            _output.WriteLine("");
+            _output.WriteLine("===== TRACE TIMELINE =====");
+
+            var start = events.Min(x => x.TimestampUtc);
+
+            foreach (var e in events)
+            {
+                var offset = (e.TimestampUtc - start).TotalMilliseconds;
+
+                var step = string.IsNullOrWhiteSpace(e.StepId)
+                    ? ""
+                    : $"[{e.StepId}]";
+
+                var extra = "";
+
+                if (string.Equals(e.Category, "retention", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (e.Tags.TryGetValue("skipped", out var skipped) && skipped is true)
+                    {
+                        extra = " (noop)";
+                    }
+                    else
+                    {
+                        var compact = e.Tags.TryGetValue("compactedCount", out var c) ? c : 0;
+                        var evict = e.Tags.TryGetValue("evictedCount", out var ev) ? ev : 0;
+                        var removed = e.Tags.TryGetValue("removedSteps", out var r) ? r : 0;
+
+                        extra = $" (compact={compact}, evict={evict}, removed={removed})";
+                    }
+                }
+
+                _output.WriteLine(
+                    $"[{offset,6:0} ms] {e.Category,-10} {e.Name,-30} {step}{extra}");
+            }
+
+            _output.WriteLine("==========================");
+        }
+
         private static async Task<AiDagExecutionEngineTestHost> CreateHost(
             AiPipelineDefinition pipeline)
         {
@@ -673,6 +863,33 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Metrics
             return new AiPipelineDefinition
             {
                 Name = $"metrics-pipeline-{Guid.NewGuid():N}",
+                Version = "1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps = steps
+            };
+        }
+
+        private static AiPipelineDefinition CreateLargePipeline(int stepCount)
+        {
+            var steps = Enumerable.Range(0, stepCount)
+                .Select(i => new AiPipelineStepDefinition
+                {
+                    Name = $"step-{i}",
+                    StepKey = "test.metrics",
+                    Order = i,
+                    DependsOn = i == 0
+                        ? new List<string>()
+                        : new List<string> { $"step-{i - 1}" }, // chain DAG
+                    Config = new Dictionary<string, object?>
+                    {
+                        ["size"] = 2048
+                    }
+                })
+                .ToList();
+
+            return new AiPipelineDefinition
+            {
+                Name = $"timeline-pipeline-{Guid.NewGuid():N}",
                 Version = "1",
                 ExecutionMode = AiExecutionMode.Dag,
                 Steps = steps

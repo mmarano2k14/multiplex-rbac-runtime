@@ -1,6 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.State;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Metrics;

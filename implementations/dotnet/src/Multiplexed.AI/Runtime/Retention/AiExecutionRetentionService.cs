@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Multiplexed.Abstractions.AI.Execution;
@@ -16,19 +17,24 @@ namespace Multiplexed.AI.Runtime.Retention
 {
     /// <summary>
     /// Applies execution state retention based on a selected policy.
-    ///
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
-    /// - Orchestrate compaction and eviction of steps.
-    /// - Ensure safe externalization of step data.
-    /// - Keep AiExecutionState bounded and efficient.
-    /// - Delegate trigger and per-step decision enrichment to the decision service.
+    /// - Orchestrates compaction and eviction of execution steps.
+    /// - Ensures safe persistence of step payloads before eviction.
+    /// - Keeps <see cref="AiExecutionState"/> bounded in memory.
     ///
-    /// IMPORTANT:
+    /// DESIGN PRINCIPLES:
+    /// - Policy is the source of truth for eviction.
+    /// - Decision service may enrich compaction only.
+    /// - Eviction must never be expanded after policy evaluation.
+    ///
+    /// SAFETY:
     /// - NEVER removes a step before payload persistence succeeds.
     /// - NEVER loses step existence metadata.
-    /// - Writes an external archived-step index before eviction.
-    /// - Returns only operations that were successfully applied.
-    /// </summary>
+    /// - ALWAYS writes archived index before eviction.
+    /// - ALWAYS returns only successfully applied operations.
+    /// </remarks>
     public sealed class AiExecutionRetentionService : IAiExecutionRetentionService
     {
         private readonly IAiExecutionRetentionPolicyResolver _resolver;
@@ -71,17 +77,8 @@ namespace Multiplexed.AI.Runtime.Retention
 
             if (!retentionDecision.ShouldRun)
             {
-                _metrics.RecordEvaluation(
-                    mode,
-                    totalStepsBefore,
-                    0,
-                    0);
-
-                _metrics.RecordCompleted(
-                    mode,
-                    totalStepsBefore,
-                    state.Steps.Count);
-
+                _metrics.RecordEvaluation(mode, totalStepsBefore, 0, 0);
+                _metrics.RecordCompleted(mode, totalStepsBefore, state.Steps.Count);
                 return AiExecutionRetentionApplyResult.Empty;
             }
 
@@ -89,14 +86,31 @@ namespace Multiplexed.AI.Runtime.Retention
             var plan = await policy.EvaluateAsync(state, cancellationToken)
                 .ConfigureAwait(false);
 
-            var stepsToCompact = new HashSet<string>(plan.StepsToCompact);
-            var stepsToEvict = new HashSet<string>(plan.StepsToEvict);
+            // 🔥 SOURCE OF TRUTH (IMPORTANT)
+            var policyEvictionSet = new HashSet<string>(
+                plan.StepsToEvict ?? Array.Empty<string>(),
+                StringComparer.Ordinal);
 
+            var stepsToEvict = new HashSet<string>(
+                policyEvictionSet,
+                StringComparer.Ordinal);
+
+            var stepsToCompact = new HashSet<string>(
+                plan.StepsToCompact ?? Array.Empty<string>(),
+                StringComparer.Ordinal);
+
+            // Decision enrichment (compaction only)
             _decisionService.EnrichPlan(
                 state,
                 stepsToCompact,
                 stepsToEvict,
                 retentionDecision.TriggerContext);
+
+            // Prevent enrichment from expanding eviction
+            stepsToEvict.IntersectWith(policyEvictionSet);
+
+            // Avoid compacting steps that will be evicted
+            stepsToCompact.ExceptWith(stepsToEvict);
 
             _metrics.RecordEvaluation(
                 mode,
@@ -106,24 +120,18 @@ namespace Multiplexed.AI.Runtime.Retention
 
             if (stepsToCompact.Count == 0 && stepsToEvict.Count == 0)
             {
-                _metrics.RecordCompleted(
-                    mode,
-                    totalStepsBefore,
-                    state.Steps.Count);
-
+                _metrics.RecordCompleted(mode, totalStepsBefore, state.Steps.Count);
                 return AiExecutionRetentionApplyResult.Empty;
             }
 
             var compactedSteps = new List<string>();
             var evictedSteps = new List<string>();
 
+            // ----------------------------
+            // COMPACTION
+            // ----------------------------
             foreach (var stepName in stepsToCompact)
             {
-                if (stepsToEvict.Contains(stepName))
-                {
-                    continue;
-                }
-
                 if (!state.Steps.TryGetValue(stepName, out var step))
                 {
                     continue;
@@ -143,6 +151,9 @@ namespace Multiplexed.AI.Runtime.Retention
                 _metrics.RecordCompacted(stepName);
             }
 
+            // ----------------------------
+            // EVICTION
+            // ----------------------------
             foreach (var stepName in stepsToEvict)
             {
                 if (!state.Steps.TryGetValue(stepName, out var step))

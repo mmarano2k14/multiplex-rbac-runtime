@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Normalization;
@@ -1238,6 +1239,41 @@ namespace Multiplexed.AI.Stores.Cache
                 throw new InvalidOperationException(
                     $"Distributed DAG restore transaction failed for execution '{record.ExecutionId}'.");
             }
+        }
+
+        /// <summary>
+        /// Deletes one hot DAG step from Redis and removes it from the execution step index.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Used by retention after a step has been safely archived externally.
+        /// - Prevents evicted steps from being rehydrated back into hot state by <see cref="GetStateAsync"/>.
+        ///
+        /// IMPORTANT:
+        /// - This method does not delete archived payloads.
+        /// - This method only removes the hot Redis step key and its index entry.
+        /// - It is idempotent and safe to call multiple times.
+        /// </remarks>
+        public async Task DeleteStepAsync(
+            string executionId,
+            string stepName,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+            {
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+            }
+
+            if (string.IsNullOrWhiteSpace(stepName))
+            {
+                throw new ArgumentException("Step name cannot be null or empty.", nameof(stepName));
+            }
+
+            var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
+
+            await _database.KeyDeleteAsync(stepKey);
+            await _database.SetRemoveAsync(stepIndexKey, stepName);
         }
 
         // ---------------------------------------------------------------------

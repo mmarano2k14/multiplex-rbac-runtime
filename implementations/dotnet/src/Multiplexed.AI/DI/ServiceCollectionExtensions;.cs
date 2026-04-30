@@ -17,9 +17,16 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Resolvers;
+using Multiplexed.Abstractions.AI.Metrics.Retention;
+using Multiplexed.Abstractions.AI.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Configuration;
@@ -47,6 +54,7 @@ using Multiplexed.AI.Runtime.Metrics.HotState;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
+using Multiplexed.AI.Runtime.Observability;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Retry;
@@ -55,6 +63,7 @@ using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Runtime.Retention.Triggers;
+using Multiplexed.AI.Runtime.Tracing;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -466,11 +475,38 @@ namespace Multiplexed.AI.DI
             services.AddScoped<IAiRagRetrievalLogger, AiRagRetrievalLogger>();
             services.AddScoped<IAiRagLogger, AiRagLogger>();
 
+
             // ------------------------------------------------------------
-            // Metrics
+            // Tracing
             // ------------------------------------------------------------
 
             services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
+            services.AddSingleton<IAiTraceTimeline, InMemoryAiTraceTimeline>();
+
+            // Recorder 
+            services.AddSingleton<IAiTraceRecorder>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                var timeline = sp.GetRequiredService<IAiTraceTimeline>();
+
+                return options.Observability.EnableInMemoryRecording
+                    ? new InMemoryAiTraceRecorder(timeline)
+                    : new NoOpAiTraceRecorder();
+            });
+
+            // Tracer 
+            services.AddSingleton<IAiRuntimeTracer>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                var recorder = sp.GetRequiredService<IAiTraceRecorder>();
+
+                return options.Observability.EnableTracing
+                    ? new InMemoryAiRuntimeTracer(recorder)
+                    : new NoOpAiRuntimeTracer();
+            });
+
+            // Facade observability
+            services.AddScoped<IAiRuntimeObservability, AiRuntimeObservability>();
 
             // ------------------------------------------------------------
             // Context helpers

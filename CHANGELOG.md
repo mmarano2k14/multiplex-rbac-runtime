@@ -6,6 +6,44 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.3.7] - 2026-05-01 - Tracing
+
+### Added
+
+- Added runtime observability tracing facade.
+- Added trace scopes, trace records, trace recorder, and trace timeline projection.
+- Added in-memory and no-op tracing implementations.
+- Added normalized trace categories:
+  - `dag-store`
+  - `step`
+  - `retention`
+  - `resolver`
+  - `execution`
+- Added retention trace metadata for:
+  - compacted steps
+  - evicted steps
+  - removed hot-state steps
+  - resolver warmup
+  - retention duration
+- Added integration timeline rendering tests for DAG execution and retention behavior.
+
+### Fixed
+
+- Fixed evicted steps being reintroduced into hot execution state during convergence evaluation.
+- Made archive-aware convergence evaluation read-only.
+- Removed unintended hot-state mutation from convergence evaluation.
+- Stabilized retention behavior after eviction in distributed DAG execution.
+- Fixed finalization compatibility with retention-enabled executions.
+
+### Improved
+
+- Improved runtime observability wiring through DI and engine options.
+- Improved tracing coverage for DAG store operations, step execution, retention, and finalization.
+- Improved XML documentation for convergence and observability components.
+- Strengthened separation between read-path evaluation and write-path state mutation.
+
+---
+
 ## [1.0.3.6] - 2026-04-29 - Full runtime metrics coverage and integration validation
 
 ### ✨ Added

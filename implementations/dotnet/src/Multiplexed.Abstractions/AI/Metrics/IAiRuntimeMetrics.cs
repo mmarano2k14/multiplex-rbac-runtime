@@ -1,10 +1,10 @@
-﻿using Multiplexed.AI.Runtime.Metrics.Execution;
+﻿using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Resolvers;
+using Multiplexed.Abstractions.AI.Metrics.Retention;
+using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.HotState;
-using Multiplexed.AI.Runtime.Metrics.Resolvers;
-using Multiplexed.AI.Runtime.Metrics.Retention;
-using Multiplexed.AI.Runtime.Metrics.Storage;
 
-namespace Multiplexed.AI.Runtime.Metrics
+namespace Multiplexed.Abstractions.AI.Metrics
 {
     /// <summary>
     /// Central facade for all AI runtime metrics.

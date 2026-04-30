@@ -52,10 +52,14 @@ namespace Multiplexed.AI.Runtime.Retention.Policies
             // that is Ready, Running, WaitingForRetry or None.
             // Removing that parent from the hot state can make DAG dependency
             // resolution wait forever, causing retention-related execution loops.
-            var protectedStepNames = state.Steps.Values
-                .Where(step => !IsTerminal(step))
-                .SelectMany(step => step.DependsOn ?? Enumerable.Empty<string>())
-                .ToHashSet(StringComparer.Ordinal);
+            var hasNonTerminalSteps = state.Steps.Values.Any(step => !IsTerminal(step));
+
+            var protectedStepNames = hasNonTerminalSteps
+                ? state.Steps.Values
+                    .Where(step => !IsTerminal(step))
+                    .SelectMany(step => step.DependsOn ?? Enumerable.Empty<string>())
+                    .ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
 
             var stepsToEvict = state.Steps
                 .Where(kvp => IsTerminal(kvp.Value))
@@ -65,6 +69,15 @@ namespace Multiplexed.AI.Runtime.Retention.Policies
                 .Take(overflow)
                 .Select(kvp => kvp.Key)
                 .ToArray();
+
+
+            var terminalCount = state.Steps.Values.Count(IsTerminal);
+            var nonTerminalCount = state.Steps.Values.Count(x => !IsTerminal(x));
+            var protectedCount = protectedStepNames.Count;
+            var selectedCount = stepsToEvict.Length;
+
+            Console.WriteLine(
+    $"RETENTION DEBUG: state={state.Steps.Count}, max={maxInlineSteps}, overflow={overflow}, terminal={terminalCount}, nonTerminal={nonTerminalCount}, protected={protectedCount}, selected={selectedCount}");
 
             return new ValueTask<AiExecutionRetentionPlan>(
                 new AiExecutionRetentionPlan

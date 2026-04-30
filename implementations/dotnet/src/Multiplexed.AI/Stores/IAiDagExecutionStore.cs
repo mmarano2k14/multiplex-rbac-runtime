@@ -152,5 +152,16 @@ namespace Multiplexed.AI.Stores
             AiExecutionRecord record,
             AiExecutionState state,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes one hot DAG step from the distributed step store and removes it from the execution step index.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="stepName">The step name to remove from hot distributed state.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        Task DeleteStepAsync(
+            string executionId,
+            string stepName,
+            CancellationToken cancellationToken = default);
     }
 }

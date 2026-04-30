@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.AI.Runtime.Metrics.Retention
+﻿namespace Multiplexed.Abstractions.AI.Metrics.Retention
 {
     /// <summary>
     /// Records metrics for the retention decision phase.

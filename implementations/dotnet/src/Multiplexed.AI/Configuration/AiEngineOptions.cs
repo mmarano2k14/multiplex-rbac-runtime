@@ -57,15 +57,28 @@ namespace Multiplexed.AI.Configuration
         /// </summary>
         public AiPayloadStoreOptions PayloadStore { get; set; } = new();
 
-        
         /// <summary>
         /// Gets or sets execution state retention options.
         /// </summary>
         public AiExecutionStateRetentionOptions StateRetention { get; set; } = new();
 
-        // <summary>
+        /// <summary>
         /// Gets or sets execution retention trigger options.
         /// </summary>
         public AiExecutionRetentionTriggerOptions RetentionTrigger { get; set; } = new();
+
+        /// <summary>
+        /// Gets or sets observability-related runtime options.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Controls tracing, metrics, and recording behavior across the runtime.
+        /// - Allows switching observability implementations without impacting the engine.
+        ///
+        /// IMPORTANT:
+        /// - Disabling observability must never affect execution correctness.
+        /// - Observability remains fully optional and non-blocking.
+        /// </remarks>
+        public AiObservabilityOptions Observability { get; set; } = new();
     }
 }

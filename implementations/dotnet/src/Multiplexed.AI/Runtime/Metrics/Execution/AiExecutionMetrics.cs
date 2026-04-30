@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
+using Multiplexed.Abstractions.AI.Metrics.Execution;
 
 namespace Multiplexed.AI.Runtime.Metrics.Execution
 {

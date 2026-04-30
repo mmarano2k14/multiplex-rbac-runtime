@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Multiplexed.AI.Runtime.Metrics.Storage
+namespace Multiplexed.Abstractions.AI.Metrics.Storage
 {
     /// <summary>
     /// Records metrics for AI runtime storage operations.

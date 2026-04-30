@@ -6,31 +6,35 @@ using Multiplexed.AI.Runtime.Pipeline;
 namespace Multiplexed.AI.Runtime.Execution.Convergence
 {
     /// <summary>
-    /// Evaluates the global lifecycle convergence of a DAG execution
-    /// from the resolved pipeline topology and the current durable step state.
-    ///
-    /// DESIGN PRINCIPLES:
-    /// - Deterministic evaluation: identical inputs produce identical output.
-    /// - Step state is the single source of truth.
-    /// - Global execution status is a projection, not stored truth.
-    /// - No implicit terminal states are inferred too early.
-    /// - Convergence remains conservative under distributed uncertainty.
+    /// Evaluates the global convergence status of a DAG execution.
+    /// </summary>
+    /// <remarks>
+    /// PURPOSE:
+    /// - Project a global <see cref="AiExecutionStatus"/> from the resolved DAG topology.
+    /// - Preserve deterministic convergence across distributed workers.
+    /// - Support both hot-state-only evaluation and archive-aware evaluation after retention.
     ///
     /// IMPORTANT:
-    /// - This evaluator does not mutate execution state directly.
-    /// - Missing hot step states are initialized through IAiExecutionStateWriter.
-    /// - Archived / evicted step states can be resolved through IAiExecutionStepResolver.
-    /// - This keeps AiExecutionState as hot state while preserving correctness after retention.
-    /// </summary>
+    /// - The evaluator must not mutate hot execution state in archive-aware mode.
+    /// - The step state remains the source of truth.
+    /// - The execution record is only a projection of the evaluated step states.
+    /// - Evicted / archived steps must be resolved through <see cref="IAiExecutionStepResolver"/>.
+    /// </remarks>
     public static class AiDagExecutionConvergenceEvaluator
     {
         /// <summary>
-        /// Evaluates convergence using hot state only.
-        ///
-        /// IMPORTANT:
-        /// - This method is kept for backward compatibility.
-        /// - Once eviction is enabled, prefer EvaluateAsync with IAiExecutionStepResolver.
+        /// Evaluates convergence using the current hot execution state only.
         /// </summary>
+        /// <remarks>
+        /// This method may initialize missing hot step states through
+        /// <see cref="IAiExecutionStateWriter"/> and is kept for compatibility with
+        /// non-eviction or local execution paths.
+        /// </remarks>
+        /// <param name="pipeline">The resolved pipeline topology.</param>
+        /// <param name="state">The current execution state.</param>
+        /// <param name="stateWriter">The state writer used to initialize missing hot steps.</param>
+        /// <param name="utcNow">The UTC timestamp used for lease and retry evaluation.</param>
+        /// <returns>The evaluated convergence result.</returns>
         public static AiDagExecutionConvergenceResult Evaluate(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
@@ -50,27 +54,33 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 .ToList();
 
             return EvaluateResolvedStepStates(
-                pipeline,
-                state,
-                stateWriter,
                 resolvedSteps,
                 stepStates,
                 utcNow);
         }
 
         /// <summary>
-        /// Evaluates convergence using hot state plus archived / evicted step payloads.
-        ///
+        /// Evaluates convergence using hot state plus archived / evicted step state.
+        /// </summary>
+        /// <remarks>
         /// PURPOSE:
         /// - Preserve convergence correctness after retention eviction.
-        /// - Resolve evicted completed / failed steps from the external step index.
-        /// - Keep all existing retry, lease, recovery, and pending-work rules unchanged.
+        /// - Resolve evicted steps from the external archived-step store.
+        /// - Avoid reintroducing evicted steps into the hot state.
         ///
         /// IMPORTANT:
-        /// - This method must not simplify convergence rules.
-        /// - It only changes how step states are loaded.
-        /// - Missing steps are still initialized through the state writer.
-        /// </summary>
+        /// - This method is read-only with respect to <paramref name="state"/>.
+        /// - Missing unresolved steps are represented as transient <see cref="AiStepExecutionStatus.None"/>
+        ///   states for evaluation only.
+        /// - It must not call methods that create or write hot step entries.
+        /// </remarks>
+        /// <param name="pipeline">The resolved pipeline topology.</param>
+        /// <param name="state">The current hot execution state.</param>
+        /// <param name="stateWriter">The state writer, retained for API compatibility.</param>
+        /// <param name="stepResolver">The resolver used to load hot or archived step state.</param>
+        /// <param name="utcNow">The UTC timestamp used for lease and retry evaluation.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The evaluated convergence result.</returns>
         public static async Task<AiDagExecutionConvergenceResult> EvaluateAsync(
             ResolvedAiPipeline pipeline,
             AiExecutionState state,
@@ -99,32 +109,37 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                step ??= stateWriter.GetOrCreateStep(state, resolvedStep.Name);
+                if (step is null)
+                {
+                    step = new AiStepState
+                    {
+                        StepName = resolvedStep.Name,
+                        Status = AiStepExecutionStatus.None,
+                        DependsOn = resolvedStep.DependsOn?.ToList() ?? new List<string>()
+                    };
+                }
 
                 stepStates.Add(step);
             }
 
             return EvaluateResolvedStepStates(
-                pipeline,
-                state,
-                stateWriter,
                 resolvedSteps,
                 stepStates,
                 utcNow);
         }
 
         /// <summary>
-        /// Evaluates convergence from already resolved step states.
-        ///
-        /// PURPOSE:
-        /// - Keeps the original convergence algorithm in one place.
-        /// - Allows both hot-state and resolver-aware paths to share identical logic.
-        /// - Prevents accidental loss of retry / lease / recovery behavior.
+        /// Evaluates convergence from a fully resolved step-state view.
         /// </summary>
+        /// <remarks>
+        /// This method is intentionally read-only. It must evaluate the supplied step states
+        /// without querying storage, mutating hot state, or creating missing step entries.
+        /// </remarks>
+        /// <param name="resolvedSteps">The resolved DAG steps in deterministic order.</param>
+        /// <param name="stepStates">The resolved step states corresponding to the DAG topology.</param>
+        /// <param name="utcNow">The UTC timestamp used for lease and retry evaluation.</param>
+        /// <returns>The evaluated convergence result.</returns>
         private static AiDagExecutionConvergenceResult EvaluateResolvedStepStates(
-            ResolvedAiPipeline pipeline,
-            AiExecutionState state,
-            IAiExecutionStateWriter stateWriter,
             IReadOnlyList<ResolvedAiPipelineStep> resolvedSteps,
             IReadOnlyList<AiStepState> stepStates,
             DateTime utcNow)
@@ -138,20 +153,43 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 x => x.StepName,
                 StringComparer.Ordinal);
 
-            var readySteps = AiPipelineDagStepSelector.SelectReadySteps(
-                pipeline,
-                state,
-                stateWriter,
-                utcNow);
-
             var allCompleted = stepStates.All(x => x.IsCompleted);
 
-            var hasRunnableNow =
-                readySteps.Count > 0 ||
-                stepStates.Any(step =>
-                    step.Status == AiStepExecutionStatus.WaitingForRetry &&
-                    step.NextRetryAtUtc.HasValue &&
-                    step.NextRetryAtUtc.Value <= utcNow);
+            var hasReadyStep = resolvedSteps.Any(resolvedStep =>
+            {
+                if (!stepStateByName.TryGetValue(resolvedStep.Name, out var step))
+                {
+                    return false;
+                }
+
+                if (step.Status != AiStepExecutionStatus.Ready &&
+                    step.Status != AiStepExecutionStatus.None)
+                {
+                    return false;
+                }
+
+                foreach (var dependencyName in resolvedStep.DependsOn)
+                {
+                    if (!stepStateByName.TryGetValue(dependencyName, out var dependencyStep))
+                    {
+                        return false;
+                    }
+
+                    if (!dependencyStep.IsCompleted)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            var hasRetryReadyStep = stepStates.Any(step =>
+                step.Status == AiStepExecutionStatus.WaitingForRetry &&
+                step.NextRetryAtUtc.HasValue &&
+                step.NextRetryAtUtc.Value <= utcNow);
+
+            var hasRunnableNow = hasReadyStep || hasRetryReadyStep;
 
             var hasValidRunningLease = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.Running &&
@@ -168,7 +206,10 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
 
             var hasRecoverablePendingWork = resolvedSteps.Any(resolvedStep =>
             {
-                var step = stepStateByName[resolvedStep.Name];
+                if (!stepStateByName.TryGetValue(resolvedStep.Name, out var step))
+                {
+                    return false;
+                }
 
                 if (step.Status != AiStepExecutionStatus.None)
                 {
@@ -211,6 +252,9 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
             return AiDagExecutionConvergenceResult.Waiting();
         }
 
+        /// <summary>
+        /// Determines whether a running step still has a valid distributed lease.
+        /// </summary>
         private static bool HasValidLease(AiStepState step, DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(step);
@@ -220,6 +264,9 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 && step.LeaseExpiresAtUtc.Value > utcNow;
         }
 
+        /// <summary>
+        /// Determines whether a running step has an expired distributed lease.
+        /// </summary>
         private static bool IsExpiredLease(AiStepState step, DateTime utcNow)
         {
             ArgumentNullException.ThrowIfNull(step);
@@ -229,6 +276,13 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
                 && step.LeaseExpiresAtUtc.Value <= utcNow;
         }
 
+        /// <summary>
+        /// Determines whether an uninitialized step may still become runnable later.
+        /// </summary>
+        /// <remarks>
+        /// This is used to keep convergence conservative when a step is still in
+        /// <see cref="AiStepExecutionStatus.None"/> and its dependencies may still progress.
+        /// </remarks>
         private static bool CanStillBecomeRunnableLater(
             ResolvedAiPipelineStep resolvedStep,
             IReadOnlyDictionary<string, AiStepState> stepStateByName,

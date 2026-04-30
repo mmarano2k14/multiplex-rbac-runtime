@@ -52,6 +52,7 @@ using Multiplexed.Rbac.Core.Stores.Memory;
 using StackExchange.Redis;
 using System.Text.Json;
 using Xunit;
+using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
 using static Multiplexed.AI.Tests.Integration.Runtime.Execution.AiDagExecutionEngineTests;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -504,7 +505,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stepExecutor);
 
             var cleanupService = new NoOpAiExecutionCleanupService();
-            var metrics = MetricsFactory.Create();
+            var metrics = ObservabilityFactory.Create();
 
             var aiOptions = new AiEngineOptions
             {

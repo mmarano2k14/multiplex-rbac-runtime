@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Documents;
 using Multiplexed.AI.Runtime.Metrics;
 

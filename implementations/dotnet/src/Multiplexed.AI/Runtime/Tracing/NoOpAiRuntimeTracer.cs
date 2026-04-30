@@ -7,9 +7,15 @@ namespace Multiplexed.AI.Runtime.Tracing
     /// No-operation implementation of <see cref="IAiRuntimeTracer"/>.
     /// </summary>
     /// <remarks>
-    /// This implementation is used when tracing is not explicitly configured.
-    /// It allows the runtime to emit tracing scopes without requiring any external
-    /// tracing dependency or exporter.
+    /// PURPOSE:
+    /// - Provides a safe default tracing implementation.
+    /// - Allows runtime code to create trace scopes without requiring OpenTelemetry.
+    /// - Keeps tests and minimal configurations stable.
+    ///
+    /// IMPORTANT:
+    /// - This implementation does not allocate per scope.
+    /// - It does not record tags, errors, or success state.
+    /// - It is intended as the default fallback implementation.
     /// </remarks>
     public sealed class NoOpAiRuntimeTracer : IAiRuntimeTracer
     {

@@ -8,6 +8,7 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -239,9 +240,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             Logger.Engine.ExecutionCreated(record);
 
-            _engineServices.Metrics.Execution.RecordExecutionStarted(record.ExecutionId);
+            _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionStarted(record.ExecutionId);
 
-            Logger.Engine.LogInformation(
+
+          
+           Logger.Engine.LogInformation(
                 $"[AI DAG] Execution created. ExecutionId='{record.ExecutionId}', Pipeline='{record.PipelineName}', Mode='{record.ExecutionMode}', StepCount='{preparedPipeline.Steps.Count}', ContextKey='{record.ContextKey}'.");
 
             return record;
@@ -264,30 +267,42 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             string executionId,
             CancellationToken cancellationToken = default)
         {
-            AiExecutionRecord record;
-
-            do
-            {
-                record = await ExecuteNextAsync(executionId, cancellationToken);
-
-                // In DAG mode, Waiting means:
-                // - no runnable work exists right now
-                // - execution is not terminal
-                // - no further local progress can currently be made in this loop
-                if (record.Status == AiExecutionStatus.Waiting)
+            return await _engineServices.ObservabilityService.Tracer.TraceExecutionAsync(
+                new AiExecutionTraceContext
                 {
+                    ExecutionId = executionId,
+                    ExecutionMode = "Dag",
+                    Status = "Running",
+                    WorkerId = Environment.MachineName
+                },
+                async () =>
+                {
+                    AiExecutionRecord record;
+
+                    do
+                    {
+                        record = await ExecuteNextAsync(executionId, cancellationToken);
+
+                        // In DAG mode, Waiting means:
+                        // - no runnable work exists right now
+                        // - execution is not terminal
+                        // - no further local progress can currently be made in this loop
+                        if (record.Status == AiExecutionStatus.Waiting)
+                        {
+                            Logger.Engine.LogInformation(
+                                $"[AI DAG] ExecuteAll stopped in Waiting. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
+
+                            return record;
+                        }
+
+                    }
+                    while (!record.IsTerminal);
+
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] ExecuteAll stopped in Waiting. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
+                        $"[AI DAG] ExecuteAll reached terminal state. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
 
                     return record;
-                }
-            }
-            while (!record.IsTerminal);
-
-            Logger.Engine.LogInformation(
-                $"[AI DAG] ExecuteAll reached terminal state. ExecutionId='{record.ExecutionId}', Status='{record.Status}'.");
-
-            return record;
+                });
         }
 
         // ---------------------------------------------------------------------
@@ -403,7 +418,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
-                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -431,13 +446,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 try
                 {
-                    stepResult = await nextStep.Step.ExecuteAsync(
-                        stepContext,
-                        cancellationToken);
+                    stepResult =
+                     await _engineServices.ObservabilityService.Tracer.TraceStepAsync(
+                         new AiStepTraceContext
+                         {
+                             ExecutionId = executionId,
+                             StepId = nextStep.Name,
+                             StepType = nextStep.Step.GetType().Name,
+                             Status = "Running",
+                             RetryCount = stepState.RetryCount,
+                             RecoveryCount = stepState.RecoveryCount,
+                             WorkerId = Environment.MachineName,
+                             ClaimToken = stepState.ClaimToken
+                         },
+                         async () =>
+                         {
+                             var result = await nextStep.Step.ExecuteAsync(
+                                 stepContext,
+                                 cancellationToken);
 
-                    await _engineServices.PayloadCompactor.CompactAsync(
-                        stepResult,
-                        cancellationToken);
+                             await _engineServices.PayloadCompactor.CompactAsync(
+                                 result,
+                                 cancellationToken);
+
+                             return result;
+                         });
                 }
                 catch (Exception ex)
                 {
@@ -448,7 +481,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -457,7 +490,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                             stepState.NextRetryAtUtc);
                     }
 
-                    _engineServices.Metrics.Execution.RecordStepFailed(
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
                         executionId,
                         nextStep.Name);
 
@@ -502,7 +535,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
-                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -518,7 +551,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepRetried(executionId, nextStep.Name);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -527,7 +560,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                             stepState.NextRetryAtUtc);
                     }
 
-                    _engineServices.Metrics.Execution.RecordStepFailed(
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
                         executionId,
                         nextStep.Name);
 
@@ -543,7 +576,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 {
                     stepState.MarkCompleted(stepResult);
 
-                    _engineServices.Metrics.Execution.RecordStepCompleted(
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepCompleted(
                         executionId,
                         nextStep.Name);
 
@@ -589,7 +622,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
-                    _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                     await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
@@ -665,7 +698,26 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 cancellationToken);
 
             // Best-effort timeout recovery before any new distributed claim attempt.
-            var recoveredCount = await _engineServices.DagStore.RecoverTimedOutStepsAsync(executionId, cancellationToken);
+            var recoveredCount =
+                await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                    new AiStorageTraceContext
+                    {
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "RecoverTimedOutSteps"
+                    },
+                    async trace =>
+                    {
+                        var result = await _engineServices.DagStore.RecoverTimedOutStepsAsync(
+                            executionId,
+                            cancellationToken);
+
+                        trace.SetTag("recoveredCount", result);
+                        trace.SetTag("workerId", Environment.MachineName);
+                        trace.SetTag("recovered", result > 0);
+
+                        return result;
+                    });
 
             if (recoveredCount > 0)
             {
@@ -675,10 +727,32 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
             }
 
-            var claimed = await _engineServices.DagStore.TryClaimNextReadyStepAsync(
-                executionId,
-                workerId: Environment.MachineName,
-                cancellationToken: cancellationToken);
+            var claimed =
+                await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                    new AiStorageTraceContext
+                    {
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "TryClaimNextReadyStep"
+                    },
+                    async trace =>
+                    {
+                        var result = await _engineServices.DagStore.TryClaimNextReadyStepAsync(
+                            executionId,
+                            workerId: Environment.MachineName,
+                            cancellationToken: cancellationToken);
+
+                        trace.SetTag("claimAcquired", result is not null);
+                        trace.SetTag("workerId", Environment.MachineName);
+
+                        if (result is not null)
+                        {
+                            trace.SetTag("stepId", result.StepName);
+                            trace.SetTag("claimToken", result.ClaimToken);
+                        }
+
+                        return result;
+                    });
 
             if (claimed is not null)
             {
@@ -754,7 +828,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
-                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, state, cancellationToken);
                         await TryCleanupIfNeededAsync(record, cancellationToken);
                     }
@@ -784,27 +858,64 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 try
                 {
-                    stepResult = await claimedStep.Step.ExecuteAsync(
+                    stepResult =
+                        await _engineServices.ObservabilityService.Tracer.TraceStepAsync(
+                            new AiStepTraceContext
+                            {
+                                ExecutionId = executionId,
+                                StepId = claimed.StepName,
+                                StepType = claimedStep.Step.GetType().Name,
+                                Status = "Running",
+                                WorkerId = Environment.MachineName,
+                                ClaimToken = claimed.ClaimToken
+                            },
+                            async () =>
+                            {
+                                var result = await claimedStep.Step.ExecuteAsync(
                                     stepContext,
                                     cancellationToken);
 
-                    await _engineServices.PayloadCompactor.CompactAsync(
-                        stepResult,
-                        cancellationToken);
+                                await _engineServices.PayloadCompactor.CompactAsync(
+                                    result,
+                                    cancellationToken);
+
+                                return result;
+                            });
                 }
                 catch (Exception ex)
                 {
                     // Distributed failure path:
                     // step failure is persisted through the DAG store so ownership checks
                     // and retry scheduling remain atomic and multi-worker safe.
-                    await _engineServices.DagStore.TryFailStepAsync(
-                        executionId,
-                        claimed.StepName,
-                        claimed.ClaimToken,
-                        ex.Message,
-                        cancellationToken);
 
-                    _engineServices.Metrics.Execution.RecordStepFailed(
+                    await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                        new AiStorageTraceContext
+                        {
+                            ExecutionId = executionId,
+                            StepId = claimed.StepName,
+                            Backend = "Redis",
+                            Operation = "TryFailStepException"
+                        },
+                        async trace =>
+                        {
+                            var result = await _engineServices.DagStore.TryFailStepAsync(
+                                executionId,
+                                claimed.StepName,
+                                claimed.ClaimToken,
+                                ex.Message,
+                                cancellationToken);
+
+                            trace.SetTag("failed", result);
+                            trace.SetTag("workerId", Environment.MachineName);
+                            trace.SetTag("claimToken", claimed.ClaimToken);
+                            trace.SetTag("errorType", ex.GetType().FullName);
+
+                            return result;
+                        });
+
+
+
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
                         executionId,
                         claimed.StepName);
 
@@ -826,7 +937,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -871,7 +982,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     if (record.IsTerminal)
                     {
                         Logger.Engine.ExecutionCompleted(record);
-                        _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                         await TryPersistTerminalSnapshotAsync(record, failedState, cancellationToken);
                     }
 
@@ -885,16 +996,34 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Distributed unsuccessful result:
                     // use the DAG store so retry scheduling and ownership validation
                     // remain centralized and atomic.
-                    await _engineServices.DagStore.TryFailStepAsync(
-                        executionId,
-                        claimed.StepName,
-                        claimed.ClaimToken,
-                        stepResult.Error,
-                        cancellationToken);
+                    await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                        new AiStorageTraceContext
+                        {
+                            ExecutionId = executionId,
+                            StepId = claimed.StepName,
+                            Backend = "Redis",
+                            Operation = "TryFailStepResult"
+                        },
+                        async trace =>
+                        {
+                            var result = await _engineServices.DagStore.TryFailStepAsync(
+                                executionId,
+                                claimed.StepName,
+                                claimed.ClaimToken,
+                                stepResult.Error,
+                                cancellationToken);
+
+                            trace.SetTag("failed", result);
+                            trace.SetTag("workerId", Environment.MachineName);
+                            trace.SetTag("claimToken", claimed.ClaimToken);
+                            trace.SetTag("error", stepResult.Error);
+
+                            return result;
+                        });
 
 
                     // Record the failure in metrics regardless of retry policy outcome.
-                    _engineServices.Metrics.Execution.RecordStepFailed(
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
                         executionId,
                         claimed.StepName);
 
@@ -910,7 +1039,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                     if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
-                        _engineServices.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
+                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepRetried(executionId, claimed.StepName);
 
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
@@ -927,12 +1056,30 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 }
                 else
                 {
-                    var completed = await _engineServices.DagStore.TryCompleteStepAsync(
-                        executionId,
-                        claimed.StepName,
-                        claimed.ClaimToken,
-                        stepResult,
-                        cancellationToken);
+                    var completed =
+                        await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                            new AiStorageTraceContext
+                            {
+                                ExecutionId = executionId,
+                                StepId = claimed.StepName,
+                                Backend = "Redis",
+                                Operation = "TryCompleteStep"
+                            },
+                            async trace =>
+                            {
+                                var result = await _engineServices.DagStore.TryCompleteStepAsync(
+                                    executionId,
+                                    claimed.StepName,
+                                    claimed.ClaimToken,
+                                    stepResult,
+                                    cancellationToken);
+
+                                trace.SetTag("completed", result);
+                                trace.SetTag("workerId", Environment.MachineName);
+                                trace.SetTag("claimToken", claimed.ClaimToken);
+
+                                return result;
+                            });
 
                     if (!completed)
                     {
@@ -944,7 +1091,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         record,
                         claimed.StepName);
 
-                    _engineServices.Metrics.Execution.RecordStepCompleted(
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordStepCompleted(
                         executionId,
                         claimed.StepName);
 
@@ -991,7 +1138,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 if (record.Status == AiExecutionStatus.Failed)
                 {
-                    _engineServices.Metrics.Execution.RecordExecutionFailed(record.ExecutionId);
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionFailed(record.ExecutionId);
                 }
 
                 var expectedStepKeyFinal = record.ExecutionStepKey;
@@ -1012,7 +1159,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 if (record.IsTerminal)
                 {
                     Logger.Engine.ExecutionCompleted(record);
-                    _engineServices.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
+                    _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
                     await TryPersistTerminalSnapshotAsync(record, finalState, cancellationToken);
                     await TryCleanupIfNeededAsync(record, cancellationToken);
                 }
@@ -1293,12 +1440,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
                 return;
             }
-
+            /*
             var completedSteps = state.Steps.Values
                 .Where(x => x.IsCompleted)
                 .Select(x => x.StepName)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
+            */
+
+            var completedSteps = record.CompletedSteps
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
 
             // ---------------------------------------------------------------------
             // TERMINAL FINALIZATION (DISTRIBUTED)
@@ -1327,8 +1479,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             // FAILURE SCENARIO:
             // - If this worker loses the race, we MUST reload the authoritative record
             // ---------------------------------------------------------------------
-            if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
-            {
+            // if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
+            if (convergence.IsTerminal)
+                {
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
 
@@ -1337,7 +1490,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     record.ExecutionId,
                     state,
                     cancellationToken);
-          
+
 
                 var request = new AiDagExecutionFinalizationRequest
                 {
@@ -1350,9 +1503,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     WorkerId = Environment.MachineName
                 };
 
-                var success = await _engineServices.DagStore.TryFinalizeExecutionAsync(
-                    request,
-                    cancellationToken);
+                var success =
+                    await _engineServices.ObservabilityService.Tracer.TraceStorageAsync(
+                        new AiStorageTraceContext
+                        {
+                            ExecutionId = record.ExecutionId,
+                            Backend = "Redis",
+                            Operation = "TryFinalizeExecution"
+                        },
+                        async trace =>
+                        {
+                            var result = await _engineServices.DagStore.TryFinalizeExecutionAsync(
+                                request,
+                                cancellationToken);
+
+                            trace.SetTag("finalized", result);
+                            trace.SetTag("status", convergence.Status.ToString());
+                            trace.SetTag("workerId", Environment.MachineName);
+                            trace.SetTag("expectedStepKey", expectedStepKey);
+                            trace.SetTag("completedSteps", completedSteps.Count);
+
+                            return result;
+                        });
 
                 if (!success)
                 {
@@ -1459,7 +1631,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             }
             catch (Exception ex)
             {
-                _engineServices.Metrics.Retention.Execution.RecordRetentionFailed(
+                _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordRetentionFailed(
                     state.ExecutionId,
                     ex);
 
@@ -1539,155 +1711,161 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentNullException.ThrowIfNull(state);
 
-            _engineServices.Metrics.Retention.Trigger.RecordTriggered(
-                executionId,
-                "retention-invoked");
-
-            // 1) Apply retention
-            var result = await TryApplyStateRetentionAsync(
-                state,
-                cancellationToken).ConfigureAwait(false);
-
-            if (result == AiExecutionRetentionApplyResult.Empty)
-            {
-                _engineServices.Metrics.Retention.Trigger.RecordSkipped(
-                    executionId,
-                    "no-policy-or-no-op");
-            }
-            else
-            {
-                var totalSteps = state.Steps.Count;
-                var compactedCount = result.CompactedSteps?.Count ?? 0;
-                var evictedCount = result.EvictedSteps?.Count ?? 0;
-
-                // Decision
-                if (compactedCount > 0)
+            await _engineServices.ObservabilityService.Tracer.TraceRetentionAsync(
+                new AiRetentionTraceContext
                 {
-                    _engineServices.Metrics.Retention.Decision.RecordCompactionRequired(
-                        executionId,
-                        totalSteps,
-                        compactedCount);
-                }
-
-                if (evictedCount > 0)
+                    ExecutionId = executionId,
+                    PolicyName = _engineServices.AiOptions.Value.StateRetention.Mode.ToString(),
+                    InspectedSteps = state.Steps.Count
+                },
+                async trace =>
                 {
-                    _engineServices.Metrics.Retention.Decision.RecordEvictionRequired(
+                    var stepsBefore = state.Steps.Count;
+
+                    _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordTriggered(
                         executionId,
-                        totalSteps,
-                        evictedCount);
-                }
+                        "retention-invoked");
 
-                if (compactedCount == 0 && evictedCount == 0)
-                {
-                    _engineServices.Metrics.Retention.Decision.RecordNoActionRequired(
-                        executionId,
-                        totalSteps);
-                }
+                    var result = await TryApplyStateRetentionAsync(
+                        state,
+                        cancellationToken).ConfigureAwait(false);
 
-                // Plan
-                _engineServices.Metrics.Retention.Plan.RecordPlanCreated(
-                    executionId,
-                    compactedCount,
-                    evictedCount,
-                    totalSteps);
+                    var evictedSteps = result.EvictedSteps ?? Array.Empty<string>();
 
-                // Execution
-
-                // Evicted + archived
-                foreach (var stepId in result.EvictedSteps ?? Array.Empty<string>())
-                {
-                    _engineServices.Metrics.Retention.Execution.RecordStepEvicted(
-                        executionId,
-                        stepId);
-
-                    _engineServices.Metrics.Retention.Execution.RecordStepMarkedArchived(
-                        executionId,
-                        stepId);
-                }
-
-                // Compacted (payload)
-                if (result.CompactedSteps is not null)
-                {
-                    foreach (var stepId in result.CompactedSteps)
+                    foreach (var stepId in evictedSteps)
                     {
-                        _engineServices.Metrics.Retention.Execution.RecordPayloadCompacted(
-                            executionId,
-                            stepId,
-                            beforeBytes: 0,
-                            afterBytes: 0);
+                        state.Steps.Remove(stepId);
                     }
-                }
 
-                _engineServices.Metrics.Retention.Execution.RecordRetentionCompleted(
-                    executionId);
-            }
+                    if (result == AiExecutionRetentionApplyResult.Empty)
+                    {
+                        _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordSkipped(
+                            executionId,
+                            "no-policy-or-no-op");
 
-            // 2) Persist state (optional)
-            var dagStore = _engineServices.DagStore;
+                        trace.SetTag("skipped", true);
+                        trace.SetTag("reason", "no-policy-or-no-op");
+                    }
+                    else
+                    {
+                        var compactedCount = result.CompactedSteps?.Count ?? 0;
+                        var evictedCount = evictedSteps.Count;
 
-            if (dagStore is not null)
-            {
-                await dagStore.SaveStateAsync(
-                    executionId,
-                    state,
-                    cancellationToken).ConfigureAwait(false);
-            }
+                        trace.SetTag("skipped", false);
+                        trace.SetTag("compactedCount", compactedCount);
+                        trace.SetTag("evictedCount", evictedCount);
+                        trace.SetTag("totalSteps", state.Steps.Count);
 
-            // 3) Incremental warm (MANDATORY if eviction happened)
-            var evictedSteps = result.EvictedSteps;
+                        if (compactedCount > 0)
+                        {
+                            _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordCompactionRequired(
+                                executionId,
+                                state.Steps.Count,
+                                compactedCount);
+                        }
 
-            if (evictedSteps is { Count: > 0 })
-            {
-                await _engineServices.StepResolver.WarmStepsAsync(
-                    executionId,
-                    state,
-                    evictedSteps,
-                    cancellationToken).ConfigureAwait(false);
-            }
+                        if (evictedCount > 0)
+                        {
+                            _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordEvictionRequired(
+                                executionId,
+                                state.Steps.Count,
+                                evictedCount);
+                        }
+
+                        if (compactedCount == 0 && evictedCount == 0)
+                        {
+                            _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordNoActionRequired(
+                                executionId,
+                                state.Steps.Count);
+                        }
+
+                        _engineServices.ObservabilityService.Metrics.Retention.Plan.RecordPlanCreated(
+                            executionId,
+                            compactedCount,
+                            evictedCount,
+                            state.Steps.Count);
+
+                        foreach (var stepId in evictedSteps)
+                        {
+                            _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordStepEvicted(
+                                executionId,
+                                stepId);
+
+                            _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordStepMarkedArchived(
+                                executionId,
+                                stepId);
+                        }
+
+                        if (result.CompactedSteps is not null)
+                        {
+                            foreach (var stepId in result.CompactedSteps)
+                            {
+                                _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordPayloadCompacted(
+                                    executionId,
+                                    stepId,
+                                    beforeBytes: 0,
+                                    afterBytes: 0);
+                            }
+                        }
+
+                        _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordRetentionCompleted(
+                            executionId);
+                    }
+
+                    var dagStore = _engineServices.DagStore;
+
+                    if (dagStore is not null)
+                    {
+                        await dagStore.SaveStateAsync(
+                            executionId,
+                            state,
+                            cancellationToken).ConfigureAwait(false);
+
+                        trace.SetTag("statePersisted", true);
+                    }
+                    else
+                    {
+                        trace.SetTag("statePersisted", false);
+                    }
+
+                    if (evictedSteps.Count > 0)
+                    {
+                        await _engineServices.StepResolver.WarmStepsAsync(
+                            executionId,
+                            state,
+                            evictedSteps,
+                            cancellationToken).ConfigureAwait(false);
+
+                        trace.SetTag("resolverWarmed", true);
+                        trace.SetTag("resolverWarmStepCount", evictedSteps.Count);
+                    }
+                    else
+                    {
+                        trace.SetTag("resolverWarmed", false);
+                        trace.SetTag("resolverWarmStepCount", 0);
+                    }
+
+                    var stepsAfter = state.Steps.Count;
+
+                    trace.SetTag("stepsBefore", stepsBefore);
+                    trace.SetTag("stepsAfter", stepsAfter);
+                    trace.SetTag("removedSteps", stepsBefore - stepsAfter);
+                    trace.SetTag("workerId", Environment.MachineName);
+
+                    return true;
+                });
         }
 
         /// <summary>
-        /// Determines whether the execution can safely transition to a terminal state
-        /// (<see cref="AiExecutionStatus.Completed"/>, <see cref="AiExecutionStatus.Failed"/>,
-        /// or <see cref="AiExecutionStatus.Cancelled"/>)
-        /// based on the current distributed DAG step state.
-        ///
-        /// DESIGN:
-        /// - Acts as a safety barrier against premature finalization in distributed environments
-        /// - Ensures no active, retryable, ready, or ambiguous work remains before allowing termination
-        ///
-        /// RULES:
-        /// - Execution MUST NOT finalize if any step is:
-        ///   - <see cref="AiStepExecutionStatus.Running"/>
-        ///   - <see cref="AiStepExecutionStatus.WaitingForRetry"/>
-        ///   - <see cref="AiStepExecutionStatus.Ready"/>
-        ///   - <see cref="AiStepExecutionStatus.None"/>
-        ///
-        /// - Completed:
-        ///   - Allowed only if ALL steps are completed
-        ///
-        /// - Failed:
-        ///   - Allowed only if:
-        ///     - At least one step is Failed
-        ///     - AND all steps are either Failed or Completed
-        ///
-        /// - Cancelled:
-        ///   - Allowed only if no active, retryable, ready, or ambiguous work remains
-        ///
-        /// IMPORTANT:
-        /// This method protects against:
-        /// - race conditions across multiple workers
-        /// - delayed Redis state propagation
-        /// - evaluator misclassification under concurrency
-        ///
-        /// The DAG step state remains the source of truth.
-        /// This method only validates whether terminal projection is safe.
+        /// OBSOLETE:
+        /// - This method was used before retention/eviction was introduced.
+        /// - It only inspects hot state and is not compatible with archive-aware execution.
+        /// - Finalization must now rely on convergence evaluation.
         /// </summary>
-        /// <param name="state">The current execution state containing all step states.</param>
-        /// <param name="targetStatus">The target terminal status being evaluated.</param>
-        /// <returns>
-        /// <c>true</c> if the execution can safely finalize to the target status; otherwise, <c>false</c>.
-        /// </returns>
+        [Obsolete(
+        "CanFinalize is obsolete. Finalization is now driven by convergence evaluation (AiDagExecutionConvergenceEvaluator). " +
+        "This method is not archive-aware and should not be used in retention-enabled execution paths.",
+        false)]
         private static bool CanFinalize(
             AiExecutionState state,
             AiExecutionStatus targetStatus)

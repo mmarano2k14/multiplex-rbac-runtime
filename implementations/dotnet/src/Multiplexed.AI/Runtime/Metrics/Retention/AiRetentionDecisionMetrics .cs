@@ -1,4 +1,5 @@
-﻿using System.Threading;
+﻿using Multiplexed.Abstractions.AI.Metrics.Retention;
+using System.Threading;
 
 namespace Multiplexed.AI.Runtime.Metrics.Retention
 {

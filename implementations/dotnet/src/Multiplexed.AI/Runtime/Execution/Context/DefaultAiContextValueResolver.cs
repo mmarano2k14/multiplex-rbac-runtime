@@ -3,6 +3,8 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using System.Globalization;

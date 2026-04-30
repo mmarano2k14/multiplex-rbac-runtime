@@ -72,9 +72,10 @@ namespace Multiplexed.AI.Runtime.Execution
                     continue;
                 }
 
-                _indexCache.TryAdd(
-                    BuildCacheKey(executionId, entry.StepName),
-                    entry);
+                var cacheKey = BuildCacheKey(executionId, entry.StepName);
+
+                _indexCache[cacheKey] = entry;
+                _stepCache.TryRemove(cacheKey, out _);
             }
         }
 
@@ -93,7 +94,6 @@ namespace Multiplexed.AI.Runtime.Execution
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.Ordinal)
                 .Where(x => !state.Steps.ContainsKey(x))
-                .Where(x => !_indexCache.ContainsKey(BuildCacheKey(executionId, x)))
                 .ToArray();
 
             if (namesToWarm.Length == 0)
@@ -109,9 +109,10 @@ namespace Multiplexed.AI.Runtime.Execution
 
             foreach (var pair in entries)
             {
-                _indexCache.TryAdd(
-                    BuildCacheKey(executionId, pair.Key),
-                    pair.Value);
+                var cacheKey = BuildCacheKey(executionId, pair.Key);
+
+                _indexCache[cacheKey] = pair.Value;
+                _stepCache.TryRemove(cacheKey, out _);
             }
         }
 
@@ -126,9 +127,6 @@ namespace Multiplexed.AI.Runtime.Execution
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
             ArgumentNullException.ThrowIfNull(state);
 
-            // Hot state is authoritative for non-evicted steps.
-            // Do not cache hot steps because the current state object may mutate
-            // during the execution pass.
             if (state.Steps.TryGetValue(stepName, out var hotStep))
             {
                 return hotStep;
@@ -153,13 +151,13 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (archived is not null)
                 {
-                    _indexCache.TryAdd(cacheKey, archived);
+                    _indexCache[cacheKey] = archived;
                 }
             }
 
             if (archived is null)
             {
-                _stepCache.TryAdd(cacheKey, MissingStepMarker);
+                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 
@@ -172,11 +170,11 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (step is null)
             {
-                _stepCache.TryAdd(cacheKey, MissingStepMarker);
+                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 
-            _stepCache.TryAdd(cacheKey, step);
+            _stepCache[cacheKey] = step;
 
             return step;
         }
@@ -206,9 +204,9 @@ namespace Multiplexed.AI.Runtime.Execution
                     continue;
                 }
 
-                _indexCache.TryAdd(
-                    BuildCacheKey(executionId, entry.StepName),
-                    entry);
+                var cacheKey = BuildCacheKey(executionId, entry.StepName);
+
+                _indexCache[cacheKey] = entry;
 
                 var step = await GetStepAsync(
                         executionId,
@@ -229,7 +227,6 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <inheritdoc />
-
         public async Task<AiStepState?> GetStepStatusAsync(
             string executionId,
             string stepName,
@@ -264,13 +261,13 @@ namespace Multiplexed.AI.Runtime.Execution
 
                 if (archived is not null)
                 {
-                    _indexCache.TryAdd(cacheKey, archived);
+                    _indexCache[cacheKey] = archived;
                 }
             }
 
             if (archived is null)
             {
-                _stepCache.TryAdd(cacheKey, MissingStepMarker);
+                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 

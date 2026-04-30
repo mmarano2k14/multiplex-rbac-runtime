@@ -114,5 +114,10 @@ namespace Multiplexed.AI.Tests.Fakes
         {
             return Task.FromResult(true);
         }
+
+        public Task DeleteStepAsync(string executionId, string stepName, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 }

@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 
-namespace Multiplexed.AI.Runtime.Metrics.Execution
+namespace Multiplexed.Abstractions.AI.Metrics.Execution
 {
     /// <summary>
     /// Records metrics for AI execution lifecycle events.

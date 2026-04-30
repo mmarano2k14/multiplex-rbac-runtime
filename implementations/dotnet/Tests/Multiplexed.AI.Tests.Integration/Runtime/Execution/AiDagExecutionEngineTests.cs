@@ -46,6 +46,7 @@ using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
 using Xunit;
+using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
 using static Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures.AiDagExecutionEngineTestHost;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -138,7 +139,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var metrics = MetricsFactory.Create();
+            var metrics = ObservabilityFactory.Create();
 
             var payloadOptions = Options.Create(new AiPayloadStoreOptions
             {

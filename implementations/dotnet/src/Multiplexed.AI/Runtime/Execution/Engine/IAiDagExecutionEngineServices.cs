@@ -6,6 +6,8 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
@@ -82,7 +84,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// <summary>
         /// Gets runtime metrics collector.
         /// </summary>
-        IAiRuntimeMetrics Metrics { get; }
+        //IAiRuntimeMetrics Metrics { get; }
 
         /// <summary>
         /// Gets the step result payload compactor.
@@ -127,5 +129,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// Gets the execution retention service used to apply step compaction and eviction.
         /// </summary>
         IAiExecutionRetentionService RetentionService { get; }
+
+        /// <summary>
+        /// Gets the execution Runtime Observability service used to emit structured events about execution lifecycle and behavior.
+        /// </summary>
+        IAiRuntimeObservability ObservabilityService { get; }
     }
 }
