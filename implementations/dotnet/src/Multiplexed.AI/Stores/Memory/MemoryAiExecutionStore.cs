@@ -1,5 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.Execution;
 using System.Collections.Concurrent;
 
@@ -256,17 +258,62 @@ namespace Multiplexed.AI.Stores.Memory
             {
                 StepName = source.StepName,
                 Status = source.Status,
+                DependsOn = new List<string>(source.DependsOn),
+
+                ClaimedBy = source.ClaimedBy,
+                ClaimToken = source.ClaimToken,
+                ClaimedAtUtc = source.ClaimedAtUtc,
+                LeaseExpiresAtUtc = source.LeaseExpiresAtUtc,
+
+                StartedAtUtc = source.StartedAtUtc,
+                UpdatedAtUtc = source.UpdatedAtUtc,
+                CompletedAtUtc = source.CompletedAtUtc,
+                Duration = source.Duration,
+
                 Error = source.Error,
+
+                RetryCount = source.RetryCount,
+                RecoveryCount = source.RecoveryCount,
+                MaxRetries = source.MaxRetries,
+                NextRetryAtUtc = source.NextRetryAtUtc,
+                RetryDelayMs = source.RetryDelayMs,
+
+                Retry = source.Retry,
+                RetryState = source.RetryState is null
+                    ? null
+                    : new AiStepRetryState
+                    {
+                        RetryCount = source.RetryState.RetryCount,
+                        RetryReason = source.RetryState.RetryReason,
+                        LastRetryAtUtc = source.RetryState.LastRetryAtUtc,
+                        NextRetryAtUtc = source.RetryState.NextRetryAtUtc,
+                        LastRetryPolicyKey = source.RetryState.LastRetryPolicyKey
+                    },
+
+                ClaimTimeoutSeconds = source.ClaimTimeoutSeconds,
+
                 Inputs = new Dictionary<string, object?>(
-                            source.Inputs ?? new Dictionary<string, object?>(),
-                            StringComparer.Ordinal),
+                    source.Inputs ?? new Dictionary<string, object?>(),
+                    StringComparer.Ordinal),
 
                 Config = new Dictionary<string, object?>(
-                            source.Config ?? new Dictionary<string, object?>(),
-                            StringComparer.Ordinal),
+                    source.Config ?? new Dictionary<string, object?>(),
+                    StringComparer.Ordinal),
+
+                InputPayloads = source.InputPayloads is null
+                    ? null
+                    : new Dictionary<string, AiStoredPayload>(
+                        source.InputPayloads,
+                        StringComparer.Ordinal),
+
+                ConfigPayloads = source.ConfigPayloads is null
+                    ? null
+                    : new Dictionary<string, AiStoredPayload>(
+                        source.ConfigPayloads,
+                        StringComparer.Ordinal),
+
                 Result = CloneStepResult(source.Result),
-                StartedAtUtc = source.StartedAtUtc,
-                CompletedAtUtc = source.CompletedAtUtc
+                Version = source.Version
             };
         }
 

@@ -24,16 +24,20 @@ using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry;
+using Multiplexed.Abstractions.AI.Retry.old;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Abstractions;
+using Multiplexed.AI.Abstractions.AI.Policies;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -563,9 +567,36 @@ namespace Multiplexed.AI.DI
 
 
             // ------------------------------------------------------------
+            // Retry Engine and Policy Engine
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton<IAiPolicyRegistry, DefaultAiPolicyRegistry>();
+
+            services.TryAddSingleton<IAiRetryScheduler, DefaultAiRetryScheduler>();
+            services.TryAddSingleton<IAiRetryClassifier, DefaultAiRetryClassifier>();
+            services.TryAddSingleton<IAiRetryPolicyResolver, DefaultAiRetryPolicyResolver>();
+            services.TryAddSingleton<IAiRetryDecisionService, DefaultAiRetryDecisionService>();
+            services.TryAddSingleton<IAiRetryPolicyDefinitionResolver, DefaultAiRetryPolicyDefinitionResolver>();
+
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IAiPolicy, DefaultTransientRetryPolicy>());
+
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IAiRetryPolicy, DefaultTransientRetryPolicy>());
+
+            services.TryAddSingleton<RetryExecutionAdapter>();
+
+
+            // ------------------------------------------------------------
             // global execution engine services
             // ------------------------------------------------------------
             services.TryAddScoped<IAiDagExecutionEngineServices, AiDagExecutionEngineServices>();
+
+
+
+
+
+
 
             return services;
         }

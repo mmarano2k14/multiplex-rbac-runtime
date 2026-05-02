@@ -1,7 +1,8 @@
-﻿using System.Text.Json.Serialization;
-using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
+﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
+using System.Text.Json.Serialization;
 
 namespace Multiplexed.Abstractions.AI.Execution
 {
@@ -176,6 +177,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - RetryCount = 0 -> no retry scheduled yet
         /// - RetryCount = 1 -> one retry has already been scheduled
         /// </summary>
+        [Obsolete("Use RetryState.RetryCount instead. This property is kept for backward compatibility during Retry Engine migration.")]
         public int RetryCount { get; set; }
 
         /// <summary>
@@ -199,6 +201,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - MaxRetries = 1 -> one retry after the first failure
         /// - MaxRetries = 2 -> two retries after the first failure
         /// </summary>
+        [Obsolete("Use Retry.MaxRetries instead. This property is kept for backward compatibility during Retry Engine migration.")]
         public int MaxRetries { get; set; } = 3;
 
         /// <summary>
@@ -206,17 +209,20 @@ namespace Multiplexed.Abstractions.AI.Execution
         ///
         /// While this value is still in the future, the step must not be claimed again.
         /// </summary>
+        [Obsolete("Use RetryState.NextRetryAtUtc instead. This property is kept for backward compatibility during Retry Engine migration.")]
         public DateTime? NextRetryAtUtc { get; set; }
 
         /// <summary>
         /// Gets or sets the retry delay in milliseconds used when scheduling the next retry attempt.
         /// </summary>
+        [Obsolete("Use Retry.BaseDelayMs or RetryState decision metadata instead. This property is kept for backward compatibility during Retry Engine migration.")]
         public int RetryDelayMs { get; set; }
 
         /// <summary>
         /// Gets or sets the retry delay as a <see cref="TimeSpan"/>.
         /// This is a convenience wrapper around <see cref="RetryDelayMs"/>.
         /// </summary>
+        [Obsolete("Use Retry.BaseDelayMs or IAiRetryScheduler instead. This property is kept for backward compatibility during Retry Engine migration.")]
         [JsonIgnore]
         public TimeSpan RetryDelay
         {
@@ -282,6 +288,27 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// - Payload-backed configuration values take priority in payload-aware accessors
         /// </summary>
         public Dictionary<string, AiStoredPayload>? ConfigPayloads { get; set; }
+
+        /// <summary>
+        /// Gets or sets the retry policy definition resolved for the step.
+        /// </summary>
+        /// <remarks>
+        /// This property represents the declarative retry configuration associated with the step,
+        /// typically resolved from config.retry during pipeline initialization.
+        /// It defines retry policies, retry limits, and delay strategies, but does not contain
+        /// mutable execution state.
+        /// </remarks>
+        public AiRetryPolicyDefinition? Retry { get; set; }
+
+        /// <summary>
+        /// Gets or sets the runtime retry state associated with the step.
+        /// </summary>
+        /// <remarks>
+        /// This property contains mutable retry execution data, including retry counters,
+        /// scheduling timestamps, and the last retry decision applied by the retry engine.
+        /// This state is separate from Retry to distinguish configuration from execution state.
+        /// </remarks>
+        public AiStepRetryState? RetryState { get; set; }
 
         // ---------------------------------------------------------------------
         // RESULT
@@ -632,6 +659,7 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// <summary>
         /// Applies retry-or-fail semantics for a failed step execution attempt.
         /// </summary>
+        [Obsolete("Use Retry Engine decision flow instead. This method will be removed after Redis/Lua retry integration.")]
         public void MarkRetryOrFail(string? error, DateTime utcNow)
         {
             if (Status != AiStepExecutionStatus.Running)

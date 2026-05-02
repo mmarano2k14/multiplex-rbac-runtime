@@ -20,6 +20,7 @@ using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -42,6 +43,7 @@ using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Fixtures;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
@@ -621,6 +623,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
             var retentionPolicy = CreateDisabledRetentionPolicy();
+            var retryAdapter = AiRetryTestFactory.CreateRetryAdapter();
 
             var retentionService = CreateRetentionService(
                 payloadCompactor,
@@ -649,6 +652,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
+                retryAdapter,
                 dagStore);
 
             var engine = new AiDagExecutionEngine(engineServices);
@@ -917,6 +921,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadStoreResolver,
                 stepPayloadIndexStore);
 
+            var retryAdapter = AiRetryTestFactory.CreateRetryAdapter();
+
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,
@@ -939,6 +945,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
+                retryAdapter,   
                 dagStore);
 
             return new AiDagExecutionEngine(engineServices);

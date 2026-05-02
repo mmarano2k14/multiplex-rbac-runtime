@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry;
+using Multiplexed.Abstractions.AI.Retry.old;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Runtime.Logging;

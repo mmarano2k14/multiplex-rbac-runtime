@@ -12,6 +12,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
@@ -134,5 +135,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// Gets the execution Runtime Observability service used to emit structured events about execution lifecycle and behavior.
         /// </summary>
         IAiRuntimeObservability ObservabilityService { get; }
+
+        /// <summary>
+        /// Gets the adapter used to apply retry-engine decisions to step execution state.
+        /// </summary>
+        /// <remarks>
+        /// This adapter bridges the policy-driven retry engine with the existing step-state
+        /// mutation model during the progressive retry-engine migration.
+        /// </remarks>
+        RetryExecutionAdapter RetryAdapter { get; }
     }
 }

@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Multiplexed.Abstractions.AI.Retry
+namespace Multiplexed.Abstractions.AI.Retry.old
 {
     /// <summary>
     /// Defines the delay calculation strategy used between retry attempts.

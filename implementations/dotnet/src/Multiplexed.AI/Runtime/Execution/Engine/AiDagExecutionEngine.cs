@@ -477,7 +477,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Retry-aware local failure:
                     // if retry budget remains, the step transitions to WaitingForRetry;
                     // otherwise it becomes terminally Failed.
-                    stepState.MarkRetryOrFail(ex.Message, DateTime.UtcNow);
+                    await _engineServices.RetryAdapter.ApplyAsync(
+                        stepState,
+                        DateTime.UtcNow,
+                        ex.Message,
+                        cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
@@ -486,8 +490,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             nextStep.Name,
-                            stepState.RetryCount,
-                            stepState.NextRetryAtUtc);
+                            stepState.RetryState?.RetryCount ?? 0,
+                            stepState.RetryState?.NextRetryAtUtc);
                     }
 
                     _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
@@ -547,7 +551,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 {
                     // Retry-aware local unsuccessful result:
                     // business retry policy is applied through the step state itself.
-                    stepState.MarkRetryOrFail(stepResult.Error, DateTime.UtcNow);
+                    await _engineServices.RetryAdapter.ApplyAsync(
+                        stepState,
+                        DateTime.UtcNow,
+                        stepResult.Error,
+                        cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
@@ -556,8 +564,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             nextStep.Name,
-                            stepState.RetryCount,
-                            stepState.NextRetryAtUtc);
+                            stepState.RetryState?.RetryCount ?? 0,
+                            stepState.RetryState?.NextRetryAtUtc
+                        );
                     }
 
                     _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(

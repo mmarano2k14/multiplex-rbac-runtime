@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Multiplexed.Abstractions.AI.Retry
+namespace Multiplexed.Abstractions.AI.Retry.old
 {
     /// <summary>
     /// Declares retry behavior for an AI step.

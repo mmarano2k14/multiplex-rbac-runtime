@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Multiplexed.Abstractions.AI.Retry
+namespace Multiplexed.Abstractions.AI.Retry.old
 {
     /// <summary>
     /// Classifies exceptions to determine whether they are retryable.

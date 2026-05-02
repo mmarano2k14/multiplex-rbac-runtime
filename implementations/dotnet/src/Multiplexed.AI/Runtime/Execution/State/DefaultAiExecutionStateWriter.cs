@@ -3,7 +3,9 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.Metrics;
 
 namespace Multiplexed.AI.Runtime.Execution.State
@@ -28,12 +30,13 @@ namespace Multiplexed.AI.Runtime.Execution.State
     public sealed class DefaultAiExecutionStateWriter : IAiExecutionStateWriter
     {
         private readonly IAiRuntimeMetrics? _metrics;
+        private readonly IAiRetryPolicyDefinitionResolver? _retryDefinitionResolver;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiExecutionStateWriter"/> class.
         ///
         /// PURPOSE:
-        /// - Preserves existing behavior without requiring metrics registration.
+        /// - Preserves existing behavior without requiring metrics or retry registration.
         /// </summary>
         public DefaultAiExecutionStateWriter()
         {
@@ -49,6 +52,36 @@ namespace Multiplexed.AI.Runtime.Execution.State
         public DefaultAiExecutionStateWriter(IAiRuntimeMetrics metrics)
         {
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiExecutionStateWriter"/> class
+        /// with retry policy definition resolution support.
+        ///
+        /// PURPOSE:
+        /// - Enables retry configuration hydration during step initialization.
+        /// - Preserves execution behavior by only attaching retry metadata to step state.
+        /// </summary>
+        public DefaultAiExecutionStateWriter(IAiRetryPolicyDefinitionResolver retryDefinitionResolver)
+        {
+            _retryDefinitionResolver = retryDefinitionResolver ?? throw new ArgumentNullException(nameof(retryDefinitionResolver));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiExecutionStateWriter"/> class
+        /// with runtime metrics support and retry policy definition resolution support.
+        ///
+        /// PURPOSE:
+        /// - Enables hot-state observability without changing mutation semantics.
+        /// - Enables retry configuration hydration from resolved step configuration.
+        /// - Does not change retry execution behavior by itself.
+        /// </summary>
+        public DefaultAiExecutionStateWriter(
+            IAiRuntimeMetrics metrics,
+            IAiRetryPolicyDefinitionResolver retryDefinitionResolver)
+        {
+            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+            _retryDefinitionResolver = retryDefinitionResolver ?? throw new ArgumentNullException(nameof(retryDefinitionResolver));
         }
 
         /// <inheritdoc />
@@ -196,8 +229,19 @@ namespace Multiplexed.AI.Runtime.Execution.State
 
             stepState.SetInputs(stepDefinition.Input);
             stepState.SetConfig(stepDefinition.Config);
+
+#pragma warning disable CS0618
             stepState.MaxRetries = stepDefinition.MaxRetries;
             stepState.RetryDelay = TimeSpan.FromMilliseconds(stepDefinition.RetryDelayMs);
+#pragma warning restore CS0618
+
+            stepState.Retry = _retryDefinitionResolver?.Resolve(stepState.Config);
+
+            if (stepState.Retry is not null)
+            {
+                stepState.RetryState ??= new AiStepRetryState();
+            }
+
             stepState.UpdatedAtUtc = DateTime.UtcNow;
 
             Touch(state);
