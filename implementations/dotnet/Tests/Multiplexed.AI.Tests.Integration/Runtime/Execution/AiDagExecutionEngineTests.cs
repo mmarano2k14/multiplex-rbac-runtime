@@ -41,7 +41,7 @@ using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
-using Multiplexed.AI.Tests.Fixtures;
+using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -224,7 +224,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 retentionService,
                 stepResolver);
 
-            var retryAdapter = AiRetryTestFactory.CreateRetryAdapter();
+            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
 
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
@@ -242,7 +242,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
-                retryAdapter,
+                policyEngineFactory,
                 null);
 
             return new AiDagExecutionEngine(engineServices);

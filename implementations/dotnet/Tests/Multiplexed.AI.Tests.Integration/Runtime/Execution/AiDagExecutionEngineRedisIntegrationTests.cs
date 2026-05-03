@@ -43,7 +43,6 @@ using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
-using Multiplexed.AI.Tests.Fixtures;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
@@ -623,7 +622,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
             var retentionPolicy = CreateDisabledRetentionPolicy();
-            var retryAdapter = AiRetryTestFactory.CreateRetryAdapter();
+            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
 
             var retentionService = CreateRetentionService(
                 payloadCompactor,
@@ -652,7 +651,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
-                retryAdapter,
+                policyEngineFactory,
                 dagStore);
 
             var engine = new AiDagExecutionEngine(engineServices);
@@ -921,7 +920,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 payloadStoreResolver,
                 stepPayloadIndexStore);
 
-            var retryAdapter = AiRetryTestFactory.CreateRetryAdapter();
+            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
 
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
@@ -945,7 +944,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
-                retryAdapter,   
+                policyEngineFactory,   
                 dagStore);
 
             return new AiDagExecutionEngine(engineServices);

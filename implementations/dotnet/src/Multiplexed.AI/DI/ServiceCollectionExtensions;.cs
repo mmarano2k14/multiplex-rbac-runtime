@@ -38,6 +38,7 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.AI.Retry;
+using Multiplexed.AI.Runtime.AI.Retry.Policies;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -72,6 +73,7 @@ using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.Realtime.Context;
+using System.Reflection;
 
 namespace Multiplexed.AI.DI
 {
@@ -567,36 +569,59 @@ namespace Multiplexed.AI.DI
 
 
             // ------------------------------------------------------------
-            // Retry Engine and Policy Engine
+            // Policy Registry
             // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiPolicyRegistry, DefaultAiPolicyRegistry>();
 
-            services.TryAddSingleton<IAiRetryScheduler, DefaultAiRetryScheduler>();
-            services.TryAddSingleton<IAiRetryClassifier, DefaultAiRetryClassifier>();
-            services.TryAddSingleton<IAiRetryPolicyResolver, DefaultAiRetryPolicyResolver>();
-            services.TryAddSingleton<IAiRetryDecisionService, DefaultAiRetryDecisionService>();
-            services.TryAddSingleton<IAiRetryPolicyDefinitionResolver, DefaultAiRetryPolicyDefinitionResolver>();
+            services.AddAiPolicyEnginesFromAssemblies(
+                typeof(AiRuntimeAssemblyMarker).Assembly);
 
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IAiPolicy, DefaultTransientRetryPolicy>());
+            services.AddAiPoliciesFromAssemblies(
+                typeof(AiRuntimeAssemblyMarker).Assembly);
 
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IAiRetryPolicy, DefaultTransientRetryPolicy>());
-
-            services.TryAddSingleton<RetryExecutionAdapter>();
+            services.TryAddSingleton<IAiPolicyEngineFactory, DefaultAiPolicyEngineFactory>();
 
 
             // ------------------------------------------------------------
             // global execution engine services
             // ------------------------------------------------------------
             services.TryAddScoped<IAiDagExecutionEngineServices, AiDagExecutionEngineServices>();
+            return services;
+        }
 
+        public static IServiceCollection AddAiPoliciesFromAssemblies(
+            this IServiceCollection services,
+            params Assembly[] assemblies)
+        {
+            var policies = assemblies
+                .SelectMany(a => a.GetTypes())
+                .Where(t => typeof(IAiPolicy).IsAssignableFrom(t) && !t.IsAbstract);
 
+            foreach (var policy in policies)
+            {
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Singleton(typeof(IAiPolicy), policy));
+            }
 
+            return services;
+        }
 
+        public static IServiceCollection AddAiPolicyEnginesFromAssemblies(
+            this IServiceCollection services,
+            params Assembly[] assemblies)
+        {
+            var engineTypes = assemblies
+                .SelectMany(x => x.GetTypes())
+                .Where(x =>
+                    !x.IsAbstract &&
+                    !x.IsInterface &&
+                    typeof(IAiPolicyEngine).IsAssignableFrom(x) &&
+                    x.GetCustomAttributes(typeof(AiPolicyEngineAttribute), false).Any())
+                .ToArray();
 
-
+            services.TryAddSingleton<IAiPolicyEngineRegistry>(
+                _ => new DefaultAiPolicyEngineRegistry(engineTypes));
 
             return services;
         }

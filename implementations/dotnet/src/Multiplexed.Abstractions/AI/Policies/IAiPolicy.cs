@@ -1,25 +1,32 @@
 ﻿namespace Multiplexed.AI.Abstractions.AI.Policies
 {
     /// <summary>
-    /// Defines the base contract for all AI policies.
+    /// Represents a policy that can be executed against a runtime context.
     /// </summary>
     /// <remarks>
-    /// AI policies provide a unified abstraction for extending runtime behavior
-    /// such as retry logic, timeouts, routing, validation, and rate limiting.
-    /// 
-    /// Specialized policy types should extend this interface and add behavior
-    /// specific to their domain.
+    /// Policies are responsible for evaluating a given context and producing a result
+    /// that can be consumed by higher-level engines such as retry, retention, or eviction.
     /// </remarks>
     public interface IAiPolicy
     {
         /// <summary>
-        /// Gets the unique key used to identify and resolve the policy.
+        /// Gets the unique key identifying the policy.
         /// </summary>
         string Key { get; }
 
         /// <summary>
-        /// Gets the category of the policy.
+        /// Gets the policy kind.
         /// </summary>
         AiPolicyKind Kind { get; }
+
+        /// <summary>
+        /// Executes the policy against the specified context.
+        /// </summary>
+        /// <param name="context">The runtime context.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>The policy result.</returns>
+        Task<AiPolicyResult> ExecuteAsync(
+            object context,
+            CancellationToken cancellationToken = default);
     }
 }

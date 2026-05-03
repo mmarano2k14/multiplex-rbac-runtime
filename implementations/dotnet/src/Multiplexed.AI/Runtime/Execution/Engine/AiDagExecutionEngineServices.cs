@@ -11,6 +11,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -54,7 +55,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
             IAiExecutionRetentionService retentionService,
-            RetryExecutionAdapter retryAdapter,
+            IAiPolicyEngineFactory policyEngineFactory,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
         {
@@ -73,7 +74,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
             RetentionService = retentionService ?? throw new ArgumentNullException(nameof(retentionService));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
-            RetryAdapter = retryAdapter ?? throw new ArgumentNullException(nameof(retryAdapter));
+            PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
 
             DagStore = dagStore;
             SnapshotService = snapshotService;
@@ -131,6 +132,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         public IAiRuntimeObservability ObservabilityService { get; }
 
         /// <inheritdoc />
-        public RetryExecutionAdapter RetryAdapter { get; }
+        public IAiPolicyEngineFactory PolicyEngineFactory { get; }
     }
 }

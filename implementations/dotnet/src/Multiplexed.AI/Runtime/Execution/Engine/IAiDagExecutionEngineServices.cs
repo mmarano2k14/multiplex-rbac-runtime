@@ -12,6 +12,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -137,12 +138,27 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         IAiRuntimeObservability ObservabilityService { get; }
 
         /// <summary>
-        /// Gets the adapter used to apply retry-engine decisions to step execution state.
+        /// Gets the factory used to create step-scoped AI policy engine instances.
         /// </summary>
         /// <remarks>
-        /// This adapter bridges the policy-driven retry engine with the existing step-state
-        /// mutation model during the progressive retry-engine migration.
+        /// This factory is responsible for instantiating the appropriate policy engine
+        /// (for example, retry, retention, eviction) based on the specified policy kind.
+        ///
+        /// DESIGN:
+        /// - Engines are created per step execution to ensure isolation and multi-worker safety.
+        /// - No engine instance is shared across executions.
+        /// - The factory resolves the correct engine implementation via the policy engine registry.
+        ///
+        /// USAGE:
+        /// - The DAG or runtime layer uses this factory to obtain a policy engine
+        ///   and execute domain-specific behavior (e.g., retry handling).
+        ///
+        /// EXAMPLE:
+        /// <code>
+        /// var engine = PolicyFactory.Create&lt;IAiRetryEngine&gt;(AiPolicyKind.Retry, stepContext);
+        /// await engine.HandleFailureAsync(...);
+        /// </code>
         /// </remarks>
-        RetryExecutionAdapter RetryAdapter { get; }
+        IAiPolicyEngineFactory PolicyEngineFactory { get; }
     }
 }

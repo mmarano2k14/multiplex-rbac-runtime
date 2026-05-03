@@ -21,6 +21,7 @@ using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
+using Multiplexed.AI.Runtime.AI.Retry.Policies;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -281,27 +282,25 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             var retentionService = new NoopExecutionRetentionService();
             var stepResolver = new LocalStateExecutionStepResolver();
 
-            var retryScheduler = new DefaultAiRetryScheduler();
-            var retryClassifier = new DefaultAiRetryClassifier();
-            var transientRetryPolicy = new DefaultTransientRetryPolicy(retryScheduler);
 
-            var policyRegistry = new DefaultAiPolicyRegistry(
-                new IAiPolicy[]
+            var retryPolicies = new IAiPolicy[]
+{
+                new DefaultTransientRetryPolicy(),
+                new DefaultTimeoutRetryPolicy(),
+                new DefaultRateLimitRetryPolicy()
+            };
+
+            var policyRegistry = new DefaultAiPolicyRegistry(retryPolicies);
+
+            var policyEngineRegistry = new DefaultAiPolicyEngineRegistry(
+                new[]
                 {
-                    transientRetryPolicy
+                    typeof(DefaultAiRetryEngine)
                 });
 
-            var retryPolicyResolver = new DefaultAiRetryPolicyResolver(policyRegistry);
-
-            var retryDecisionService = new DefaultAiRetryDecisionService(
-                retryClassifier,
-                retryPolicyResolver);
-
-            var retryDefinitionResolver = new DefaultAiRetryPolicyDefinitionResolver();
-
-            var retryAdapter = new RetryExecutionAdapter(
-                retryDecisionService,
-                retryDefinitionResolver);
+            var policyFactory = new DefaultAiPolicyEngineFactory(
+                policyRegistry,
+                policyEngineRegistry);
 
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
@@ -312,7 +311,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiExecutionStateWriter)] = stateWriter,
                 [typeof(IAiExecutionRetentionService)] = retentionService,
                 [typeof(IAiExecutionStepResolver)] = stepResolver,
-                [typeof(RetryExecutionAdapter)] = retryAdapter
+                [typeof(IAiPolicyEngineFactory)] = policyFactory
             });
 
             var engineServices = new AiDagExecutionEngineServices(
@@ -331,7 +330,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stateWriter,
                 stepResolver,
                 retentionService,
-                retryAdapter,
+                policyFactory,
                 null);
 
             return new AiDagExecutionEngine(engineServices);

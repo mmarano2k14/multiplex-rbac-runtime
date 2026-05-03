@@ -6,6 +6,45 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [Unreleased]
+
+### 🚀 Refactor - Retry Engine
+
+- Introduced policy-driven retry engine (`IAiRetryEngine`)
+- Removed legacy retry pipeline:
+  - RetryExecutionAdapter
+  - RetryScheduler
+  - RetryClassifier
+  - RetryPolicyResolver
+  - RetryDecisionService
+- Added `IAiPolicyEngineFactory` with per-step engine instantiation
+- Implemented `DefaultAiRetryEngine`:
+  - deterministic decision
+  - retry state mutation
+  - support for policies and retry config
+- Integrated retry handling into DAG execution flow
+- Added support for retry config via `AiStepExecutionContext` helper
+- Rehydrated `stepState.Retry` for backward compatibility
+
+### 🧪 Tests
+
+- Updated integration tests to align with new retry engine
+- Removed legacy retry definition resolver tests
+- Added config binding coverage via step context helper
+
+### 🧰 Fixes
+
+- Fixed JSON binding:
+  - case-insensitive properties
+  - enum string conversion
+  - `policy` vs `policies` compatibility
+
+### ⏭ Next
+
+- Redis Lua alignment with retry engine (WaitingForRetry, NextRetryAtUtc, claim eligibility)
+
+---
+
 ## [1.0.3.7] - 2026-05-01 - Tracing
 
 ### Added

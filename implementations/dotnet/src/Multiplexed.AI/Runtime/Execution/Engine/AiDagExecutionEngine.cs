@@ -10,7 +10,9 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Logging;
@@ -477,11 +479,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Retry-aware local failure:
                     // if retry budget remains, the step transitions to WaitingForRetry;
                     // otherwise it becomes terminally Failed.
-                    await _engineServices.RetryAdapter.ApplyAsync(
-                        stepState,
-                        DateTime.UtcNow,
-                        ex.Message,
-                        cancellationToken);
+                    await _engineServices.PolicyEngineFactory
+                        .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                        .HandleFailureAsync(
+                            stepState,
+                            ex.Message,
+                            ex,
+                            DateTime.UtcNow,
+                            cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
@@ -551,11 +556,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 {
                     // Retry-aware local unsuccessful result:
                     // business retry policy is applied through the step state itself.
-                    await _engineServices.RetryAdapter.ApplyAsync(
-                        stepState,
-                        DateTime.UtcNow,
-                        stepResult.Error,
-                        cancellationToken);
+                    await _engineServices.PolicyEngineFactory
+                        .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                        .HandleFailureAsync(
+                            stepState,
+                            stepResult.Error,
+                            null, 
+                            DateTime.UtcNow,
+                            cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {

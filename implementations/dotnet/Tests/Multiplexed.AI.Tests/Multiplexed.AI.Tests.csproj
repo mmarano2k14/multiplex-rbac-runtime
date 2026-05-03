@@ -26,4 +26,10 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Fixtures\" />
+    <Folder Include="Runtime\Execution\State\" />
+    <Folder Include="Runtime\Retry\" />
+  </ItemGroup>
+
 </Project>
