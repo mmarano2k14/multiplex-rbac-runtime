@@ -1,6 +1,7 @@
 ﻿using System;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Execution
@@ -18,6 +19,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
     /// They do not cover:
     /// - distributed Redis/Lua atomicity
     /// - execution-level convergence
+    /// - retry engine policy decisions
     /// - engine orchestration
     /// </summary>
     public sealed class AiStepStateInvariantTests
@@ -114,19 +116,23 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         }
 
         /// <summary>
-        /// Ensures retry waiting rejects invalid retry state where RetryCount already exceeds MaxRetries.
+        /// Ensures waiting for retry stores the retry eligibility timestamp in RetryState.
         /// </summary>
         [Fact]
-        public void MarkWaitingForRetry_Should_Throw_When_RetryCount_Exceeds_MaxRetries()
+        public void MarkWaitingForRetry_Should_Set_RetryState_NextRetryAtUtc()
         {
             var step = CreateRunningStep();
-            step.RetryCount = 4;
-            step.MaxRetries = 3;
+            var nextRetryAtUtc = DateTime.UtcNow.AddSeconds(10);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
-                step.MarkWaitingForRetry("retry later", DateTime.UtcNow.AddSeconds(10)));
+            step.MarkWaitingForRetry("retry later", nextRetryAtUtc);
 
-            Assert.Contains("exceeds", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
+            Assert.NotNull(step.RetryState);
+            Assert.Equal(nextRetryAtUtc, step.RetryState!.NextRetryAtUtc);
+            Assert.Null(step.ClaimedBy);
+            Assert.Null(step.ClaimToken);
+            Assert.Null(step.ClaimedAtUtc);
+            Assert.Null(step.LeaseExpiresAtUtc);
         }
 
         /// <summary>
@@ -150,84 +156,6 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         }
 
         /// <summary>
-        /// Ensures retry-or-fail is only legal from Running.
-        /// </summary>
-        [Theory]
-        [InlineData(AiStepExecutionStatus.None)]
-        [InlineData(AiStepExecutionStatus.Ready)]
-        [InlineData(AiStepExecutionStatus.WaitingForRetry)]
-        [InlineData(AiStepExecutionStatus.Completed)]
-        [InlineData(AiStepExecutionStatus.Failed)]
-        public void MarkRetryOrFail_Should_Throw_When_Step_Is_Not_Running(AiStepExecutionStatus invalidStatus)
-        {
-            var step = CreateStep();
-            step.Status = invalidStatus;
-
-            var ex = Assert.Throws<InvalidOperationException>(() =>
-                step.MarkRetryOrFail("error", DateTime.UtcNow));
-
-            Assert.Contains("RetryOrFail", ex.Message, StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>
-        /// Ensures retry-or-fail rejects impossible retry state where RetryCount already exceeds MaxRetries.
-        /// </summary>
-        [Fact]
-        public void MarkRetryOrFail_Should_Throw_When_RetryCount_Already_Exceeds_MaxRetries()
-        {
-            var step = CreateRunningStep();
-            step.RetryCount = 5;
-            step.MaxRetries = 3;
-
-            var ex = Assert.Throws<InvalidOperationException>(() =>
-                step.MarkRetryOrFail("error", DateTime.UtcNow));
-
-            Assert.Contains("RetryCount", ex.Message, StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>
-        /// Ensures retry-or-fail increments RetryCount and moves to WaitingForRetry when budget remains.
-        /// </summary>
-        [Fact]
-        public void MarkRetryOrFail_Should_Increment_Retry_And_Transition_To_WaitingForRetry_When_Budget_Remains()
-        {
-            var step = CreateRunningStep();
-            step.RetryCount = 0;
-            step.MaxRetries = 2;
-            step.RetryDelayMs = 1000;
-
-            step.MarkRetryOrFail("error", DateTime.UtcNow);
-
-            Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-            Assert.Equal(1, step.RetryCount);
-            Assert.NotNull(step.NextRetryAtUtc);
-            Assert.Null(step.ClaimedBy);
-            Assert.Null(step.ClaimToken);
-            Assert.Null(step.ClaimedAtUtc);
-            Assert.Null(step.LeaseExpiresAtUtc);
-        }
-
-        /// <summary>
-        /// Ensures retry-or-fail transitions to terminal Failed when retry budget is exhausted.
-        /// </summary>
-        [Fact]
-        public void MarkRetryOrFail_Should_Transition_To_Failed_When_Retry_Budget_Is_Exhausted()
-        {
-            var step = CreateRunningStep();
-            step.RetryCount = 2;
-            step.MaxRetries = 2;
-
-            step.MarkRetryOrFail("fatal", DateTime.UtcNow);
-
-            Assert.Equal(AiStepExecutionStatus.Failed, step.Status);
-            Assert.Equal(2, step.RetryCount);
-            Assert.Null(step.ClaimedBy);
-            Assert.Null(step.ClaimToken);
-            Assert.Null(step.ClaimedAtUtc);
-            Assert.Null(step.LeaseExpiresAtUtc);
-        }
-
-        /// <summary>
         /// Ensures MarkCompleted clears all claim metadata.
         /// </summary>
         [Fact]
@@ -245,19 +173,74 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
         }
 
         /// <summary>
-        /// Ensures timeout recovery does not modify RetryCount.
+        /// Ensures MarkCompleted clears pending retry eligibility when retry state exists.
         /// </summary>
         [Fact]
-        public void MarkRequeuedAfterTimeout_Should_Not_Modify_RetryCount()
+        public void MarkCompleted_Should_Clear_RetryState_NextRetryAtUtc_When_RetryState_Exists()
         {
             var step = CreateRunningStep();
-            step.RetryCount = 2;
+            step.RetryState = new AiStepRetryState
+            {
+                RetryCount = 1,
+                NextRetryAtUtc = DateTime.UtcNow.AddSeconds(10)
+            };
+
+            step.MarkCompleted(new AiStepResult());
+
+            Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+            Assert.Null(step.RetryState.NextRetryAtUtc);
+        }
+
+        /// <summary>
+        /// Ensures MarkFailed clears all claim metadata.
+        /// </summary>
+        [Fact]
+        public void MarkFailed_Should_Clear_Claim_Metadata()
+        {
+            var step = CreateRunningStep();
+
+            step.MarkFailed("boom");
+
+            Assert.Equal(AiStepExecutionStatus.Failed, step.Status);
+            Assert.Null(step.ClaimedBy);
+            Assert.Null(step.ClaimToken);
+            Assert.Null(step.ClaimedAtUtc);
+            Assert.Null(step.LeaseExpiresAtUtc);
+        }
+
+        /// <summary>
+        /// Ensures MarkFailed clears pending retry eligibility when retry state exists.
+        /// </summary>
+        [Fact]
+        public void MarkFailed_Should_Clear_RetryState_NextRetryAtUtc_When_RetryState_Exists()
+        {
+            var step = CreateRunningStep();
+            step.RetryState = new AiStepRetryState
+            {
+                RetryCount = 1,
+                NextRetryAtUtc = DateTime.UtcNow.AddSeconds(10)
+            };
+
+            step.MarkFailed("boom");
+
+            Assert.Equal(AiStepExecutionStatus.Failed, step.Status);
+            Assert.Null(step.RetryState.NextRetryAtUtc);
+        }
+
+        /// <summary>
+        /// Ensures timeout recovery does not modify business retry state.
+        /// </summary>
+        [Fact]
+        public void MarkRequeuedAfterTimeout_Should_Not_Modify_RetryState()
+        {
+            var step = CreateRunningStep();
+            step.RetryState = new AiStepRetryState { RetryCount = 2 };
             step.RecoveryCount = 0;
 
             step.MarkRequeuedAfterTimeout();
 
             Assert.Equal(AiStepExecutionStatus.Ready, step.Status);
-            Assert.Equal(2, step.RetryCount);
+            Assert.Equal(2, step.RetryState.RetryCount);
             Assert.Equal(1, step.RecoveryCount);
         }
 
@@ -295,6 +278,47 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             Assert.Null(step.LeaseExpiresAtUtc);
         }
 
+        /// <summary>
+        /// Ensures retry-waiting steps are promoted to Ready when the retry window is due.
+        /// </summary>
+        [Fact]
+        public void PromoteRetryToReadyIfDue_Should_Promote_When_Retry_Window_Is_Due()
+        {
+            var now = DateTime.UtcNow;
+            var step = CreateStep();
+            step.Status = AiStepExecutionStatus.WaitingForRetry;
+            step.RetryState = new AiStepRetryState
+            {
+                NextRetryAtUtc = now.AddMilliseconds(-1)
+            };
+
+            step.PromoteRetryToReadyIfDue(now);
+
+            Assert.Equal(AiStepExecutionStatus.Ready, step.Status);
+            Assert.Null(step.RetryState.NextRetryAtUtc);
+        }
+
+        /// <summary>
+        /// Ensures retry-waiting steps are not promoted before the retry window opens.
+        /// </summary>
+        [Fact]
+        public void PromoteRetryToReadyIfDue_Should_Not_Promote_When_Retry_Window_Is_Not_Due()
+        {
+            var now = DateTime.UtcNow;
+            var nextRetryAtUtc = now.AddSeconds(10);
+            var step = CreateStep();
+            step.Status = AiStepExecutionStatus.WaitingForRetry;
+            step.RetryState = new AiStepRetryState
+            {
+                NextRetryAtUtc = nextRetryAtUtc
+            };
+
+            step.PromoteRetryToReadyIfDue(now);
+
+            Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
+            Assert.Equal(nextRetryAtUtc, step.RetryState.NextRetryAtUtc);
+        }
+
         // ---------------------------------------------------------------------
         // HELPERS
         // ---------------------------------------------------------------------
@@ -304,9 +328,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
             return new AiStepState
             {
                 StepName = "step-1",
-                Status = AiStepExecutionStatus.Ready,
-                MaxRetries = 3,
-                RetryDelayMs = 1000
+                Status = AiStepExecutionStatus.Ready
             };
         }
 

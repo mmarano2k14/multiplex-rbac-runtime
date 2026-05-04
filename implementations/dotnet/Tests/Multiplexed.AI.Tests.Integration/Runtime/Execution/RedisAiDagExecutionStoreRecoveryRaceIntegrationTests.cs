@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
@@ -470,7 +471,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     ClaimedAtUtc = claimedAtUtc,
                     LeaseExpiresAtUtc = leaseExpiresAtUtc,
                     ClaimTimeoutSeconds = 30,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState
+                    {
+                        RetryCount = 0
+                    },
                     RecoveryCount = 0
                 };
 
@@ -609,7 +613,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     ClaimedAtUtc = claimedAtUtc,
                     LeaseExpiresAtUtc = leaseExpiresAtUtc,
                     ClaimTimeoutSeconds = 30,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState
+                    {
+                        RetryCount = 0
+                    },
                     RecoveryCount = 0
                 };
 
@@ -751,10 +758,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     ClaimedAtUtc = claimedAtUtc,
                     LeaseExpiresAtUtc = leaseExpiresAtUtc,
                     ClaimTimeoutSeconds = 30,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState
+                    {
+                        RetryCount = 0
+                    },
                     RecoveryCount = 0,
-                    MaxRetries = 2,
-                    RetryDelayMs = 5
+                    Retry = new AiRetryPolicyDefinition
+                    {
+                        Policies = new[] { "retry.transient.default" },
+                        MaxRetries = 2,
+                        MaxDelayMs = 5
+                    }
                 };
 
                 await dagStore.CreateAsync(record, state);
@@ -829,7 +843,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     Assert.Null(step.LeaseExpiresAtUtc);
                 }
 
-                Assert.True(step.RetryCount >= 0);
+                Assert.True(step.RetryState?.RetryCount >= 0);
                 Assert.True(step.RecoveryCount >= 0);
 
                 await CleanupDagExecutionAsync(executionId);
@@ -893,10 +907,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     StepName = "step-1",
                     Status = AiStepExecutionStatus.Ready,
                     ClaimTimeoutSeconds = 1,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState
+                    {
+                        RetryCount = 0
+                    },
                     RecoveryCount = 0,
-                    MaxRetries = 1,
-                    RetryDelayMs = 5
+                    Retry = new AiRetryPolicyDefinition
+                    {
+                        Policies = new[] { "retry.transient.default" },
+                        MaxRetries = 1,
+                        MaxDelayMs = 5
+                    }
                 };
 
                 await dagStore.CreateAsync(record, state);
@@ -1041,7 +1062,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     ClaimedAtUtc = claimedAtUtc,
                     LeaseExpiresAtUtc = leaseExpiresAtUtc,
                     ClaimTimeoutSeconds = 30,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState { RetryCount = 0 },
                     RecoveryCount = 0
                 };
 
@@ -1168,10 +1189,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     StepName = "step-1",
                     Status = AiStepExecutionStatus.Ready,
                     ClaimTimeoutSeconds = 1,
-                    RetryCount = 0,
+                    RetryState = new AiStepRetryState { RetryCount = 0 },
                     RecoveryCount = 0,
-                    MaxRetries = 2,
-                    RetryDelayMs = 5
+                    Retry = new AiRetryPolicyDefinition
+                    {
+                        Policies = new[] { "retry.transient.default" },
+                        MaxRetries = 2,
+                        MaxDelayMs = 5
+                    }
                 };
 
                 await dagStore.CreateAsync(record, state);
@@ -1255,7 +1280,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     Assert.Null(step.LeaseExpiresAtUtc);
                 }
 
-                Assert.True(step.RetryCount >= 0);
+                Assert.True(step.RetryState?.RetryCount >= 0);
                 Assert.True(step.RecoveryCount >= 0);
 
                 await CleanupDagExecutionAsync(executionId);

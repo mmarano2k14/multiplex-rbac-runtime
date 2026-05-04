@@ -79,9 +79,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.NotNull(stateAfterFailure);
 
                 var failedStep = stateAfterFailure!.Steps["start"];
+
+                Assert.NotNull(failedStep.Retry);
+                Assert.Equal(1, failedStep.Retry!.MaxRetries);
+                Assert.Equal(1, failedStep.RetryState?.RetryCount);
+
+
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, failedStep.Status);
-                Assert.Equal(1, failedStep.RetryCount);
-                Assert.True(failedStep.NextRetryAtUtc.HasValue);
+                Assert.Equal(1, failedStep.RetryState?.RetryCount);
+                Assert.True(failedStep.RetryState?.NextRetryAtUtc.HasValue);
 
                 var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 
@@ -116,8 +122,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 // With MaxRetries = 1, the retry attempt should now be exhausted.
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
-                Assert.Equal(1, finalStep.RetryCount);
-                Assert.Null(finalStep.NextRetryAtUtc);
+                Assert.Equal(1, finalStep.RetryState?.RetryCount);
+                Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
             }
             finally
             {
@@ -151,7 +157,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var stepAfterFirstFailure = stateAfterFirstFailure!.Steps["start"];
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterFirstFailure.Status);
-                Assert.Equal(1, stepAfterFirstFailure.RetryCount);
+                Assert.Equal(1, stepAfterFirstFailure.RetryState?.RetryCount);
 
                 var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 
@@ -174,14 +180,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 // The second retry should have been scheduled exactly once.
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, midStep.Status);
-                Assert.Equal(2, midStep.RetryCount);
-                Assert.Equal(2, midStep.MaxRetries);
-                Assert.True(midStep.NextRetryAtUtc.HasValue);
+                Assert.Equal(2, midStep.RetryState?.RetryCount);
+                Assert.Equal(2, midStep.Retry.MaxRetries);
+                Assert.True(midStep.RetryState?.NextRetryAtUtc.HasValue);
 
                 // Ensure no double-consumption occurred.
                 Assert.DoesNotContain(
                     new[] { worker1.Result, worker2.Result },
-                    x => x.Outcome == WorkerExecutionOutcome.Thrown && midStep.RetryCount > 2);
+                    x => x.Outcome == WorkerExecutionOutcome.Thrown && midStep.RetryState?.RetryCount > 2);
             }
             finally
             {
@@ -275,12 +281,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.NextRetryAtUtc.HasValue)
+                if (!step.RetryState?.NextRetryAtUtc.HasValue ?? true)
                 {
                     return;
                 }
 
-                var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = step.RetryState?.NextRetryAtUtc.Value - DateTime.UtcNow;
                 if (delay <= TimeSpan.Zero)
                 {
                     return;
@@ -292,7 +298,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 if (wait > TimeSpan.Zero)
                 {
-                    await Task.Delay(wait, cancellationToken);
+                    await Task.Delay(wait.Value, cancellationToken);
                 }
             }
 

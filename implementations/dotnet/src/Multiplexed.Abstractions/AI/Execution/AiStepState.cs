@@ -163,22 +163,6 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// </summary>
         public string? Error { get; set; }
 
-        /// <summary>
-        /// Gets or sets the number of business retry attempts already scheduled
-        /// after the initial execution attempt.
-        ///
-        /// SEMANTICS:
-        /// - The initial execution attempt is not counted here
-        /// - This counter is incremented only when a failed execution is promoted
-        ///   into <see cref="AiStepExecutionStatus.WaitingForRetry"/>
-        /// - Infrastructure timeout recovery does not modify this counter
-        ///
-        /// EXAMPLE:
-        /// - RetryCount = 0 -> no retry scheduled yet
-        /// - RetryCount = 1 -> one retry has already been scheduled
-        /// </summary>
-        [Obsolete("Use RetryState.RetryCount instead. This property is kept for backward compatibility during Retry Engine migration.")]
-        public int RetryCount { get; set; }
 
         /// <summary>
         /// Gets or sets the number of infrastructure recovery operations.
@@ -187,48 +171,10 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// after timeout or worker loss.
         ///
         /// IMPORTANT:
-        /// - This is intentionally separate from <see cref="RetryCount"/>
+        /// - This is intentionally separate from business retry state stored in <see cref="RetryState"/>
         /// - Infrastructure recovery must not consume business retry budget
         /// </summary>
         public int RecoveryCount { get; set; }
-
-        /// <summary>
-        /// Gets or sets the maximum number of business retry attempts allowed
-        /// after the initial execution attempt.
-        ///
-        /// EXAMPLE:
-        /// - MaxRetries = 0 -> no retry after the first failure
-        /// - MaxRetries = 1 -> one retry after the first failure
-        /// - MaxRetries = 2 -> two retries after the first failure
-        /// </summary>
-        [Obsolete("Use Retry.MaxRetries instead. This property is kept for backward compatibility during Retry Engine migration.")]
-        public int MaxRetries { get; set; } = 3;
-
-        /// <summary>
-        /// Gets or sets the UTC timestamp when the next retry becomes eligible.
-        ///
-        /// While this value is still in the future, the step must not be claimed again.
-        /// </summary>
-        [Obsolete("Use RetryState.NextRetryAtUtc instead. This property is kept for backward compatibility during Retry Engine migration.")]
-        public DateTime? NextRetryAtUtc { get; set; }
-
-        /// <summary>
-        /// Gets or sets the retry delay in milliseconds used when scheduling the next retry attempt.
-        /// </summary>
-        [Obsolete("Use Retry.BaseDelayMs or RetryState decision metadata instead. This property is kept for backward compatibility during Retry Engine migration.")]
-        public int RetryDelayMs { get; set; }
-
-        /// <summary>
-        /// Gets or sets the retry delay as a <see cref="TimeSpan"/>.
-        /// This is a convenience wrapper around <see cref="RetryDelayMs"/>.
-        /// </summary>
-        [Obsolete("Use Retry.BaseDelayMs or IAiRetryScheduler instead. This property is kept for backward compatibility during Retry Engine migration.")]
-        [JsonIgnore]
-        public TimeSpan RetryDelay
-        {
-            get => TimeSpan.FromMilliseconds(RetryDelayMs);
-            set => RetryDelayMs = (int)Math.Max(0, value.TotalMilliseconds);
-        }
 
         /// <summary>
         /// Gets or sets the distributed claim timeout in seconds.
@@ -537,7 +483,12 @@ namespace Multiplexed.Abstractions.AI.Execution
             Status = AiStepExecutionStatus.Completed;
             Result = result;
             Error = null;
-            NextRetryAtUtc = null;
+
+            if (RetryState is not null)
+            {
+                RetryState.NextRetryAtUtc = null;
+            }
+
             CompletedAtUtc = now;
             UpdatedAtUtc = now;
             Duration = StartedAtUtc.HasValue && now >= StartedAtUtc.Value
@@ -568,7 +519,12 @@ namespace Multiplexed.Abstractions.AI.Execution
 
             Status = AiStepExecutionStatus.Failed;
             Error = error;
-            NextRetryAtUtc = null;
+
+            if (RetryState is not null)
+            {
+                RetryState.NextRetryAtUtc = null;
+            }
+
             CompletedAtUtc = now;
             UpdatedAtUtc = now;
             Duration = StartedAtUtc.HasValue && now >= StartedAtUtc.Value
@@ -594,15 +550,11 @@ namespace Multiplexed.Abstractions.AI.Execution
                     $"Step '{StepName}' cannot enter WaitingForRetry from status '{Status}'.");
             }
 
-            if (RetryCount > MaxRetries)
-            {
-                throw new InvalidOperationException(
-                    $"RetryCount '{RetryCount}' exceeds MaxRetries '{MaxRetries}' for step '{StepName}'.");
-            }
+            RetryState ??= new AiStepRetryState();
 
             Status = AiStepExecutionStatus.WaitingForRetry;
             Error = error;
-            NextRetryAtUtc = nextRetryAtUtc;
+            RetryState.NextRetryAtUtc = nextRetryAtUtc;
             UpdatedAtUtc = DateTime.UtcNow;
 
             ClaimedBy = null;
@@ -644,56 +596,16 @@ namespace Multiplexed.Abstractions.AI.Execution
             if (Status != AiStepExecutionStatus.WaitingForRetry)
                 return;
 
-            if (!NextRetryAtUtc.HasValue)
+            if (RetryState?.NextRetryAtUtc is null)
                 return;
 
-            if (NextRetryAtUtc.Value > utcNow)
+            if (RetryState.NextRetryAtUtc.Value > utcNow)
                 return;
 
             Status = AiStepExecutionStatus.Ready;
-            NextRetryAtUtc = null;
+            RetryState.NextRetryAtUtc = null;
             UpdatedAtUtc = utcNow;
             Version++;
-        }
-
-        /// <summary>
-        /// Applies retry-or-fail semantics for a failed step execution attempt.
-        /// </summary>
-        [Obsolete("Use Retry Engine decision flow instead. This method will be removed after Redis/Lua retry integration.")]
-        public void MarkRetryOrFail(string? error, DateTime utcNow)
-        {
-            if (Status != AiStepExecutionStatus.Running)
-            {
-                throw new InvalidOperationException(
-                    $"RetryOrFail is invalid for step '{StepName}' from status '{Status}'.");
-            }
-
-            if (RetryCount > MaxRetries)
-            {
-                throw new InvalidOperationException(
-                    $"Invalid retry state for step '{StepName}': RetryCount '{RetryCount}' > MaxRetries '{MaxRetries}'.");
-            }
-
-            Error = error;
-
-            if (RetryCount < MaxRetries)
-            {
-                RetryCount++;
-
-                if (RetryCount > MaxRetries)
-                {
-                    throw new InvalidOperationException(
-                        $"Retry overflow detected for step '{StepName}'.");
-                }
-
-                var nextRetryAtUtc = utcNow.AddMilliseconds(
-                    RetryDelayMs > 0 ? RetryDelayMs : 2000);
-
-                MarkWaitingForRetry(error, nextRetryAtUtc);
-                return;
-            }
-
-            MarkFailed(error);
         }
 
         // ---------------------------------------------------------------------

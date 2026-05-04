@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
@@ -180,8 +181,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             // Arrange
             var executionId = Guid.NewGuid().ToString("N");
             var step = CreateReadyStep("step-1", claimTimeoutSeconds: 30);
-            step.MaxRetries = 1;
-            step.RetryDelayMs = 1000;
+            step.Retry = new AiRetryPolicyDefinition
+            {
+                Policies = new[] { "retry.transient.default" },
+                MaxRetries = 1,
+                MaxDelayMs = 1000
+            };
 
             await CreateExecutionAsync(executionId, step);
 
@@ -207,7 +212,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             reloadedStep.ClaimToken.Should().BeNull();
             reloadedStep.ClaimedAtUtc.Should().BeNull();
             reloadedStep.LeaseExpiresAtUtc.Should().BeNull();
-            reloadedStep.RetryCount.Should().Be(1);
+            reloadedStep.RetryState.Should().NotBeNull();
+            reloadedStep.RetryState!.RetryCount.Should().Be(1);
         }
 
         /// <summary>

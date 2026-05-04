@@ -14,6 +14,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
@@ -112,8 +113,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step = stateWriter.GetOrCreateStep(state!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-                Assert.Equal(1, step.RetryCount);
-                Assert.NotNull(step.NextRetryAtUtc);
+                Assert.Equal(1, step?.RetryState?.RetryCount);
+                Assert.NotNull(step?.RetryState?.NextRetryAtUtc);
                 Assert.Null(step.ClaimedBy);
                 Assert.Null(step.ClaimToken);
             }
@@ -153,9 +154,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step = stateWriter.GetOrCreateStep(state!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-                Assert.Equal(1, step.RetryCount);
-                Assert.NotNull(step.NextRetryAtUtc);
-                Assert.True(step.NextRetryAtUtc > DateTime.UtcNow);
+                Assert.Equal(1, step?.RetryState?.RetryCount);
+                Assert.NotNull(step?.RetryState?.NextRetryAtUtc);
+                Assert.True(step?.RetryState?.NextRetryAtUtc > DateTime.UtcNow);
             }
             finally
             {
@@ -187,7 +188,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var retryStep = stateWriter.GetOrCreateStep(beforeRetry!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, retryStep.Status);
-                Assert.NotNull(retryStep.NextRetryAtUtc);
+                Assert.NotNull(retryStep?.RetryState?.NextRetryAtUtc);
 
                 await WaitForRetryWindowAsync(
                     dagStore,
@@ -203,8 +204,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = stateWriter.GetOrCreateStep(finalState!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.Completed, finalStep.Status);
-                Assert.Equal(1, finalStep.RetryCount);
-                Assert.Null(finalStep.NextRetryAtUtc);
+                Assert.Equal(1, finalStep?.RetryState?.RetryCount);
+                Assert.Null(finalStep?.RetryState?.NextRetryAtUtc);
 
                 var finalRecord = await dagStore.GetRecordAsync(created.ExecutionId);
                 Assert.NotNull(finalRecord);
@@ -266,8 +267,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = stateWriter.GetOrCreateStep(finalState!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
-                Assert.Equal(finalStep.MaxRetries, finalStep.RetryCount);
-                Assert.Null(finalStep.NextRetryAtUtc);
+                Assert.Equal(finalStep?.Retry?.MaxRetries, finalStep?.RetryState?.RetryCount);
+                Assert.Null(finalStep?.RetryState?.NextRetryAtUtc);
             }
             finally
             {
@@ -304,7 +305,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 ClaimedAtUtc = DateTime.UtcNow.AddMinutes(-10),
                 LeaseExpiresAtUtc = DateTime.UtcNow.AddMinutes(-9),
                 ClaimTimeoutSeconds = 30,
-                RetryCount = 1,
+                RetryState = new AiStepRetryState
+                {
+                    RetryCount = 1
+                },
                 RecoveryCount = 0
             };
 
@@ -327,8 +331,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Null(step.ClaimToken);
                 Assert.Null(step.ClaimedAtUtc);
                 Assert.Null(step.LeaseExpiresAtUtc);
-                Assert.Equal(1, step.RetryCount);
-                Assert.Equal(1, step.RecoveryCount);
+                Assert.Equal(1, step?.RetryState?.RetryCount);
+                Assert.Equal(1, step?.RecoveryCount);
             }
             finally
             {
@@ -351,11 +355,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         private static async Task WaitForRetryWindowAsync(
-            IAiDagExecutionStore dagStore,
-            IAiExecutionStateWriter stateWriter,
-            string executionId,
-            string stepName,
-            CancellationToken cancellationToken = default)
+    IAiDagExecutionStore dagStore,
+    IAiExecutionStateWriter stateWriter,
+    string executionId,
+    string stepName,
+    CancellationToken cancellationToken = default)
         {
             for (var i = 0; i < 50; i++)
             {
@@ -367,15 +371,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.NextRetryAtUtc.HasValue)
+                // SI step terminé → sortir
+                if (step.Status == AiStepExecutionStatus.Failed ||
+                    step.Status == AiStepExecutionStatus.Completed)
                 {
                     return;
                 }
 
-                var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var nextRetryAtUtc = step.RetryState?.NextRetryAtUtc;
+
+                // plus de retry → sortir
+                if (!nextRetryAtUtc.HasValue)
+                {
+                    return;
+                }
+
+                var delay = nextRetryAtUtc.Value - DateTime.UtcNow;
 
                 if (delay <= TimeSpan.Zero)
                 {
+                    // fenêtre ouverte
                     return;
                 }
 
@@ -383,10 +398,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     ? delay
                     : TimeSpan.FromMilliseconds(25);
 
-                if (wait > TimeSpan.Zero)
-                {
-                    await Task.Delay(wait, cancellationToken);
-                }
+                await Task.Delay(wait, cancellationToken);
             }
 
             throw new TimeoutException(
@@ -486,7 +498,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 

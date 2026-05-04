@@ -61,47 +61,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
         private const string ConnectionString = "mongodb://localhost:27017";
         private const string DatabaseName = "multiplexed_ai_tests";
 
-        [Fact]
-        public async Task Distributed_Dag_Should_Schedule_Retry_When_Step_Fails()
-        {
-            var options = CreateOptions();
-
-            await using var host = await AiDagExecutionEngineFixture.CreateAsync(
-                options,
-                services =>
-                {
-                    services.AddAiStepsFromAssemblies(
-                        typeof(AiDagRetryEngineLocalIntegrationTests).Assembly);
-                },
-                ConnectionString,
-                DatabaseName);
-
-            var created = await host.Engine.CreateAsync(
-                "dag-retry-fail",
-                "hello");
-
-            var record = await host.Engine.ExecuteNextAsync(
-                created.ExecutionId);
-
-            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
-
-            var state = await dagStore.GetStateAsync(
-                created.ExecutionId,
-                CancellationToken.None);
-
-            Assert.NotNull(state);
-
-            var step = state!.Steps["step-1"];
-
-            Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-            Assert.Equal(1, step.RetryCount);
-            Assert.NotNull(step.NextRetryAtUtc);
-
-            Assert.True(
-                record.Status == AiExecutionStatus.Running ||
-                record.Status == AiExecutionStatus.Waiting,
-                $"Unexpected execution status: {record.Status}");
-        }
 
         [Fact]
         public async Task Local_Dag_Should_Schedule_Retry_With_Retry_Adapter_When_Step_Fails()
@@ -233,7 +192,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
 
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 

@@ -111,8 +111,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             foreach (var step in finalState.Steps.Values)
             {
                 Assert.True(
-                    step.RetryCount <= step.MaxRetries,
-                    $"Step '{step.StepName}' exceeded retry budget. RetryCount='{step.RetryCount}', MaxRetries='{step.MaxRetries}'.");
+                    step.RetryState?.RetryCount <= step.Retry?.MaxRetries,
+                    $"Step '{step.StepName}' exceeded retry budget. RetryCount='{step.RetryState?.RetryCount}', MaxRetries='{step.Retry?.MaxRetries}'.");
             }
 
             var completedStepsFromState = finalState.Steps.Values
@@ -687,7 +687,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     : $"[{string.Join(", ", s.DependsOn)}]";
 
                 Console.WriteLine(
-                    $"Step={s.StepName}, Status={s.Status}, DependsOn={dependsOn}, RetryCount={s.RetryCount}");
+                    $"Step={s.StepName}, Status={s.Status}, DependsOn={dependsOn}, RetryCount={s.RetryState?.RetryCount}");
             }
         }
     }

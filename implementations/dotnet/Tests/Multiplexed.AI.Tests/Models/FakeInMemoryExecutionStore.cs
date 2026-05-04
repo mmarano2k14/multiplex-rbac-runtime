@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Stores;
 using System.Collections.Concurrent;
 
@@ -137,7 +138,10 @@ public sealed class FakeInMemoryExecutionStore : IAiExecutionStore
             StartedAtUtc = source.StartedAtUtc,
             CompletedAtUtc = source.CompletedAtUtc,
             Error = source.Error,
-            RetryCount = source.RetryCount,
+            RetryState = new AiStepRetryState
+            {
+                RetryCount = source.RetryState?.RetryCount ?? 0
+            },
             Result = CloneStepResult(source.Result)
         };
 

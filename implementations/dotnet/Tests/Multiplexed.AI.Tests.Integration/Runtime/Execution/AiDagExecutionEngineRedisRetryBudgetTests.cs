@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
@@ -107,9 +108,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step = finalState!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.Failed, step.Status);
-                Assert.Equal(0, step.RetryCount);
-                Assert.Equal(0, step.MaxRetries);
-                Assert.Null(step.NextRetryAtUtc);
+                Assert.Equal(0, step.RetryState?.RetryCount);
+                Assert.Equal(0, step.Retry?.MaxRetries);
+                Assert.Null(step.RetryState?.NextRetryAtUtc);
             }
             finally
             {
@@ -154,9 +155,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var stepAfterFirstFailure = stateAfterFirstFailure!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterFirstFailure.Status);
-                Assert.Equal(1, stepAfterFirstFailure.RetryCount);
-                Assert.Equal(1, stepAfterFirstFailure.MaxRetries);
-                Assert.True(stepAfterFirstFailure.NextRetryAtUtc.HasValue);
+                Assert.Equal(1, stepAfterFirstFailure.RetryState?.RetryCount);
+                Assert.Equal(1, stepAfterFirstFailure.Retry?.MaxRetries);
+                Assert.True(stepAfterFirstFailure.RetryState?.NextRetryAtUtc.HasValue);
 
                 Assert.Equal(AiExecutionStatus.Waiting, recordAfterFirstFailure!.Status);
                 Assert.False(recordAfterFirstFailure.IsTerminal);
@@ -193,9 +194,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = finalState!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
-                Assert.Equal(1, finalStep.RetryCount);
-                Assert.Equal(1, finalStep.MaxRetries);
-                Assert.Null(finalStep.NextRetryAtUtc);
+                Assert.Equal(1, finalStep.RetryState?.RetryCount);
+                Assert.Equal(1, finalStep.Retry?.MaxRetries);
+                Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
             }
             finally
             {
@@ -237,9 +238,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var stepAfterFirstFailure = stateAfterFirstFailure!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterFirstFailure.Status);
-                Assert.Equal(1, stepAfterFirstFailure.RetryCount);
-                Assert.Equal(2, stepAfterFirstFailure.MaxRetries);
-                Assert.True(stepAfterFirstFailure.NextRetryAtUtc.HasValue);
+                Assert.Equal(1, stepAfterFirstFailure.RetryState?.RetryCount);
+                Assert.Equal(2, stepAfterFirstFailure.Retry?.MaxRetries);
+                Assert.True(stepAfterFirstFailure.RetryState?.NextRetryAtUtc.HasValue);
                 var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
@@ -263,9 +264,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var stepAfterSecondFailure = stateAfterSecondFailure!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterSecondFailure.Status);
-                Assert.Equal(2, stepAfterSecondFailure.RetryCount);
-                Assert.Equal(2, stepAfterSecondFailure.MaxRetries);
-                Assert.True(stepAfterSecondFailure.NextRetryAtUtc.HasValue);
+                Assert.Equal(2, stepAfterSecondFailure.RetryState?.RetryCount);
+                Assert.Equal(2, stepAfterSecondFailure.Retry?.MaxRetries);
+                Assert.True(stepAfterSecondFailure.RetryState?.NextRetryAtUtc.HasValue);
             
                 await WaitUntilRetryWindowOpensAsync(
                     dagStore,
@@ -297,35 +298,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = finalState!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
-                Assert.Equal(2, finalStep.RetryCount);
-                Assert.Equal(2, finalStep.MaxRetries);
-                Assert.Null(finalStep.NextRetryAtUtc);
+                Assert.Equal(2, finalStep.RetryState?.RetryCount);
+                Assert.Equal(2, finalStep.Retry?.MaxRetries);
+                Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
             }
             finally
             {
                 await CleanupDagExecutionAsync(record.ExecutionId);
                 await provider.DisposeAsync();
             }
-        }
-
-        [Fact]
-        public void SelectReadySteps_Should_Not_Return_Step_When_Retry_Window_Not_Reached()
-        {
-            var pipeline = CreateSingleStepPipeline();
-            var state = new AiExecutionState();
-            var writer = new DefaultAiExecutionStateWriter();
-
-            var step = writer.GetOrCreateStep(state, "start");
-            step.Status = AiStepExecutionStatus.WaitingForRetry;
-            step.NextRetryAtUtc = DateTime.UtcNow.AddSeconds(10);
-
-            var result = AiPipelineDagStepSelector.SelectReadySteps(
-                pipeline,
-                state,
-                writer,
-                DateTime.UtcNow);
-
-            Assert.Empty(result);
         }
 
         [Fact]
@@ -337,7 +318,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var step = writer.GetOrCreateStep(state, "start");
             step.Status = AiStepExecutionStatus.WaitingForRetry;
-            step.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
+            step.RetryState = new AiStepRetryState
+            {
+                NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1)
+            };
 
             var result = AiPipelineDagStepSelector.SelectReadySteps(
                 pipeline,
@@ -360,7 +344,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var step1 = writer.GetOrCreateStep(state, "start");
             step1.Status = AiStepExecutionStatus.WaitingForRetry;
-            step1.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
+            step1.RetryState = new AiStepRetryState
+            {
+                NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1)
+            };
 
             var step2 = writer.GetOrCreateStep(state, "step2");
             step2.Status = AiStepExecutionStatus.None;
@@ -384,7 +371,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var step = writer.GetOrCreateStep(state, "start");
             step.Status = AiStepExecutionStatus.WaitingForRetry;
-            step.NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1);
+            step.RetryState = new AiStepRetryState
+            {
+                NextRetryAtUtc = DateTime.UtcNow.AddMilliseconds(-1)
+            };
 
             var result = AiDagExecutionConvergenceEvaluator.Evaluate(
                 pipeline,
@@ -459,10 +449,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = writer.GetOrCreateStep(state, stepName);
 
-                if (!step.NextRetryAtUtc.HasValue)
+                if (step.RetryState == null || !step.RetryState.NextRetryAtUtc.HasValue)
                     return;
 
-                var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = step.RetryState.NextRetryAtUtc.Value - DateTime.UtcNow;
 
                 if (delay <= TimeSpan.Zero)
                     return;

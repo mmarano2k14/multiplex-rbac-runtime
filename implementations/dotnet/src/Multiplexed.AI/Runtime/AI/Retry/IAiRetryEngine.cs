@@ -80,5 +80,16 @@ namespace Multiplexed.AI.Runtime.AI.Retry
             Exception? exception,
             DateTime utcNow,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resolves the retry policy definition for the current step context.
+        /// </summary>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>
+        /// The resolved retry policy definition, or the default retry definition when no retry
+        /// configuration is available.
+        /// </returns>
+        Task<AiRetryPolicyDefinition> ResolveRetryDefinitionAsync(
+            CancellationToken cancellationToken = default);
     }
 }

@@ -230,10 +230,7 @@ namespace Multiplexed.AI.Runtime.Execution.State
             stepState.SetInputs(stepDefinition.Input);
             stepState.SetConfig(stepDefinition.Config);
 
-#pragma warning disable CS0618
-            stepState.MaxRetries = stepDefinition.MaxRetries;
-            stepState.RetryDelay = TimeSpan.FromMilliseconds(stepDefinition.RetryDelayMs);
-#pragma warning restore CS0618
+            // REHYDRATE ???
 
             stepState.Retry = _retryDefinitionResolver?.Resolve(stepState.Config);
 

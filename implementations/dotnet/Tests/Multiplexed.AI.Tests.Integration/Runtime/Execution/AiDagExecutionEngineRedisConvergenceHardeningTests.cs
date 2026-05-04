@@ -95,7 +95,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(AiExecutionStatus.Waiting, persistedRecord!.Status);
 
                 Assert.False(persistedRecord.IsTerminal);
-                Assert.True(step.NextRetryAtUtc.HasValue);
+                Assert.True(step.RetryState?.NextRetryAtUtc.HasValue);
             }
             finally
             {
@@ -234,12 +234,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.NextRetryAtUtc.HasValue)
+                if (!step.RetryState?.NextRetryAtUtc.HasValue ?? true   )
                 {
                     return;
                 }
 
-                var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = step.RetryState!.NextRetryAtUtc.Value - DateTime.UtcNow;
                 if (delay <= TimeSpan.Zero)
                 {
                     return;

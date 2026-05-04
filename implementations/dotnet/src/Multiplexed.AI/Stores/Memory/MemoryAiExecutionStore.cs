@@ -271,12 +271,7 @@ namespace Multiplexed.AI.Stores.Memory
                 Duration = source.Duration,
 
                 Error = source.Error,
-
-                RetryCount = source.RetryCount,
                 RecoveryCount = source.RecoveryCount,
-                MaxRetries = source.MaxRetries,
-                NextRetryAtUtc = source.NextRetryAtUtc,
-                RetryDelayMs = source.RetryDelayMs,
 
                 Retry = source.Retry,
                 RetryState = source.RetryState is null

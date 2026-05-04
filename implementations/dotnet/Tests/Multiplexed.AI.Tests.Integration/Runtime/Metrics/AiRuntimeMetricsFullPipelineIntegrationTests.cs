@@ -520,7 +520,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Metrics
         {
             var nextRetryAtUtc = state.Steps.Values
                 .Where(x => x.Status == AiStepExecutionStatus.WaitingForRetry)
-                .Select(x => x.NextRetryAtUtc)
+                .Select(x => x.RetryState?.NextRetryAtUtc)
                 .Where(x => x.HasValue)
                 .Select(x => x!.Value)
                 .OrderBy(x => x)

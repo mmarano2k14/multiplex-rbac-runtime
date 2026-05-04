@@ -105,8 +105,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step1 = stateAfterWave1!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step1.Status);
-                Assert.Equal(1, step1.RetryCount);
-                Assert.True(step1.NextRetryAtUtc.HasValue);
+                Assert.Equal(1, step1.RetryState?.RetryCount);
+                Assert.True(step1.RetryState?.NextRetryAtUtc.HasValue);
 
                 // Exactly one real execution attempt should have happened.
                 Assert.Equal(1, tracker.Count);
@@ -138,7 +138,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var stepBeforeRetry = stateBeforeRetry!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepBeforeRetry.Status);
-                Assert.Equal(1, stepBeforeRetry.RetryCount);
+                Assert.Equal(1, stepBeforeRetry.RetryState?.RetryCount);
 
                 // Still only one execution.
                 Assert.Equal(1, tracker.Count);
@@ -233,7 +233,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(0, finalStep.RecoveryCount);
 
                 // Retry budget should have been consumed by business failures.
-                Assert.True(finalStep.RetryCount >= 1);
+                Assert.True(finalStep.RetryState?.RetryCount >= 1);
 
                 // No active step should remain once terminal failure has converged.
                 Assert.DoesNotContain(
@@ -298,8 +298,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step1 = state1!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step1.Status);
-                Assert.Equal(1, step1.RetryCount);
-                Assert.True(step1.NextRetryAtUtc.HasValue);
+                Assert.Equal(1, step1.RetryState?.RetryCount);
+                Assert.True(step1.RetryState?.NextRetryAtUtc.HasValue);
 
                 Assert.Equal(1, tracker.Count);
 
@@ -384,7 +384,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step1 = state1!.Steps["start"];
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step1.Status);
-                Assert.Equal(1, step1.RetryCount);
+                Assert.Equal(1, step1.RetryState?.RetryCount);
                 Assert.Equal(1, tracker.Count);
 
                 await ParallelRunWorkersAsync(10, async () =>
@@ -578,12 +578,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.NextRetryAtUtc.HasValue)
+                if (!step.RetryState?.NextRetryAtUtc.HasValue ?? true)
                 {
                     return;
                 }
 
-                var delay = step.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = step.RetryState!.NextRetryAtUtc.Value - DateTime.UtcNow;
                 if (delay <= TimeSpan.Zero)
                 {
                     return;

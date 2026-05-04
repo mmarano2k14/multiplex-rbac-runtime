@@ -556,7 +556,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var classifier = new DefaultAiRetryExceptionClassifier();
 
             var dataPolicy = new InlineAiExecutionDataPolicy();
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 
@@ -846,7 +846,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 

@@ -64,7 +64,7 @@ namespace Multiplexed.AI.Stores.Cache
         /// IMPORTANT:
         /// - Step names are sorted for deterministic ordering across workers
         /// - DependsOn is normalized so empty arrays remain arrays and not objects
-        /// - When a retry-waiting step is claimed again, NextRetryAtUtc is cleared
+        /// - When a retry-waiting step is claimed again, RetryState.NextRetryAtUtc is cleared
         ///   because the retry window has already been consumed
         /// - nowUnix is expressed in milliseconds
         /// - LeaseExpiresAtUtc is computed once at claim time and becomes the
@@ -113,10 +113,14 @@ namespace Multiplexed.AI.Stores.Cache
                     end
 
                     if step.Status == "WaitingForRetry" then
-                        if step.NextRetryAtUtc == nil or step.NextRetryAtUtc == cjson.null then
+                        local retryState = step.RetryState
+
+                        if retryState == nil or retryState == cjson.null then
+                            canRun = false
+                        elseif retryState.NextRetryAtUtc == nil or retryState.NextRetryAtUtc == cjson.null then
                             canRun = true
                         else
-                            local nextRetryAtUtc = tonumber(step.NextRetryAtUtc)
+                            local nextRetryAtUtc = tonumber(retryState.NextRetryAtUtc)
 
                             if nextRetryAtUtc ~= nil and nextRetryAtUtc <= nowUnix then
                                 canRun = true
@@ -150,7 +154,10 @@ namespace Multiplexed.AI.Stores.Cache
                         step.ClaimedBy = workerId
                         step.ClaimToken = claimToken
                         step.ClaimedAtUtc = nowUnix
-                        step.NextRetryAtUtc = cjson.null
+
+                        if step.RetryState ~= nil and step.RetryState ~= cjson.null then
+                            step.RetryState.NextRetryAtUtc = cjson.null
+                        end
 
                         local timeoutSeconds = tonumber(step.ClaimTimeoutSeconds)
                         if timeoutSeconds ~= nil and timeoutSeconds > 0 then
@@ -239,7 +246,11 @@ namespace Multiplexed.AI.Stores.Cache
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
             step.LeaseExpiresAtUtc = cjson.null
-            step.NextRetryAtUtc = cjson.null
+
+            if step.RetryState ~= nil and step.RetryState ~= cjson.null then
+                step.RetryState.NextRetryAtUtc = cjson.null
+            end
+
             step.Version = (step.Version or 0) + 1
             step.DependsOn = normalize_array(step.DependsOn)
 
@@ -256,18 +267,21 @@ namespace Multiplexed.AI.Stores.Cache
         /// - claim token must match current ownership
         ///
         /// RETRY BEHAVIOR:
+        /// - retry configuration is read from step.Retry
+        /// - mutable retry execution state is stored in step.RetryState
         /// - if retry budget remains:
-        ///   -> increment RetryCount
+        ///   -> increment RetryState.RetryCount
         ///   -> move to WaitingForRetry
-        ///   -> schedule NextRetryAtUtc using RetryDelayMs
+        ///   -> schedule RetryState.NextRetryAtUtc
+        ///   -> mirror NextRetryAtUtc on the step for claim eligibility
         /// - otherwise:
         ///   -> move to terminal Failed
         ///
         /// IMPORTANT:
         /// - nowUnix is expressed in milliseconds
-        /// - RetryDelayMs is expressed in milliseconds
         /// - LeaseExpiresAtUtc is cleared because the running claim is terminated
         ///   regardless of whether the step becomes WaitingForRetry or Failed
+        /// - obsolete direct retry fields must not be used here
         /// </summary>
         private static readonly LuaScript FailPreparedScript = LuaScript.Prepare(
             """
@@ -298,7 +312,7 @@ namespace Multiplexed.AI.Stores.Cache
                 return 0
             end
 
-            if not (step.Status == "Running" or step.Status == 2) then
+            if step.Status ~= "Running" then
                 return 0
             end
 
@@ -306,10 +320,44 @@ namespace Multiplexed.AI.Stores.Cache
                 return 0
             end
 
-            local retryCount = tonumber(step.RetryCount) or 0
-            local maxRetries = tonumber(step.MaxRetries) or 3
-            local retryDelayMs = tonumber(step.RetryDelayMs) or 0
             local nowUnix = tonumber(@nowUnix)
+
+            local retryState = step.RetryState
+            if retryState == nil or retryState == cjson.null then
+                retryState = {}
+            end
+
+            local retryDefinition = step.Retry
+
+            if retryDefinition == nil or retryDefinition == cjson.null then
+                if step.Config ~= nil and step.Config ~= cjson.null then
+                    retryDefinition = step.Config.retry or step.Config.Retry
+                end
+            end
+
+            if retryDefinition == nil or retryDefinition == cjson.null then
+                retryDefinition = {}
+            end
+
+            local retryCount = tonumber(retryState.RetryCount) or 0
+            local maxRetries = tonumber(retryDefinition.MaxRetries or retryDefinition.maxRetries) or 3
+            local baseDelayMs = tonumber(retryDefinition.BaseDelayMs or retryDefinition.baseDelayMs) or 500
+            local maxDelayMs = tonumber(retryDefinition.MaxDelayMs or retryDefinition.maxDelayMs)
+            local strategy = retryDefinition.Strategy or retryDefinition.strategy or "Fixed"
+
+            local retryDelayMs = baseDelayMs
+
+            if strategy == "Exponential" or strategy == "exponential" then
+                retryDelayMs = baseDelayMs * (2 ^ retryCount)
+            end
+
+            if maxDelayMs ~= nil and retryDelayMs > maxDelayMs then
+                retryDelayMs = maxDelayMs
+            end
+
+            if retryDelayMs < 0 then
+                retryDelayMs = 0
+            end
 
             step.Error = @error
             step.UpdatedAtUtc = nowUnix
@@ -320,9 +368,17 @@ namespace Multiplexed.AI.Stores.Cache
 
             if retryCount < maxRetries then
                 retryCount = retryCount + 1
-                step.RetryCount = retryCount
+
+                local nextRetryAtUtc = nowUnix + retryDelayMs
+
+                retryState.RetryCount = retryCount
+                retryState.RetryReason = @error
+                retryState.LastRetryAtUtc = nowUnix
+                retryState.NextRetryAtUtc = nextRetryAtUtc
+
+                step.RetryState = retryState
                 step.Status = "WaitingForRetry"
-                step.NextRetryAtUtc = nowUnix + retryDelayMs
+                step.CompletedAtUtc = cjson.null
                 step.Version = (step.Version or 0) + 1
                 step.DependsOn = normalize_array(step.DependsOn)
 
@@ -332,7 +388,10 @@ namespace Multiplexed.AI.Stores.Cache
 
             step.Status = "Failed"
             step.CompletedAtUtc = nowUnix
-            step.NextRetryAtUtc = cjson.null
+
+            retryState.NextRetryAtUtc = cjson.null
+            step.RetryState = retryState
+
             step.Version = (step.Version or 0) + 1
             step.DependsOn = normalize_array(step.DependsOn)
 
@@ -949,7 +1008,7 @@ namespace Multiplexed.AI.Stores.Cache
         /// This method is retry-aware. A successful failure mutation may result in:
         /// - WaitingForRetry
         /// - Failed
-        /// depending on RetryCount / MaxRetries.
+        /// depending on RetryState.RetryCount / Retry.MaxRetries.
         ///
         /// - nowUnix is expressed in milliseconds
         /// - the running lease is cleared atomically with failure handling

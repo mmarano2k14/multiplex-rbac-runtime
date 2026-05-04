@@ -26,10 +26,10 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
             throw new InvalidOperationException(
                 $"Intentional retry test failure. " +
                 $"Step='{context.Step.Name}', " +
-                $"RetryCount={stepState.RetryCount}, " +
-                $"MaxRetries={stepState.MaxRetries}, " +
+                $"RetryCount={stepState.RetryState?.RetryCount ?? 0}, " +
+                $"MaxRetries={stepState.Retry?.MaxRetries ?? 0}, " +
                 $"Status={stepState.Status}, " +
-                $"NextRetryAtUtc={stepState.NextRetryAtUtc?.ToString("O") ?? "null"}.");
+                $"NextRetryAtUtc={stepState.RetryState?.NextRetryAtUtc?.ToString("O") ?? "null"}.");
         }
     }
 }

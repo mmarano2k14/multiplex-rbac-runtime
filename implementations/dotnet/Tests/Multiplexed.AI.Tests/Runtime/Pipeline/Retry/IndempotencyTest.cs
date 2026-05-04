@@ -34,7 +34,7 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
             IAiRetryExceptionClassifier classifier = new DefaultAiRetryExceptionClassifier();
             IAiRuntimeLogger logger = new NoopLogger();
 
-            var executor = new AiStepExecutor(classifier, logger);
+            var executor = new AiStepExecutor(logger);
 
             var record = new AiExecutionRecord();
 

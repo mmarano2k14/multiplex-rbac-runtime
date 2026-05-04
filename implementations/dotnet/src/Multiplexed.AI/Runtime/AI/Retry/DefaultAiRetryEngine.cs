@@ -17,18 +17,18 @@ namespace Multiplexed.AI.Runtime.AI.Retry
     /// <remarks>
     /// This engine is step-scoped and policy-driven.
     ///
-    /// It has two responsibilities:
-    /// <list type="number">
-    /// <item>
-    /// <description>Compute retry decisions from retry policies and retry configuration.</description>
-    /// </item>
-    /// <item>
-    /// <description>Apply retry decisions to the failed step state when used through <see cref="HandleFailureAsync"/>.</description>
-    /// </item>
-    /// </list>
+    /// RESPONSIBILITIES:
+    /// - Resolve retry configuration from the current step context.
+    /// - Apply fallback retry configuration when none is provided.
+    /// - Execute retry policies.
+    /// - Compute the final retry decision.
+    /// - Apply the retry decision to <see cref="AiStepState.RetryState"/>.
     ///
-    /// The engine is created per step execution through the policy engine factory.
-    /// It must not be reused across unrelated step executions.
+    /// IMPORTANT:
+    /// - Retry configuration is stored in <see cref="AiStepState.Retry"/>.
+    /// - Mutable retry runtime state is stored in <see cref="AiStepState.RetryState"/>.
+    /// - This engine does not use obsolete direct retry fields on <see cref="AiStepState"/>.
+    /// - Distributed Redis/Lua execution must use the same Retry / RetryState model.
     /// </remarks>
     [AiPolicyEngine(AiPolicyKind.Retry)]
     public sealed class DefaultAiRetryEngine : AiPolicyEngine, IAiRetryEngine
@@ -41,7 +41,9 @@ namespace Multiplexed.AI.Runtime.AI.Retry
             Policies = new[] { "retry.transient.default" },
             MaxRetries = 3,
             Strategy = AiRetryBackoffStrategy.Fixed,
-            BaseDelayMs = 500
+            BaseDelayMs = 500,
+            MaxDelayMs = null,
+            Jitter = false
         };
 
         /// <summary>
@@ -60,7 +62,8 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         public override AiPolicyKind Kind => AiPolicyKind.Retry;
 
         /// <summary>
-        /// Handles a failed step by computing and applying retry behavior.
+        /// Handles a failed step by resolving retry configuration, computing a retry decision,
+        /// and applying that decision to the mutable step state.
         /// </summary>
         /// <param name="stepState">The failed step state.</param>
         /// <param name="error">The failure message.</param>
@@ -69,11 +72,12 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The retry decision that was computed and applied.</returns>
         /// <remarks>
-        /// This is the method intended for the DAG engine.
+        /// This method is intended for local orchestration paths.
         ///
-        /// It resolves the retry configuration, rehydrates <see cref="AiStepState.Retry"/>
-        /// for compatibility and observability, builds the retry context, computes the decision,
-        /// and applies the resulting state transition.
+        /// Distributed DAG execution uses the Redis/Lua store for atomic retry mutation.
+        /// Both paths must remain aligned around the same state model:
+        /// <see cref="AiStepState.Retry"/> for configuration and
+        /// <see cref="AiStepState.RetryState"/> for mutable runtime retry state.
         /// </remarks>
         public async Task<AiRetryDecision> HandleFailureAsync(
             AiStepState stepState,
@@ -145,6 +149,23 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         }
 
         /// <summary>
+        /// Creates the default retry definition used when a step does not define retry configuration.
+        /// </summary>
+        /// <returns>The default retry policy definition.</returns>
+        private static AiRetryPolicyDefinition CreateDefaultRetryDefinition()
+        {
+            return new AiRetryPolicyDefinition
+            {
+                Policies = new[] { "retry.transient.default" },
+                MaxRetries = 3,
+                Strategy = AiRetryBackoffStrategy.Fixed,
+                BaseDelayMs = 500,
+                MaxDelayMs = null,
+                Jitter = false
+            };
+        }
+
+        /// <summary>
         /// Computes a retry decision using a pre-resolved retry policy definition.
         /// </summary>
         /// <param name="retryContext">The retry context evaluated by retry policies.</param>
@@ -202,12 +223,12 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         }
 
         /// <summary>
-        /// Resolves retry configuration from the step context and applies the default retry
-        /// definition when no configuration is available.
+        /// Resolves retry configuration from the current step context and falls back to
+        /// the default retry definition when no retry configuration is available.
         /// </summary>
         /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The resolved retry policy definition.</returns>
-        private async Task<AiRetryPolicyDefinition> ResolveRetryDefinitionAsync(
+        public async Task<AiRetryPolicyDefinition> ResolveRetryDefinitionAsync(
             CancellationToken cancellationToken)
         {
             var retryDefinition = await ResolvePolicyDefinitionAsync<AiRetryPolicyDefinition>(
@@ -275,9 +296,6 @@ namespace Multiplexed.AI.Runtime.AI.Retry
             stepState.RetryState.RetryReason = decision.Reason;
             stepState.RetryState.LastRetryAtUtc = utcNow;
             stepState.RetryState.NextRetryAtUtc = nextRetryAtUtc;
-
-            stepState.RetryCount = stepState.RetryState.RetryCount;
-            stepState.NextRetryAtUtc = nextRetryAtUtc;
 
             stepState.MarkWaitingForRetry(error, nextRetryAtUtc);
         }

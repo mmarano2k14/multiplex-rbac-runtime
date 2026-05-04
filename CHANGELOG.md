@@ -8,6 +8,42 @@ This project follows a deterministic runtime and observability model designed fo
 
 ## [Unreleased]
 
+### 🚀 Added
+- Introduced distributed retry system based on PolicyEngine + RetryEngine
+- Added `config.retry` as the unified retry configuration model
+- Added strict validation for retry configuration
+- Added integration tests covering:
+  - Missing retry config
+  - Invalid retry config
+  - Retry hydration into step state
+  - Config persistence in execution state
+
+### 🔧 Changed
+- Retry execution moved from local in-process loops to distributed state-driven model
+- Step executor now performs a single execution (no retry logic)
+- Retry decisions are now policy-driven and context-based
+- Retry scheduling is persisted via `AiStepRetryState` and enforced through Redis/Lua
+- Step initialization now uses `ResolvedAiPipelineStep.Config` as source of truth
+
+### 🐛 Fixed
+- Fixed silent fallback to default retry values (`MaxRetries = 3`)
+- Fixed incorrect retry hydration due to missing config mapping
+- Fixed inconsistency between JSON pipeline definition and runtime behavior
+
+### 💥 Breaking Changes
+- Removed legacy retry system based on `execution.maxRetries`
+- Removed local retry loops (`while` retry pattern)
+- Retry must now be explicitly defined under `config.retry`
+- Pipelines without valid retry configuration will now fail at creation time
+
+### 🧠 Notes
+- This change introduces a deterministic, observable, and distributed retry model
+- Aligns retry behavior with multi-worker and DAG execution architecture
+
+---
+
+## [Unreleased]
+
 ### 🚀 Refactor - Retry Engine
 
 - Introduced policy-driven retry engine (`IAiRetryEngine`)

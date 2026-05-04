@@ -21,12 +21,12 @@ namespace Multiplexed.AI.Runtime.Pipeline.Steps.Test
 
             return Task.FromResult(
                 AiStepResult.Ok(
-                    output: $"RetryCount={stepState.RetryCount}",
+                    output: $"RetryCount={stepState.RetryState?.RetryCount ?? 0}",
                     data: new Dictionary<string, object?>
                     {
-                        ["retryCount"] = context.StepState.RetryCount,
+                        ["retryCount"] = context.StepState.RetryState?.RetryCount ?? 0,
                         ["status"] = context.StepState.Status.ToString(),
-                        ["nextRetry"] = context.StepState.NextRetryAtUtc
+                        ["nextRetry"] = context.StepState.RetryState?.NextRetryAtUtc
                     }));
         }
     }

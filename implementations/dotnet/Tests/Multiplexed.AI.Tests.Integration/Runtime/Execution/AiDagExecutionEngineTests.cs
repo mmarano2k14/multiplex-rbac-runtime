@@ -104,7 +104,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var logger = new NoopLogger();
             var classifier = new DefaultAiRetryExceptionClassifier();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 
