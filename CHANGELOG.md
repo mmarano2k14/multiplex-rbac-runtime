@@ -6,7 +6,7 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [Unreleased]
+## [1.0.4.0] - 2026-05-04 - Config-Driven and Policy-Driven Retry Engine
 
 ### Added
 - Added policy-level observability through `AiPolicyEngine`.
@@ -28,7 +28,7 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [Unreleased]
+## [1.0.3.9] - Config-Driven and Policy-Driven Retry Engine
 
 ### 🚀 Added
 - Introduced distributed retry system based on PolicyEngine + RetryEngine
@@ -64,7 +64,7 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [Unreleased]
+## [1.0.3.8] - Config-Driven and Policy-Driven Retry Engine
 
 ### 🚀 Refactor - Retry Engine
 

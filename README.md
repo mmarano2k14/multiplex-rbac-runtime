@@ -1446,6 +1446,122 @@ These mechanisms ensure that the runtime behaves correctly even with multiple wo
 
 ---
 
+## Config-Driven and Policy-Driven Retry Engine
+
+![AI Step Retry Engine Architecture](docs/images/ai-runtime/ai-runtime-retry-engine.png)
+
+The retry system is now **config-driven and policy-driven**, moving away from traditional local retry loops.
+
+Retry behavior is defined at the step level through `config.retry`.  
+At runtime, the Retry Engine resolves this configuration, extracts the configured policy keys, and delegates decision-making to the Policy Engine.
+
+The Policy Engine executes the policies for the `Retry` kind and returns structured outcomes.  
+The Retry Engine then interprets these results and applies the appropriate state transition.
+
+This introduces a strict separation between **decision logic** and **execution logic**.
+
+### Architecture Responsibilities
+
+- **Policy Registry**  
+  Stores all available policies and maps them by key and kind.
+
+- **Policy Engine**  
+  Resolves and executes policies based on the current execution context and policy kind (`Retry` in this case).
+
+- **Retry Engine**  
+  Interprets policy results and applies retry decisions (retry, delay, fail) to the step state.
+
+- **Redis (Lua scripts)**  
+  Ensures all state transitions are applied atomically across distributed workers.
+
+---
+
+### Example Configuration
+
+```json
+{
+  "config": {
+    "retry": {
+      "policies": [
+        "retry.transient.default",
+        "retry.timeout.default",
+        "retry.rate-limit.default"
+      ],
+      "maxRetries": 2,
+      "baseDelayMs": 500
+    }
+  }
+}
+```
+
+### Execution Flow
+
+```text
+Step failure
+→ Retry Engine
+→ Resolve config.retry
+→ Resolve policy keys from Policy Registry
+→ Execute policies via Policy Engine
+→ Aggregate policy results
+→ Produce retry decision
+→ Apply decision to RetryState
+→ Persist via Redis Lua (atomic)
+```
+### Why This Matters
+
+Retry is no longer:
+
+> “try again if it fails”
+
+It becomes:
+
+> “evaluate the system state and decide what is allowed”
+
+This brings:
+
+- **Deterministic behavior**  
+  Same input state → same retry decision  
+
+- **Explicit logic**  
+  No hidden retry loops inside executors  
+
+- **Extensibility**  
+  New retry strategies can be added without modifying execution code  
+
+- **Distributed safety**  
+  All retry decisions are enforced through atomic state transitions  
+
+---
+
+### Core Design Principles (addition)
+
+Under **6. Failure is a First-Class Concern**:
+
+> Retry is no longer handled through local retry loops.  
+> It is driven by step configuration, evaluated through policies, and applied through distributed state transitions.
+
+---
+
+### Observability, Metrics, and Future Tracing (addition)
+
+Policy execution is fully observable.
+
+The runtime tracks:
+
+- policy execution count per step  
+- policy evaluation latency  
+- retry decision outcomes (**retry / delay / fail**)  
+- retry attempt count and distribution  
+- correlation between failures and policy decisions  
+
+This enables:
+
+- deep debugging of retry behavior  
+- understanding *why* a retry happened (not just that it happened)  
+- future integration with tracing systems (**OpenTelemetry, Grafana, runtime console**)  
+
+---
+
 ### Atomic Claims (Single Ownership)
 
 When multiple workers are running, they may all try to execute the same step.
