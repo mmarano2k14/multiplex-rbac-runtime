@@ -44,5 +44,10 @@
         /// Gets or sets the claim token associated with the step.
         /// </summary>
         public string? ClaimToken { get; set; }
+
+        /// <summary>
+        /// Gets or sets the operation associated with the step.
+        /// </summary>
+        public string? Operation { get; set; }
     }
 }

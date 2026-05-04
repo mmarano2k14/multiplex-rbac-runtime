@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using MongoDB.Driver.Core.Clusters;
+using MongoDB.Driver.Linq;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
@@ -10,8 +11,12 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Abstractions.AI.Policies;
+using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
+using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
@@ -217,6 +222,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             // Seed runtime input into the execution state using the selected overload behavior.
             seedState(state);
 
+            var executionContext = new AiExecutionContext(
+                record,
+                state,
+                Services,
+                _engineServices.StateReader,
+                _engineServices.StateWriter,
+                cancellationToken);
+
             foreach (var step in preparedPipeline.Steps)
             {
 
@@ -227,6 +240,69 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 // without reintroducing global "current step" semantics.
                 var stepState = _engineServices.StateWriter.GetOrCreateStep(state, step.Name);
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
+
+                var stepContext = new AiStepExecutionContext(executionContext, step);
+
+                var retryDefinition = await _engineServices.ObservabilityService.Tracer.TraceStepAsync(
+                    new AiStepTraceContext
+                    {
+                        ExecutionId = record.ExecutionId,
+                        StepId = step.Name,
+                        StepType = "retry.defintion",
+                        Status = "resolving.policy",
+                        WorkerId = Environment.MachineName
+                    },
+                    async () =>
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                        try
+                        {
+                            var definition = await _engineServices.PolicyEngineFactory
+                                .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                                .ResolveRetryDefinitionAsync(cancellationToken);
+
+                            sw.Stop();
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordExecution(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                success: true,
+                                duration: sw.Elapsed
+                            );
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordDecision(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                definition is null
+                                    ? AiPolicyResultKind.Block
+                                    : AiPolicyResultKind.Success
+                            );
+
+                            return definition;
+                        }
+                        catch
+                        {
+                            sw.Stop();
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordExecution(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                success: false,
+                                duration: sw.Elapsed
+                            );
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordFailure(
+                                record.ExecutionId,
+                                "retry.defintion"
+                            );
+
+                            throw;
+                        }
+                    });
+
+                stepState.Retry = retryDefinition;
+                stepState.RetryState ??= new AiStepRetryState();
             }
 
             if (_engineServices.DagStore is not null)
@@ -454,7 +530,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                              StepId = nextStep.Name,
                              StepType = nextStep.Step.GetType().Name,
                              Status = "Running",
-                             RetryCount = stepState.RetryCount,
+                             RetryCount = stepState.RetryState?.RetryCount ?? 0,
                              RecoveryCount = stepState.RecoveryCount,
                              WorkerId = Environment.MachineName,
                              ClaimToken = stepState.ClaimToken
@@ -477,7 +553,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     // Retry-aware local failure:
                     // if retry budget remains, the step transitions to WaitingForRetry;
                     // otherwise it becomes terminally Failed.
-                    stepState.MarkRetryOrFail(ex.Message, DateTime.UtcNow);
+                    await _engineServices.PolicyEngineFactory
+                        .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                        .HandleFailureAsync(
+                            stepState,
+                            ex.Message,
+                            ex,
+                            DateTime.UtcNow,
+                            cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
@@ -486,8 +569,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             nextStep.Name,
-                            stepState.RetryCount,
-                            stepState.NextRetryAtUtc);
+                            stepState.RetryState?.RetryCount ?? 0,
+                            stepState.RetryState?.NextRetryAtUtc);
                     }
 
                     _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
@@ -500,7 +583,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         ex);
 
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] Local step exception applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryCount}', NextRetryAtUtc='{stepState.NextRetryAtUtc}'.");
+                        $"[AI DAG] Local step exception applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryState?.RetryCount ?? 0 }', NextRetryAtUtc='{stepState.RetryState?.NextRetryAtUtc?.ToString("u") ?? ""}'.");
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
@@ -547,7 +630,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 {
                     // Retry-aware local unsuccessful result:
                     // business retry policy is applied through the step state itself.
-                    stepState.MarkRetryOrFail(stepResult.Error, DateTime.UtcNow);
+                    await _engineServices.PolicyEngineFactory
+                        .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                        .HandleFailureAsync(
+                            stepState,
+                            stepResult.Error,
+                            null, 
+                            DateTime.UtcNow,
+                            cancellationToken);
 
                     if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
                     {
@@ -556,8 +646,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             nextStep.Name,
-                            stepState.RetryCount,
-                            stepState.NextRetryAtUtc);
+                            stepState.RetryState?.RetryCount ?? 0,
+                            stepState.RetryState?.NextRetryAtUtc
+                        );
                     }
 
                     _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
@@ -570,7 +661,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         stepResult.Error);
 
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] Local step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryCount}', NextRetryAtUtc='{stepState.NextRetryAtUtc}'.");
+                        $"[AI DAG] Local step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', NewStatus='{stepState.Status}', RetryCount='{stepState.RetryState?.RetryCount}', NextRetryAtUtc='{stepState.RetryState?.NextRetryAtUtc?.ToString("u")}'.");
                 }
                 else
                 {
@@ -942,12 +1033,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             claimed.StepName,
-                            failedStepState.RetryCount,
-                            failedStepState.NextRetryAtUtc);
+                            failedStepState?.RetryState?.RetryCount ?? 0,
+                            failedStepState?.RetryState?.NextRetryAtUtc);
                     }
 
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] Distributed step exception applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.NextRetryAtUtc}'.");
+                        $"[AI DAG] Distributed step exception applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.RetryState?.NextRetryAtUtc?.ToString("u")}'.");
 
                     record.Steps = resolvedPipeline.Steps.Select(x => x.Name).ToList();
 
@@ -1044,12 +1135,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         Logger.Engine.StepRetryScheduled(
                             record.ExecutionId,
                             claimed.StepName,
-                            failedStepState.RetryCount,
-                            failedStepState.NextRetryAtUtc);
+                            failedStepState?.RetryState?.RetryCount ?? 0,
+                            failedStepState?.RetryState?.NextRetryAtUtc);
                     }
 
                     Logger.Engine.LogInformation(
-                        $"[AI DAG] Distributed step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.NextRetryAtUtc}'.");
+                        $"[AI DAG] Distributed step retry/fail applied. ExecutionId='{record.ExecutionId}', StepName='{claimed.StepName}', NewStatus='{failedStepState?.Status}', RetryCount='{failedStepState?.RetryState?.RetryCount}', RecoveryCount='{failedStepState?.RecoveryCount}', NextRetryAtUtc='{failedStepState?.RetryState?.NextRetryAtUtc?.ToString("u")}'.");
 
                     // Keep final authoritative state aligned with what was just persisted.
                     state = failedState;

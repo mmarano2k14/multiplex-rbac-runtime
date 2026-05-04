@@ -87,11 +87,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
 
             Assert.NotNull(waitingStep);
             Assert.True(
-                waitingStep!.RetryCount > 0,
+                waitingStep!.RetryState?.RetryCount > 0,
                 $"Step '{waitingStep.StepName}' should have consumed at least one retry attempt.");
 
             Assert.True(
-                waitingStep.NextRetryAtUtc.HasValue,
+                waitingStep.RetryState.NextRetryAtUtc.HasValue,
                 $"Step '{waitingStep.StepName}' should have a retry schedule.");
 
             Assert.False(
@@ -233,7 +233,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             var retryStep1 = state1.Steps.Values.Single(
                 x => x.Status == AiStepExecutionStatus.WaitingForRetry);
 
-            var retryCountBefore = retryStep1.RetryCount;
+            var retryCountBefore = retryStep1.RetryState?.RetryCount;
 
             // 🔥 Call multiple times BEFORE retry window
             for (int i = 0; i < 3; i++)
@@ -254,7 +254,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
 
             Assert.Equal(
                 retryCountBefore,
-                retryStep2.RetryCount);
+                retryStep2.RetryState?.RetryCount);
         }
 
         /// <summary>
@@ -293,7 +293,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             var step1 = state1.Steps.Values.Single(
                 x => x.Status == AiStepExecutionStatus.WaitingForRetry);
 
-            var retryBefore = step1.RetryCount;
+            var retryBefore = step1.RetryState?.RetryCount;
 
             // Simulate timeout recovery by forcing execution again after delay
             await WaitForRetryWindowIfNeededAsync(state1);
@@ -305,9 +305,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
                 created.ExecutionId);
 
             var step2 = state2.Steps.Values.Single(
-                x => x.RetryCount >= retryBefore);
+                x => x.RetryState?.RetryCount >= retryBefore);
 
-            Assert.True(step2.RetryCount >= retryBefore);
+            Assert.True(step2.RetryState?.RetryCount >= retryBefore);
         }
 
         /// <summary>
@@ -378,8 +378,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
                 foreach (var step in state.Steps.Values)
                 {
                     Assert.True(
-                        step.RetryCount <= step.MaxRetries,
-                        $"Step '{step.StepName}' exceeded retry budget. RetryCount={step.RetryCount}, MaxRetries={step.MaxRetries}");
+                        step.RetryState?.RetryCount <= step.Retry?.MaxRetries,
+                        $"Step '{step.StepName}' exceeded retry budget. RetryCount={step.RetryState?.RetryCount}, MaxRetries={step.Retry.MaxRetries}");
                 }
 
                 if (record.IsTerminal)
@@ -403,8 +403,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             foreach (var step in finalState.Steps.Values)
             {
                 Assert.True(
-                    step.RetryCount <= step.MaxRetries,
-                    $"Step '{step.StepName}' exceeded retry budget. RetryCount={step.RetryCount}, MaxRetries={step.MaxRetries}");
+                    step.RetryState?.RetryCount <= step.Retry?.MaxRetries,
+                    $"Step '{step.StepName}' exceeded retry budget. RetryCount={step.RetryState?.RetryCount}, MaxRetries={step.Retry.MaxRetries}");
             }
 
             Assert.DoesNotContain(
@@ -480,7 +480,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             var retryStepBefore = stateBeforeRecovery.Steps.Values.Single(
                 x => x.Status == AiStepExecutionStatus.WaitingForRetry);
 
-            var retryCountBefore = retryStepBefore.RetryCount;
+            var retryCountBefore = retryStepBefore.RetryState?.RetryCount;
             var recoveryCountBefore = retryStepBefore.RecoveryCount;
 
             var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
@@ -495,7 +495,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
 
             var retryStepAfter = stateAfterRecovery.Steps[retryStepBefore.StepName];
 
-            Assert.Equal(retryCountBefore, retryStepAfter.RetryCount);
+            Assert.Equal(retryCountBefore, retryStepAfter.RetryState?.RetryCount);
 
             Assert.Equal(
                 recoveryCountBefore,
@@ -551,7 +551,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             var step = stateBefore.Steps.Values.Single(x => x.StepName == "start");
 
             step.Status = AiStepExecutionStatus.Running;
-            step.RetryCount = 1;
+            step.RetryState?.RetryCount = 1;
             step.RecoveryCount = 0;
             step.ClaimedBy = "test-worker";
             step.ClaimToken = Guid.NewGuid().ToString("N");
@@ -578,7 +578,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
 
             Assert.Equal(
                 1,
-                recoveredStep.RetryCount);
+                recoveredStep.RetryState?.RetryCount);
 
             Assert.Equal(
                 1,
@@ -625,7 +625,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
         {
             var nextRetryAtUtc = state.Steps.Values
                 .Where(x => x.Status == AiStepExecutionStatus.WaitingForRetry)
-                .Select(x => x.NextRetryAtUtc)
+                .Select(x => x.RetryState?.NextRetryAtUtc)
                 .Where(x => x.HasValue)
                 .Select(x => x!.Value)
                 .OrderBy(x => x)

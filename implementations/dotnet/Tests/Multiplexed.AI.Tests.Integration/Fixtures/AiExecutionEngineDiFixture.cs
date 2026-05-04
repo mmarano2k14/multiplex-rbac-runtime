@@ -118,9 +118,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                     lines.Add(
                         $"Step={step.StepName}, " +
                         $"Status={step.Status}, " +
-                        $"RetryCount={step.RetryCount}, " +
-                        $"MaxRetries={step.MaxRetries}, " +
-                        $"NextRetryAtUtc={step.NextRetryAtUtc}, " +
+                        $"RetryCount={step.RetryState?.RetryCount}, " +
+                        $"MaxRetries={step.Retry?.MaxRetries}, " +
+                        $"NextRetryAtUtc={step.RetryState?.NextRetryAtUtc}, " +
                         $"ClaimedBy={step.ClaimedBy}, " +
                         $"ClaimToken={step.ClaimToken}, " +
                         $"DependsOn=[{string.Join(", ", step.DependsOn ?? new List<string>())}]");

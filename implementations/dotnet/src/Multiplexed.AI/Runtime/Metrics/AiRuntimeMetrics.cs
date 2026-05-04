@@ -1,12 +1,13 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Multiplexed.AI.Runtime.Metrics.HotState;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
-using Multiplexed.Abstractions.AI.Metrics;
+using System;
 
 namespace Multiplexed.AI.Runtime.Metrics
 {
@@ -45,13 +46,15 @@ namespace Multiplexed.AI.Runtime.Metrics
             IAiRetentionMetrics retention,
             IAiStorageMetrics storage,
             IAiHotStateMetrics hotState,
-            IAiResolverMetrics resolver)
+            IAiResolverMetrics resolver, 
+            IAiPolicyMetrics policy)
         {
             Execution = execution ?? throw new ArgumentNullException(nameof(execution));
             Retention = retention ?? throw new ArgumentNullException(nameof(retention));
             Storage = storage ?? throw new ArgumentNullException(nameof(storage));
             HotState = hotState ?? throw new ArgumentNullException(nameof(hotState));
             Resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+            Policy = policy ?? throw new ArgumentNullException(nameof(policy));
         }
 
         /// <inheritdoc />
@@ -68,5 +71,7 @@ namespace Multiplexed.AI.Runtime.Metrics
 
         /// <inheritdoc />
         public IAiResolverMetrics Resolver { get; }
+        /// <inheritdoc />
+        public IAiPolicyMetrics Policy { get; }
     }
 }

@@ -12,6 +12,8 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Policies;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
@@ -134,5 +136,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// Gets the execution Runtime Observability service used to emit structured events about execution lifecycle and behavior.
         /// </summary>
         IAiRuntimeObservability ObservabilityService { get; }
+
+        /// <summary>
+        /// Gets the factory used to create step-scoped AI policy engine instances.
+        /// </summary>
+        /// <remarks>
+        /// This factory is responsible for instantiating the appropriate policy engine
+        /// (for example, retry, retention, eviction) based on the specified policy kind.
+        ///
+        /// DESIGN:
+        /// - Engines are created per step execution to ensure isolation and multi-worker safety.
+        /// - No engine instance is shared across executions.
+        /// - The factory resolves the correct engine implementation via the policy engine registry.
+        ///
+        /// USAGE:
+        /// - The DAG or runtime layer uses this factory to obtain a policy engine
+        ///   and execute domain-specific behavior (e.g., retry handling).
+        ///
+        /// EXAMPLE:
+        /// <code>
+        /// var engine = PolicyFactory.Create&lt;IAiRetryEngine&gt;(AiPolicyKind.Retry, stepContext);
+        /// await engine.HandleFailureAsync(...);
+        /// </code>
+        /// </remarks>
+        IAiPolicyEngineFactory PolicyEngineFactory { get; }
     }
 }

@@ -1,0 +1,20 @@
+{
+  "pipelines": [
+    {
+      "name": "dag-retry-clean",
+      "version": "1",
+      "executionMode": "Dag",
+      "steps": [
+        {
+          "name": "retry-step",
+          "stepKey": "debug-retry-fail",
+          "retry": {
+            "policies": [ "retry.transient.default" ],
+            "maxRetries": 2,
+            "baseDelayMs": 50
+          }
+        }
+      ]
+    }
+  ]
+}

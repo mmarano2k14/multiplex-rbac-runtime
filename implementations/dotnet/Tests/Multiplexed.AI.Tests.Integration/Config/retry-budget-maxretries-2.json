@@ -9,9 +9,13 @@
           "name": "start",
           "stepKey": "debug-retry-fail",
           "order": 1,
-          "execution": {
-            "maxRetries": 2,
-            "retryDelayMs": 50
+          "config": {
+            "retry": {
+              "policies": [ "retry.transient.default" ],
+              "maxRetries": 2,
+              "strategy": "Fixed",
+              "baseDelayMs": 50
+            }
           }
         }
       ]

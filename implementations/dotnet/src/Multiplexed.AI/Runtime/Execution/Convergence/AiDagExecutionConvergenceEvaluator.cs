@@ -186,8 +186,9 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
 
             var hasRetryReadyStep = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.WaitingForRetry &&
-                step.NextRetryAtUtc.HasValue &&
-                step.NextRetryAtUtc.Value <= utcNow);
+                step.RetryState != null &&
+                step.RetryState.NextRetryAtUtc.HasValue &&
+                step.RetryState.NextRetryAtUtc.Value <= utcNow);
 
             var hasRunnableNow = hasReadyStep || hasRetryReadyStep;
 
@@ -197,8 +198,9 @@ namespace Multiplexed.AI.Runtime.Execution.Convergence
 
             var hasFutureRetry = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.WaitingForRetry &&
-                step.NextRetryAtUtc.HasValue &&
-                step.NextRetryAtUtc.Value > utcNow);
+                step.RetryState != null &&
+                step.RetryState.NextRetryAtUtc.HasValue &&
+                step.RetryState.NextRetryAtUtc.Value > utcNow);
 
             var hasRecoverableExpiredRunning = stepStates.Any(step =>
                 step.Status == AiStepExecutionStatus.Running &&

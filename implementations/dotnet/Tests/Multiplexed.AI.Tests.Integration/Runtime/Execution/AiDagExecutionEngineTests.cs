@@ -14,12 +14,12 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
@@ -34,12 +34,13 @@ using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Retention;
 using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -100,9 +101,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var contextFactory = new ExecutionContextFactory();
 
             var logger = new NoopLogger();
-            var classifier = new DefaultAiRetryExceptionClassifier();
 
-            var stepExecutor = new AiStepExecutor(classifier, logger);
+            var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
 
@@ -222,6 +222,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 retentionService,
                 stepResolver);
 
+            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
+
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
                 contextStore,
@@ -238,6 +240,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 stateWriter,
                 stepResolver,
                 retentionService,
+                policyEngineFactory,
                 null);
 
             return new AiDagExecutionEngine(engineServices);

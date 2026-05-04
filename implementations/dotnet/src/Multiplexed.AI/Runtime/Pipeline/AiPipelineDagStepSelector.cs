@@ -22,6 +22,11 @@ namespace Multiplexed.AI.Runtime.Pipeline
             ArgumentNullException.ThrowIfNull(state);
             ArgumentNullException.ThrowIfNull(stateWriter);
 
+            foreach (var step in state.Steps.Values)
+            {
+                step.PromoteRetryToReadyIfDue(DateTime.Now);
+            }
+
             var readySteps = new List<ResolvedAiPipelineStep>();
 
             foreach (var step in pipeline.Steps.OrderBy(x => x.Order))
@@ -217,8 +222,8 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
             if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
             {
-                if (stepState.NextRetryAtUtc.HasValue &&
-                    stepState.NextRetryAtUtc.Value > utcNow)
+                if (stepState?.RetryState?.NextRetryAtUtc.HasValue ?? false &&
+                    stepState.RetryState.NextRetryAtUtc.Value > utcNow)
                 {
                     return false;
                 }
@@ -286,8 +291,8 @@ namespace Multiplexed.AI.Runtime.Pipeline
 
             if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
             {
-                if (stepState.NextRetryAtUtc.HasValue &&
-                    stepState.NextRetryAtUtc.Value > utcNow)
+                if (stepState?.RetryState?.NextRetryAtUtc.HasValue ?? false &&
+                    stepState.RetryState.NextRetryAtUtc.Value > utcNow)
                 {
                     return false;
                 }

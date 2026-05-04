@@ -6,17 +6,16 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
-using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Runtime.AI.Policies;
+using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
-using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 
@@ -56,6 +55,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
             IAiExecutionRetentionService retentionService,
+            IAiPolicyEngineFactory policyEngineFactory,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
         {
@@ -68,13 +68,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             Logger = logger ?? throw new ArgumentNullException(nameof(logger));
             CleanupService = cleanupService ?? throw new ArgumentNullException(nameof(cleanupService));
             AiOptions = aiOptions ?? throw new ArgumentNullException(nameof(aiOptions));
-            //Metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
             PayloadCompactor = payloadCompactor ?? throw new ArgumentNullException(nameof(payloadCompactor));
             StateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
             StateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
             RetentionService = retentionService ?? throw new ArgumentNullException(nameof(retentionService));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
+            PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
 
             DagStore = dagStore;
             SnapshotService = snapshotService;
@@ -108,9 +108,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         public IOptions<AiEngineOptions> AiOptions { get; }
 
         /// <inheritdoc />
-        //public IAiRuntimeMetrics Metrics { get; }
-
-        /// <inheritdoc />
         public IAiStepResultPayloadCompactor PayloadCompactor { get; }
 
         /// <inheritdoc />
@@ -134,5 +131,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// <inheritdoc />
         public IAiRuntimeObservability ObservabilityService { get; }
 
+        /// <inheritdoc />
+        public IAiPolicyEngineFactory PolicyEngineFactory { get; }
     }
 }

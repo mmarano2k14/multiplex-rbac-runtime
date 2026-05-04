@@ -21,7 +21,7 @@ namespace MMultiplexed.AI.Runtime.Pipeline.Steps.Test
 
             var stepState = context.Execution.StateWriter.GetOrCreateStep(context.Execution.State, context.Step.Name);
 
-            if (stepState.RetryCount == 0)
+            if (stepState.RetryState?.RetryCount == 0)
             {
                 return Task.FromResult(new AiStepResult
                 {

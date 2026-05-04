@@ -6,6 +6,103 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.4.0] - 2026-05-04 - Config-Driven and Policy-Driven Retry Engine
+
+### Added
+- Added policy-level observability through `AiPolicyEngine`.
+- Added policy execution metrics, failure metrics, and decision metrics.
+- Added `AiPolicyResult.IsSuccess` for cleaner policy instrumentation.
+- Added no-op tracing/logging support for test scenarios.
+
+### Changed
+- `DefaultAiPolicyEngineFactory` now injects `IAiRuntimeObservability` into policy engines.
+- Policy execution is now traceable and measurable through the runtime observability facade.
+- Retry observability remains at orchestration level to avoid duplicate metrics/logs.
+
+### Fixed
+- Fixed policy engine factory construction after observability was added to policy engines.
+- Updated tests to provide observability dependencies.
+
+### Next
+- Refactor eviction and compaction to use the PolicyEngine model.
+
+---
+
+## [1.0.3.9] - Config-Driven and Policy-Driven Retry Engine
+
+### 🚀 Added
+- Introduced distributed retry system based on PolicyEngine + RetryEngine
+- Added `config.retry` as the unified retry configuration model
+- Added strict validation for retry configuration
+- Added integration tests covering:
+  - Missing retry config
+  - Invalid retry config
+  - Retry hydration into step state
+  - Config persistence in execution state
+
+### 🔧 Changed
+- Retry execution moved from local in-process loops to distributed state-driven model
+- Step executor now performs a single execution (no retry logic)
+- Retry decisions are now policy-driven and context-based
+- Retry scheduling is persisted via `AiStepRetryState` and enforced through Redis/Lua
+- Step initialization now uses `ResolvedAiPipelineStep.Config` as source of truth
+
+### 🐛 Fixed
+- Fixed silent fallback to default retry values (`MaxRetries = 3`)
+- Fixed incorrect retry hydration due to missing config mapping
+- Fixed inconsistency between JSON pipeline definition and runtime behavior
+
+### 💥 Breaking Changes
+- Removed legacy retry system based on `execution.maxRetries`
+- Removed local retry loops (`while` retry pattern)
+- Retry must now be explicitly defined under `config.retry`
+- Pipelines without valid retry configuration will now fail at creation time
+
+### 🧠 Notes
+- This change introduces a deterministic, observable, and distributed retry model
+- Aligns retry behavior with multi-worker and DAG execution architecture
+
+---
+
+## [1.0.3.8] - Config-Driven and Policy-Driven Retry Engine
+
+### 🚀 Refactor - Retry Engine
+
+- Introduced policy-driven retry engine (`IAiRetryEngine`)
+- Removed legacy retry pipeline:
+  - RetryExecutionAdapter
+  - RetryScheduler
+  - RetryClassifier
+  - RetryPolicyResolver
+  - RetryDecisionService
+- Added `IAiPolicyEngineFactory` with per-step engine instantiation
+- Implemented `DefaultAiRetryEngine`:
+  - deterministic decision
+  - retry state mutation
+  - support for policies and retry config
+- Integrated retry handling into DAG execution flow
+- Added support for retry config via `AiStepExecutionContext` helper
+- Rehydrated `stepState.Retry` for backward compatibility
+
+### 🧪 Tests
+
+- Updated integration tests to align with new retry engine
+- Removed legacy retry definition resolver tests
+- Added config binding coverage via step context helper
+
+### 🧰 Fixes
+
+- Fixed JSON binding:
+  - case-insensitive properties
+  - enum string conversion
+  - `policy` vs `policies` compatibility
+
+### ⏭ Next
+
+- Redis Lua alignment with retry engine (WaitingForRetry, NextRetryAtUtc, claim eligibility)
+
+---
+
 ## [1.0.3.7] - 2026-05-01 - Tracing
 
 ### Added

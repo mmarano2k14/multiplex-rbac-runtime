@@ -10,6 +10,7 @@ using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Multiplexed.AI.Runtime.Execution.Context
 {
@@ -689,13 +690,14 @@ namespace Multiplexed.AI.Runtime.Execution.Context
 
             if (value is JsonElement json)
             {
-                return json.Deserialize<T>();
+                return json.Deserialize<T>(ConversionJsonOptions);
             }
 
             if (!IsSimpleConvertibleType(targetType))
             {
                 var jsonText = JsonSerializer.Serialize(value);
-                return JsonSerializer.Deserialize<T>(jsonText);
+
+                return JsonSerializer.Deserialize<T>(jsonText, ConversionJsonOptions);
             }
 
             return (T?)Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
@@ -916,5 +918,14 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             value = null;
             return false;
         }
+
+        private static readonly JsonSerializerOptions ConversionJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true,
+                Converters =
+                {
+                    new JsonStringEnumConverter()
+                }
+        };
     }
 }

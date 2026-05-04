@@ -45,7 +45,7 @@ namespace Multiplexed.AI.Runtime.Tracing
                 {
                     Id = step.StepName,
                     Status = step.Status.ToString(),
-                    RetryCount = step.RetryCount
+                    RetryCount = step.RetryState?.RetryCount ?? 0
                 });
 
                 foreach (var dependency in step.DependsOn.OrderBy(x => x, StringComparer.Ordinal))

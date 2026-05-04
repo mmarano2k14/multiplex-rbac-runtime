@@ -63,8 +63,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                     {
                         StepName = "step-1",
                         Status = AiStepExecutionStatus.Ready,
-                        RetryCount = 0,
-                        MaxRetries = 3,
+                        RetryState = new Abstractions.AI.Retry.AiStepRetryState
+                        {
+                            RetryCount = 0
+                        },
+                        Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
+                        {
+                            Policies = new[] { "retry.transient.default" },
+                            MaxRetries = 3,
+                        },
                         RecoveryCount = 0,
                         ClaimTimeoutSeconds = 1
                     }
@@ -87,7 +94,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
             var runningStep = stateAfterClaim!.Steps["step-1"];
 
             Assert.Equal(AiStepExecutionStatus.Running, runningStep.Status);
-            Assert.Equal(0, runningStep.RetryCount);
+            Assert.Equal(0, runningStep.RetryState?.RetryCount);
             Assert.Equal(0, runningStep.RecoveryCount);
             Assert.False(string.IsNullOrWhiteSpace(runningStep.ClaimToken));
             Assert.False(string.IsNullOrWhiteSpace(runningStep.ClaimedBy));
@@ -110,7 +117,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
             var recoveredStep = stateAfterRecovery!.Steps["step-1"];
 
             Assert.Equal(AiStepExecutionStatus.Ready, recoveredStep.Status);
-            Assert.Equal(0, recoveredStep.RetryCount);
+            Assert.Equal(0, recoveredStep.RetryState?.RetryCount);
             Assert.Equal(1, recoveredStep.RecoveryCount);
 
             Assert.Null(recoveredStep.ClaimToken);
@@ -169,8 +176,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                     {
                         StepName = "step-1",
                         Status = AiStepExecutionStatus.Ready,
-                        RetryCount = 0,
-                        MaxRetries = 3,
+                        RetryState = new Abstractions.AI.Retry.AiStepRetryState
+                        {
+                            RetryCount = 0
+                        },
+                        Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
+                        {
+                            Policies = new[] { "retry.transient.default" },
+                            MaxRetries = 3,
+                        },
                         RecoveryCount = 0,
                         ClaimTimeoutSeconds = 30
                     }
@@ -199,7 +213,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
             var step = stateAfterRecovery!.Steps["step-1"];
 
             Assert.Equal(AiStepExecutionStatus.Running, step.Status);
-            Assert.Equal(0, step.RetryCount);
+            Assert.Equal(0, step.RetryState?.RetryCount);
             Assert.Equal(0, step.RecoveryCount);
 
             Assert.False(string.IsNullOrWhiteSpace(step.ClaimToken));
@@ -256,8 +270,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                     {
                         StepName = "completed-step",
                         Status = AiStepExecutionStatus.Completed,
-                        RetryCount = 1,
-                        MaxRetries = 3,
+                        RetryState = new Abstractions.AI.Retry.AiStepRetryState
+                        {
+                            RetryCount = 1
+                        },
+                        Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
+                        {
+                            MaxRetries = 3,
+                        },
                         RecoveryCount = 2,
                         ClaimTimeoutSeconds = 1,
                         ClaimedBy = "worker-old",
@@ -269,8 +289,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                     {
                         StepName = "failed-step",
                         Status = AiStepExecutionStatus.Failed,
-                        RetryCount = 3,
-                        MaxRetries = 3,
+                        RetryState = new Abstractions.AI.Retry.AiStepRetryState
+                        {
+                            RetryCount = 3
+                        },
+                        Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
+                        {
+                            MaxRetries = 3,
+                        },
                         RecoveryCount = 1,
                         ClaimTimeoutSeconds = 1,
                         ClaimedBy = "worker-old",
@@ -295,11 +321,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
             var failed = stateAfterRecovery.Steps["failed-step"];
 
             Assert.Equal(AiStepExecutionStatus.Completed, completed.Status);
-            Assert.Equal(1, completed.RetryCount);
+            Assert.Equal(1, completed.RetryState?.RetryCount);
             Assert.Equal(2, completed.RecoveryCount);
 
             Assert.Equal(AiStepExecutionStatus.Failed, failed.Status);
-            Assert.Equal(3, failed.RetryCount);
+            Assert.Equal(3, failed.RetryState?.RetryCount);
             Assert.Equal(1, failed.RecoveryCount);
         }
 
@@ -353,8 +379,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                     {
                         StepName = "step-1",
                         Status = AiStepExecutionStatus.Ready,
-                        RetryCount = 0,
-                        MaxRetries = 3,
+                        RetryState = new Abstractions.AI.Retry.AiStepRetryState
+                        {
+                            RetryCount = 0
+                        },
+                        Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
+                        {
+                            Policies = new[] { "retry.transient.default" },
+                            MaxRetries = 3,
+                        },
                         RecoveryCount = 0,
                         ClaimTimeoutSeconds = 30
                     }
@@ -386,7 +419,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
             var step = stateAfterRecovery!.Steps["step-1"];
 
             Assert.Equal(AiStepExecutionStatus.Running, step.Status);
-            Assert.Equal(0, step.RetryCount);
+            Assert.Equal(0, step.RetryState?.RetryCount);
             Assert.Equal(0, step.RecoveryCount);
 
             Assert.Equal("worker-1", step.ClaimedBy);
