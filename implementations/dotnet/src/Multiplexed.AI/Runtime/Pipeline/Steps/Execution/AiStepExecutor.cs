@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Runtime.Logging;
 
-namespace Multiplexed.AI.Runtime.Pipeline.Retry
+namespace Multiplexed.AI.Runtime.Pipeline.Steps.Execution
 {
     /// <summary>
     /// Executes a single resolved AI step once and records local execution metadata.

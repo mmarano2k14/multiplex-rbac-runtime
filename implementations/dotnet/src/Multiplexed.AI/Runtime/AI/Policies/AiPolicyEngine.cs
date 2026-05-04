@@ -1,10 +1,12 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Abstractions.AI.Policies;
+using Multiplexed.AI.Runtime.Execution.Context;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.AI.Abstractions.AI.Policies;
-using Multiplexed.AI.Runtime.Execution.Context;
 
 namespace Multiplexed.AI.Runtime.AI.Policies
 {
@@ -19,21 +21,25 @@ namespace Multiplexed.AI.Runtime.AI.Policies
     public abstract class AiPolicyEngine : IAiPolicyEngine
     {
         private readonly IAiPolicyRegistry policyRegistry;
+        public readonly IAiRuntimeObservability _obs;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiPolicyEngine"/> class.
         /// </summary>
         /// <param name="policyRegistry">The registry used to resolve policies.</param>
         /// <param name="stepContext">The step execution context bound to this engine instance.</param>
+        /// <param name="obs">The runtime observability facade.</param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="policyRegistry"/> or <paramref name="stepContext"/> is <see langword="null"/>.
         /// </exception>
         protected AiPolicyEngine(
             IAiPolicyRegistry policyRegistry,
-            AiStepExecutionContext stepContext)
+            AiStepExecutionContext stepContext,
+            IAiRuntimeObservability obs)
         {
             this.policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
             StepContext = stepContext ?? throw new ArgumentNullException(nameof(stepContext));
+            _obs = obs ?? throw new ArgumentNullException(nameof(obs));
         }
 
         /// <inheritdoc />
@@ -85,7 +91,7 @@ namespace Multiplexed.AI.Runtime.AI.Policies
         /// <param name="policies">The policies to execute.</param>
         /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The ordered policy results.</returns>
-        protected static async Task<IReadOnlyCollection<AiPolicyResult>> ExecutePoliciesAsync<TPolicyContext>(
+        protected async Task<IReadOnlyCollection<AiPolicyResult>> ExecutePoliciesAsync<TPolicyContext>(
             TPolicyContext policyContext,
             IReadOnlyCollection<IAiPolicy> policies,
             CancellationToken cancellationToken = default)
@@ -100,15 +106,68 @@ namespace Multiplexed.AI.Runtime.AI.Policies
 
             var results = new List<AiPolicyResult>(policies.Count);
 
+            var executionId = StepContext.ExecutionId;
+            var stepName = StepContext.StepName;
+
             foreach (var policy in policies)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var result = await policy
-                    .ExecuteAsync(policyContext, cancellationToken)
-                    .ConfigureAwait(false);
+                var policyName = policy.GetType().Name;
 
-                results.Add(result);
+                var traceContext = new AiStepTraceContext
+                {
+                    ExecutionId = executionId,
+                    StepId = stepName,
+                    Operation = "policy.execute"
+                };
+
+                using var scope = _obs.Tracer.StartStep(traceContext);
+
+                var start = DateTime.UtcNow;
+
+                try
+                {
+                    var result = await policy
+                        .ExecuteAsync(policyContext, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    results.Add(result);
+
+                    var duration = DateTime.UtcNow - start;
+
+                    scope?.SetTag("policy", policyName);
+                    scope?.SetTag("kind", Kind.ToString());
+                    scope?.SetTag("success", result.IsSuccess);
+                    scope?.SetTag("durationMs", duration.TotalMilliseconds);
+                    scope?.SetTag("result.kind", result.Kind.ToString());
+                    scope?.SetTag("result.message", result.Message);
+
+                    _obs.Metrics.Policy.RecordExecution(
+                        executionId,
+                        policyName,
+                        result.IsSuccess,
+                        duration);
+
+                    _obs.Metrics.Policy.RecordDecision(
+                        executionId,
+                        policyName,
+                        result.Kind);
+
+                }
+                catch (Exception ex)
+                {
+                    scope?.SetTag("policy", policyName);
+                    scope?.SetTag("kind", Kind.ToString());
+                    scope?.SetTag("exception", true);
+                    scope?.SetTag("error", ex.Message);
+
+                    _obs.Metrics.Policy.RecordFailure(
+                        executionId,
+                        policyName);
+
+                    throw;
+                }
             }
 
             return results;

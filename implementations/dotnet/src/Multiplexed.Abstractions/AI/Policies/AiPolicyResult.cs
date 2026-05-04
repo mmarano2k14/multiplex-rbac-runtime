@@ -33,6 +33,15 @@
         /// </summary>
         public string? Message { get; }
 
+        /// <summary>
+        /// Gets a value indicating whether the policy execution was successful.
+        /// </summary>
+        /// <remarks>
+        /// A policy is considered successful when its <see cref="Kind"/> is
+        /// <see cref="AiPolicyResultKind.Success"/>.
+        /// </remarks>
+        public bool IsSuccess => Kind == AiPolicyResultKind.Success;
+
         // =========================
         // NON GENERIC FACTORIES
         // =========================

@@ -3,12 +3,11 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry.old;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
-using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
@@ -31,7 +30,6 @@ namespace Multiplexed.AI.Tests.Runtime.Pipeline.Retry
         public async Task ExecuteAsync_Should_Skip_When_Step_Has_Already_Completed()
         {
             // Arrange
-            IAiRetryExceptionClassifier classifier = new DefaultAiRetryExceptionClassifier();
             IAiRuntimeLogger logger = new NoopLogger();
 
             var executor = new AiStepExecutor(logger);

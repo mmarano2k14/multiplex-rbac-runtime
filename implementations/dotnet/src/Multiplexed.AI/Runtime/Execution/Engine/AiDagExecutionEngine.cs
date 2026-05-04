@@ -242,10 +242,65 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
 
                 var stepContext = new AiStepExecutionContext(executionContext, step);
-                var retryDefinition = await _engineServices.PolicyEngineFactory
-                                        .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
-                                        .ResolveRetryDefinitionAsync(cancellationToken);
-                
+
+                var retryDefinition = await _engineServices.ObservabilityService.Tracer.TraceStepAsync(
+                    new AiStepTraceContext
+                    {
+                        ExecutionId = record.ExecutionId,
+                        StepId = step.Name,
+                        StepType = "retry.defintion",
+                        Status = "resolving.policy",
+                        WorkerId = Environment.MachineName
+                    },
+                    async () =>
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                        try
+                        {
+                            var definition = await _engineServices.PolicyEngineFactory
+                                .Create<IAiRetryEngine>(AiPolicyKind.Retry, stepContext)
+                                .ResolveRetryDefinitionAsync(cancellationToken);
+
+                            sw.Stop();
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordExecution(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                success: true,
+                                duration: sw.Elapsed
+                            );
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordDecision(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                definition is null
+                                    ? AiPolicyResultKind.Block
+                                    : AiPolicyResultKind.Success
+                            );
+
+                            return definition;
+                        }
+                        catch
+                        {
+                            sw.Stop();
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordExecution(
+                                record.ExecutionId,
+                                "retry.defintion",
+                                success: false,
+                                duration: sw.Elapsed
+                            );
+
+                            _engineServices.ObservabilityService.Metrics.Policy.RecordFailure(
+                                record.ExecutionId,
+                                "retry.defintion"
+                            );
+
+                            throw;
+                        }
+                    });
+
                 stepState.Retry = retryDefinition;
                 stepState.RetryState ??= new AiStepRetryState();
             }

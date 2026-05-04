@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
@@ -49,5 +50,10 @@ namespace Multiplexed.Abstractions.AI.Metrics
         /// Gets metrics related to runtime resolvers and input binding resolution.
         /// </summary>
         IAiResolverMetrics Resolver { get; }
+
+        /// <summary>
+        /// Gets metrics related to runtime Policy execution
+        /// </summary>
+        IAiPolicyMetrics Policy { get; }
     }
 }

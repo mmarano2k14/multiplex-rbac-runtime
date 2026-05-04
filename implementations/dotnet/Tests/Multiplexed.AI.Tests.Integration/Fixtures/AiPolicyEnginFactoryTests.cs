@@ -1,10 +1,13 @@
-﻿using Multiplexed.AI.Abstractions.AI.Policies;
+﻿using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry.Policies;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Observability;
+using Multiplexed.AI.Runtime.Tracing;
+using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
 
 namespace Multiplexed.AI.Tests.Integration.Fixtures
 {
@@ -24,12 +27,15 @@ namespace Multiplexed.AI.Tests.Integration.Fixtures
             var policyEngineRegistry = new DefaultAiPolicyEngineRegistry(
                 new[]
                 {
-            typeof(DefaultAiRetryEngine)
+                    typeof(DefaultAiRetryEngine)
                 });
+
+            IAiRuntimeObservability observability = ObservabilityFactory.Create();
 
             return new DefaultAiPolicyEngineFactory(
                 policyRegistry,
-                policyEngineRegistry);
+                policyEngineRegistry,
+                observability);
         }
     }
 }

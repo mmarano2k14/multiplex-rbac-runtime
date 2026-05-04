@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.AI.Runtime.Pipeline.Retry
+namespace Multiplexed.AI.Runtime.Pipeline.Steps.Execution
 {
     /// <summary>
     /// Stores in-process execution metadata for a single step.

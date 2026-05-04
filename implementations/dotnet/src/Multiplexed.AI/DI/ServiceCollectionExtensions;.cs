@@ -19,12 +19,12 @@ using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Metrics.Execution;
+using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry.old;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Runtime;
@@ -56,13 +56,14 @@ using Multiplexed.AI.Runtime.Memory;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Metrics.Policy;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
 using Multiplexed.AI.Runtime.Observability;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Retention;
 using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
@@ -404,7 +405,6 @@ namespace Multiplexed.AI.DI
             // Retry / step execution infrastructure
             // ------------------------------------------------------------
 
-            services.AddSingleton<IAiRetryExceptionClassifier, DefaultAiRetryExceptionClassifier>();
             services.AddScoped<IAiStepExecutor, AiStepExecutor>();
 
             // ------------------------------------------------------------
@@ -566,6 +566,11 @@ namespace Multiplexed.AI.DI
 
             // Metrics facade
             services.TryAddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
+
+            services.TryAddSingleton<IAiPolicyMetrics, AiPolicyMetrics>();
+
+
+            
 
 
             // ------------------------------------------------------------

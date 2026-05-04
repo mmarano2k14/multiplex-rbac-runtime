@@ -1,5 +1,6 @@
 ﻿using System;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.AI.Abstractions.AI.Policies;
 
 namespace Multiplexed.AI.Runtime.AI.Policies
@@ -11,18 +12,22 @@ namespace Multiplexed.AI.Runtime.AI.Policies
     {
         private readonly IAiPolicyRegistry policyRegistry;
         private readonly IAiPolicyEngineRegistry engineRegistry;
+        private readonly IAiRuntimeObservability observability;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiPolicyEngineFactory"/> class.
         /// </summary>
         /// <param name="policyRegistry">The policy registry passed to created engines.</param>
         /// <param name="engineRegistry">The registry used to resolve engine implementation types.</param>
+        /// <param name="observability">The runtime observability facade.</param>
         public DefaultAiPolicyEngineFactory(
             IAiPolicyRegistry policyRegistry,
-            IAiPolicyEngineRegistry engineRegistry)
+            IAiPolicyEngineRegistry engineRegistry,
+            IAiRuntimeObservability observability)
         {
             this.policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
             this.engineRegistry = engineRegistry ?? throw new ArgumentNullException(nameof(engineRegistry));
+            this.observability = observability ?? throw new ArgumentNullException(nameof(observability));
         }
 
         /// <inheritdoc />
@@ -37,7 +42,8 @@ namespace Multiplexed.AI.Runtime.AI.Policies
             return (IAiPolicyEngine)Activator.CreateInstance(
                 engineType,
                 policyRegistry,
-                stepContext)!;
+                stepContext,
+                observability)!;
         }
 
         /// <inheritdoc />

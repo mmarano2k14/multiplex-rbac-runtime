@@ -12,7 +12,6 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Models;
 using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions.AI.Policies;
@@ -30,7 +29,7 @@ using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Helpers;
@@ -191,7 +190,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             var contextFactory = new ExecutionContextFactory();
 
             var logger = new NoopLogger();
-            var classifier = new DefaultAiRetryExceptionClassifier();
             var stepExecutor = new AiStepExecutor(logger);
 
             var services = new ServiceCollection();
@@ -257,9 +255,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                     typeof(DefaultAiRetryEngine)
                 });
 
+            var obs = ObservabilityFactory.Create();
+
             var policyFactory = new DefaultAiPolicyEngineFactory(
                 policyRegistry,
-                policyEngineRegistry);
+                policyEngineRegistry, obs);
 
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {

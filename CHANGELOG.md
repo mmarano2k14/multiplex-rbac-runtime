@@ -8,6 +8,28 @@ This project follows a deterministic runtime and observability model designed fo
 
 ## [Unreleased]
 
+### Added
+- Added policy-level observability through `AiPolicyEngine`.
+- Added policy execution metrics, failure metrics, and decision metrics.
+- Added `AiPolicyResult.IsSuccess` for cleaner policy instrumentation.
+- Added no-op tracing/logging support for test scenarios.
+
+### Changed
+- `DefaultAiPolicyEngineFactory` now injects `IAiRuntimeObservability` into policy engines.
+- Policy execution is now traceable and measurable through the runtime observability facade.
+- Retry observability remains at orchestration level to avoid duplicate metrics/logs.
+
+### Fixed
+- Fixed policy engine factory construction after observability was added to policy engines.
+- Updated tests to provide observability dependencies.
+
+### Next
+- Refactor eviction and compaction to use the PolicyEngine model.
+
+---
+
+## [Unreleased]
+
 ### 🚀 Added
 - Introduced distributed retry system based on PolicyEngine + RetryEngine
 - Added `config.retry` as the unified retry configuration model

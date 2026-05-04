@@ -11,7 +11,6 @@ using Multiplexed.Abstractions.AI.Execution.Retention.Models;
 using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Retry;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions.AI.Retry;
@@ -34,7 +33,7 @@ using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Retry;
+using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Retention;
 using Multiplexed.AI.Runtime.Retention.Decisions;
 using Multiplexed.AI.Runtime.Retention.Policies;
@@ -496,7 +495,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var accessor = new ExecutionContextAccessor();
             var contextFactory = new ExecutionContextFactory();
             var logger = new NoopLogger();
-            var classifier = new DefaultAiRetryExceptionClassifier();
 
             var stepExecutor = new AiStepExecutor(logger);
 

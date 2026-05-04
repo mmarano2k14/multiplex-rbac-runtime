@@ -1,13 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Policies;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Multiplexed.AI.Runtime.AI.Retry
 {
@@ -51,10 +52,12 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         /// </summary>
         /// <param name="policyRegistry">The policy registry used to resolve retry policies.</param>
         /// <param name="stepContext">The current step execution context.</param>
+        /// <param name="obs">The observability instance used for logging and metrics.</param>
         public DefaultAiRetryEngine(
             IAiPolicyRegistry policyRegistry,
-            AiStepExecutionContext stepContext)
-            : base(policyRegistry, stepContext)
+            AiStepExecutionContext stepContext,
+            IAiRuntimeObservability obs)
+            : base(policyRegistry, stepContext, obs)
         {
         }
 
@@ -87,6 +90,7 @@ namespace Multiplexed.AI.Runtime.AI.Retry
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(stepState);
+
 
             if (stepState.Status != AiStepExecutionStatus.Running)
             {

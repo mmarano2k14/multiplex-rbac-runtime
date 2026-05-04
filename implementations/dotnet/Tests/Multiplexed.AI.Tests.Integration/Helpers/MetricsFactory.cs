@@ -1,10 +1,12 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Metrics.Policy;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
@@ -30,7 +32,8 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
                 ),
                 new AiStorageMetrics(),
                 new AiHotStateMetrics(),
-                new AiResolverMetrics()
+                new AiResolverMetrics(),
+                new AiPolicyMetrics()
             );
         }
 
@@ -73,7 +76,8 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
                     ),
                     new AiStorageMetrics(),
                     new AiHotStateMetrics(),
-                    new AiResolverMetrics()
+                    new AiResolverMetrics(),
+                    new AiPolicyMetrics()
                 );
 
                 // ------------------------------------------------------------
