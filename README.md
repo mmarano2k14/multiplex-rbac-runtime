@@ -1,3 +1,11 @@
+## License
+
+This project is licensed under the **Business Source License 1.1 (BSL)**.
+
+- Free for development, testing, and internal use
+- Commercial production use requires a license
+- Automatically converts to Apache 2.0 on 2029-01-01
+
 # Multiplex AI Runtime
 A Multiplexed, Deterministic Execution Layer for Multi-Tenant AI Systems  
 
