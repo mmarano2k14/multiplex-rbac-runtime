@@ -1,11 +1,3 @@
-## License
-
-This project is licensed under the **Business Source License 1.1 (BSL)**.
-
-- Free for development, testing, and internal use
-- Commercial production use requires a license
-- Automatically converts to Apache 2.0 on 2029-01-01
-
 # Multiplex AI Runtime
 A Multiplexed, Deterministic Execution Layer for Multi-Tenant AI Systems  
 
@@ -55,7 +47,12 @@ This repository provides a **reference implementation of a multiplexed, determin
 
 ### License
 
-![License](https://img.shields.io/badge/License-MIT-green)
+This project is licensed under the **Business Source License 1.1 (BSL)**.
+
+- Free for development, testing, and internal use
+- Commercial production use requires a license
+- Automatically converts to Apache 2.0 on 2029-01-01
+
 **This project is still under active development. Some features may be incomplete and UI or functional issues may occur.**
 
 ---
