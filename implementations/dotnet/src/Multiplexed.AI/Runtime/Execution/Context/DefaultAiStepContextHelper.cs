@@ -540,14 +540,27 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             string key,
             CancellationToken cancellationToken)
         {
+            // 1. Step payload override
             if (_context.StepState.ConfigPayloads != null &&
                 _context.StepState.ConfigPayloads.TryGetValue(key, out var payload))
             {
                 return await ResolvePayloadAsync(payload, cancellationToken).ConfigureAwait(false);
             }
 
-            _context.StepState.Config.TryGetValue(key, out var value);
-            return value;
+            // 2. Step inline override
+            if (_context.StepState.Config.TryGetValue(key, out var stepValue))
+            {
+                return stepValue;
+            }
+
+            // 3. Pipeline fallback 💥
+            if (_context.State.PipelineConfig != null &&
+                _context.State.PipelineConfig.TryGetValue(key, out var pipelineValue))
+            {
+                return pipelineValue;
+            }
+
+            return null;
         }
 
         /// <summary>

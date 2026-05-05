@@ -50,6 +50,7 @@ using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Runtime.Execution.Retention.Services;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
@@ -147,6 +148,11 @@ namespace Multiplexed.AI.DI
             // - Trigger does not mutate execution state.
             // - Trigger only decides whether retention evaluation should continue.
             // ------------------------------------------------------------
+
+
+            services.TryAddScoped<IAiRetentionEngine>(_ => null!);
+            services.TryAddScoped<IAiRetentionCompactionService, DefaultAiRetentionCompactionService>();
+            services.TryAddScoped<IAiRetentionEvictionService, DefaultAiRetentionEvictionService>();
 
             services.TryAddSingleton(sp =>
             {

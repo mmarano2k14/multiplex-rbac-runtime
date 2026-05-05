@@ -29,4 +29,21 @@
             object context,
             CancellationToken cancellationToken = default);
     }
+
+    /// <summary>
+    /// Represents a strongly-typed AI policy.
+    /// </summary>
+    /// <typeparam name="TContext">The context type.</typeparam>
+    public interface IAiPolicy<TContext> : IAiPolicy
+    {
+        /// <summary>
+        /// Executes the policy using a strongly-typed context.
+        /// </summary>
+        /// <param name="context">The strongly-typed context.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The policy result.</returns>
+        Task<AiPolicyResult> ExecuteAsync(
+            TContext context,
+            CancellationToken cancellationToken = default);
+    }
 }

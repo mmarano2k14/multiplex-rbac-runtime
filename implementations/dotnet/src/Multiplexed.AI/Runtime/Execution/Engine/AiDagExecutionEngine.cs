@@ -18,6 +18,8 @@ using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Convergence;
+using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
@@ -216,7 +218,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             var state = new AiExecutionState
             {
                 ExecutionId = record.ExecutionId,
-                PipelineName = pipelineName
+                PipelineName = pipelineName,
+                PipelineConfig = new Dictionary<string, object?>(
+                    preparedPipeline.Config,
+                    StringComparer.Ordinal)
             };
 
             // Seed runtime input into the execution state using the selected overload behavior.
@@ -859,7 +864,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                 ?? new AiExecutionState
                 {
                     ExecutionId = executionId,
-                    PipelineName = record.PipelineName
+                    PipelineName = record.PipelineName,
+                    PipelineConfig = new Dictionary<string, object?>(
+                        resolvedPipeline.Config,
+                        StringComparer.Ordinal)
                 };
 
             await _engineServices.StepResolver.WarmAsync(
@@ -914,6 +922,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         convergence,
                         expectedStepKey,
                         state,
+                        resolvedPipeline,
                         cancellationToken);
 
                     if (record.IsTerminal)
@@ -1020,6 +1029,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     await ApplyRetentionPersistAndWarmAsync(
                         executionId,
                         failedState,
+                        stepContext,
                         cancellationToken);
 
                     var failedStepState = failedState.Steps.TryGetValue(claimed.StepName, out var reloadedFailedStep)
@@ -1068,6 +1078,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         convergence,
                         expectedStepKey,
                         failedState,
+                        resolvedPipeline,
                         cancellationToken);
 
                     if (record.IsTerminal)
@@ -1191,6 +1202,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     await ApplyRetentionPersistAndWarmAsync(
                         executionId,
                         completedState,
+                        stepContext,
                         cancellationToken);
 
 
@@ -1245,6 +1257,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                     finalConvergence,
                     expectedStepKeyFinal,
                     finalState,
+                    resolvedPipeline,
                     cancellationToken);
 
                 if (record.IsTerminal)
@@ -1508,6 +1521,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             AiDagExecutionConvergenceResult convergence,
             string expectedStepKey,
             AiExecutionState state,
+            ResolvedAiPipeline resolvedPipeline,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(record);
@@ -1572,16 +1586,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             // ---------------------------------------------------------------------
             // if (convergence.IsTerminal && CanFinalize(state, convergence.Status))
             if (convergence.IsTerminal)
-                {
+            {
                 Logger.Engine.LogInformation(
                     $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
 
-                // RETENTION HERE
-                await ApplyRetentionPersistAndWarmAsync(
-                    record.ExecutionId,
+                var retentionStep = resolvedPipeline.Steps.FirstOrDefault()
+                    ?? throw new InvalidOperationException(
+                        $"Pipeline '{resolvedPipeline.Name}' does not contain any resolved step for retention context creation.");
+
+                var executionContext = BuildExecutionContext(
+                    record,
                     state,
                     cancellationToken);
 
+                var retentionStepContext = new AiStepExecutionContext(
+                    executionContext,
+                    retentionStep);
+
+                await ApplyRetentionPersistAndWarmAsync(
+                    record.ExecutionId,
+                    state,
+                    retentionStepContext,
+                    cancellationToken);
 
                 var request = new AiDagExecutionFinalizationRequest
                 {
@@ -1733,80 +1759,42 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// <summary>
         /// Applies execution state retention, persists the updated state,
         /// and incrementally refreshes the step resolver cache.
-        ///
+        /// </summary>
+        /// <remarks>
         /// PURPOSE:
-        /// - Centralize the retention workflow into a single, safe operation
-        /// - Guarantee correct ordering of critical operations in distributed execution
-        /// - Ensure the resolver remains consistent with newly archived steps
+        /// - Centralize the retention workflow into a single, safe operation.
+        /// - Guarantee correct ordering of critical operations in distributed execution.
+        /// - Ensure the resolver remains consistent with newly archived steps.
         ///
-        /// ORDER OF OPERATIONS (CRITICAL):
-        /// 1. Apply retention:
-        ///    - Compact step payloads (if needed)
-        ///    - Persist full step payloads externally
-        ///    - Write archived step index entries
-        ///    - Remove evicted steps from hot state
-        ///
-        /// 2. Persist state:
-        ///    - The updated execution state MUST be saved after retention
-        ///    - Ensures consistency across distributed workers
-        ///
-        /// 3. Incremental cache warm:
-        ///    - Only refresh resolver cache for steps actually evicted
-        ///    - Avoids full index reload (critical for large DAGs)
-        ///
-        /// DESIGN:
-        /// - Retention is NOT destructive:
-        ///   Evicted steps are still accessible via payload store + index
-        ///
-        /// - Resolver cache is NOT authoritative:
-        ///   It must be explicitly refreshed when new archived steps appear
-        ///
-        /// - This method enforces a deterministic consistency boundary:
-        ///   - Before call: state may contain evictable steps
-        ///   - After call: state + resolver are aligned
-        ///
-        /// PERFORMANCE:
-        /// - Avoids full WarmAsync calls (O(N))
-        /// - Uses incremental warm (O(evictedSteps))
-        /// - Suitable for large DAGs (10k+ steps)
-        ///
-        /// SAFETY:
-        /// - Prevents stale resolver cache after retention
-        /// - Ensures no step becomes "invisible" after eviction
-        /// - Protects convergence evaluation from partial state visibility
+        /// ORDER OF OPERATIONS:
+        /// 1. Apply retention through <see cref="IAiRetentionEngine"/>.
+        /// 2. Persist the updated execution state.
+        /// 3. Warm the step resolver for evicted steps.
         ///
         /// IMPORTANT:
-        /// - MUST be used wherever retention is applied
-        /// - MUST NOT reorder operations
-        /// - MUST NOT skip incremental warm
-        ///
-        /// FAILURE BEHAVIOR:
-        /// - If retention fails → no changes applied
-        /// - If save fails → execution consistency may be compromised
-        /// - If warm fails → resolver may miss archived steps (should be retried)
-        ///
-        /// The combination of retention + persistence + incremental warm
-        /// guarantees that:
-        /// - The DAG remains fully resolvable
-        /// - Convergence remains deterministic
-        /// - No step is lost or hidden
-        /// </summary>
+        /// - The retention engine applies compaction before eviction.
+        /// - The eviction service is responsible for removing evicted steps from hot state.
+        /// - This method must not remove evicted steps a second time.
+        /// </remarks>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="state">The current execution state.</param>
+        /// <param name="stepContext">The current step execution context used to resolve config-driven policies.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         private async Task ApplyRetentionPersistAndWarmAsync(
             string executionId,
             AiExecutionState state,
+            AiStepExecutionContext stepContext,
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(stepContext);
 
             await _engineServices.ObservabilityService.Tracer.TraceRetentionAsync(
                 new AiRetentionTraceContext
                 {
                     ExecutionId = executionId,
-                    PolicyName = _engineServices.AiOptions.Value.StateRetention.Mode.ToString(),
+                    PolicyName = "policy-driven-retention",
                     InspectedSteps = state.Steps.Count
                 },
                 async trace =>
@@ -1817,25 +1805,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
                         executionId,
                         "retention-invoked");
 
-                    var result = await TryApplyStateRetentionAsync(
-                        state,
-                        cancellationToken).ConfigureAwait(false);
+                    var result = await _engineServices.PolicyEngineFactory
+                        .Create<IAiRetentionEngine>(AiPolicyKind.Retention, stepContext)
+                        .ApplyAsync(
+                            new AiRetentionContext
+                            {
+                                ExecutionId = executionId,
+                                ExecutionState = state,
+                                UtcNow = DateTime.UtcNow
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     var evictedSteps = result.EvictedSteps ?? Array.Empty<string>();
 
-                    foreach (var stepId in evictedSteps)
-                    {
-                        state.Steps.Remove(stepId);
-                    }
-
-                    if (result == AiExecutionRetentionApplyResult.Empty)
+                    if (result.IsEmpty)
                     {
                         _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordSkipped(
                             executionId,
-                            "no-policy-or-no-op");
+                            result.Decision.Reason ?? "no-policy-or-no-op");
 
                         trace.SetTag("skipped", true);
-                        trace.SetTag("reason", "no-policy-or-no-op");
+                        trace.SetTag("reason", result.Decision.Reason ?? "no-policy-or-no-op");
                     }
                     else
                     {

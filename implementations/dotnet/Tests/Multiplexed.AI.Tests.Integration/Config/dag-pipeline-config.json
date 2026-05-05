@@ -1,0 +1,27 @@
+{
+  "pipelines": [
+    {
+      "name": "dag-pipeline-config",
+      "version": "1",
+      "executionMode": "Dag",
+      "config": {
+        "delayMs": 999,
+        "retry": {
+          "enabled": true,
+          "maxRetries": 3,
+          "strategy": "Fixed"
+        }
+      },
+      "steps": [
+        {
+          "name": "step-1",
+          "stepKey": "pipeline-config-reader",
+          "order": 1,
+          "config": {
+            "delayMs": 100
+          }
+        }
+      ]
+    }
+  ]
+}

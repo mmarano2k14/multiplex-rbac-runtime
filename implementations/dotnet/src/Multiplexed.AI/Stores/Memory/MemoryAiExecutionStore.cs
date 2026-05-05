@@ -244,6 +244,18 @@ namespace Multiplexed.AI.Stores.Memory
                     kvp => CloneStepState(kvp.Value),
                     StringComparer.Ordinal),
 
+                PipelineConfig = new Dictionary<string, object?>(
+                    source.PipelineConfig,
+                    StringComparer.Ordinal),
+
+                DataPayloads = source.DataPayloads != null
+                    ? new Dictionary<string, AiStoredPayload>(source.DataPayloads, StringComparer.Ordinal)
+                    : new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal),
+
+                                MetadataPayloads = source.MetadataPayloads != null
+                    ? new Dictionary<string, AiStoredPayload>(source.MetadataPayloads, StringComparer.Ordinal)
+                    : new Dictionary<string, AiStoredPayload>(StringComparer.Ordinal),
+
                 CreatedAtUtc = source.CreatedAtUtc,
                 UpdatedAtUtc = source.UpdatedAtUtc
             };

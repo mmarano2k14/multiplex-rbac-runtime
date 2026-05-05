@@ -89,6 +89,20 @@ namespace Multiplexed.Abstractions.AI.Execution
         public Dictionary<string, AiStoredPayload>? MetadataPayloads { get; set; }
 
         /// <summary>
+        /// Gets or sets the pipeline-level runtime configuration captured when the execution was created.
+        /// </summary>
+        /// <remarks>
+        /// This configuration represents the default configuration inherited by all steps in the execution.
+        /// Step-level configuration may override these values during runtime configuration resolution.
+        ///
+        /// IMPORTANT:
+        /// - This value is captured from the resolved pipeline at execution creation time.
+        /// - It is persisted with the execution state to keep distributed workers deterministic.
+        /// - Runtime helpers should use this as fallback when a step does not define a local config value.
+        /// </remarks>
+        public Dictionary<string, object?> PipelineConfig { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
         /// Gets or sets the UTC timestamp when this state was created.
         /// </summary>
         public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;

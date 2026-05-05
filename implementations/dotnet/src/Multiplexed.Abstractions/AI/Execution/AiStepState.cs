@@ -276,6 +276,15 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// </summary>
         public long Version { get; set; }
 
+        /// <summary>
+        /// Gets or sets the estimated inline payload size in bytes for this step.
+        /// </summary>
+        /// <remarks>
+        /// This value is computed once when the step completes and is used by retention
+        /// triggers to avoid recalculating payload size repeatedly.
+        /// </remarks>
+        public long? InlinePayloadSizeBytes { get; set; }
+
         // ---------------------------------------------------------------------
         // SETTERS
         // ---------------------------------------------------------------------
@@ -500,6 +509,9 @@ namespace Multiplexed.Abstractions.AI.Execution
             ClaimedAtUtc = null;
             LeaseExpiresAtUtc = null;
 
+            // compute payload size once
+            InlinePayloadSizeBytes = EstimateInlinePayloadSize(result);
+
             Version++;
         }
 
@@ -586,6 +598,61 @@ namespace Multiplexed.Abstractions.AI.Execution
             UpdatedAtUtc = DateTime.UtcNow;
             RecoveryCount++;
             Version++;
+        }
+
+        /// <summary>
+        /// Estimates the total inline payload size in bytes for a step result.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Compute the size of inline result data once at completion time.
+        /// - Avoid repeated serialization during retention trigger evaluation.
+        ///
+        /// BEHAVIOR:
+        /// - Iterates over all values stored in <see cref="AiStepResult.Data"/>.
+        /// - Serializes each value to UTF-8 JSON and sums their byte lengths.
+        /// - Ignores <c>null</c> values.
+        ///
+        /// IMPORTANT:
+        /// - This method must remain deterministic.
+        /// - It should be called only once per step completion.
+        /// - The result should be cached in <c>AiStepState.InlinePayloadSizeBytes</c>.
+        ///
+        /// PERFORMANCE:
+        /// - Serialization cost is paid once at write time (O(N)).
+        /// - Retention trigger evaluation becomes O(1) per step.
+        ///
+        /// LIMITATIONS:
+        /// - This is an approximation of actual memory usage.
+        /// - JSON serialization size may differ from in-memory representation.
+        /// </remarks>
+        /// <param name="result">The step result containing inline data.</param>
+        /// <returns>
+        /// The estimated size in bytes of all inline payload values,
+        /// or <c>0</c> when no data is present.
+        /// </returns>
+        private static long EstimateInlinePayloadSize(AiStepResult result)
+        {
+            if (result?.Data is null || result.Data.Count == 0)
+            {
+                return 0;
+            }
+
+            long total = 0;
+
+            foreach (var value in result.Data.Values)
+            {
+                if (value is null)
+                {
+                    continue;
+                }
+
+                total += System.Text.Json.JsonSerializer
+                    .SerializeToUtf8Bytes(value)
+                    .LongLength;
+            }
+
+            return total;
         }
 
         /// <summary>

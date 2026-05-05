@@ -40,5 +40,14 @@ namespace Multiplexed.Abstractions.AI.Pipeline
         /// </summary>
         public IReadOnlyCollection<AiPipelineStepDefinition> Steps { get; init; }
             = Array.Empty<AiPipelineStepDefinition>();
+
+        /// <summary>
+        /// Gets or initializes pipeline-level configuration shared by all steps.
+        /// </summary>
+        /// <remarks>
+        /// Step-level configuration may override these values during policy/config resolution.
+        /// </remarks>
+        public IReadOnlyDictionary<string, object?> Config { get; init; }
+            = new Dictionary<string, object?>();
     }
 }

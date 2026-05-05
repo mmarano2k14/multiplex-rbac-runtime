@@ -41,5 +41,14 @@ namespace Multiplexed.Abstractions.AI.Pipeline
         /// </summary>
         public IReadOnlyList<ResolvedAiPipelineStep> Steps { get; init; }
             = Array.Empty<ResolvedAiPipelineStep>();
+
+        /// <summary>
+        /// Gets or initializes the resolved pipeline-level configuration.
+        /// </summary>
+        /// <remarks>
+        /// This configuration acts as the default configuration inherited by resolved steps.
+        /// </remarks>
+        public IReadOnlyDictionary<string, object?> Config { get; init; }
+            = new Dictionary<string, object?>();
     }
 }

@@ -37,6 +37,12 @@
         /// <summary>
         /// Defines routing logic between providers, tools, or execution paths.
         /// </summary>
-        Routing = 5
+        Routing = 5,
+
+        /// <summary>
+        /// Defines retention behavior for execution state, including compaction,
+        /// payload externalization, and hot-state eviction.
+        /// </summary>
+        Retention = 6
     }
 }

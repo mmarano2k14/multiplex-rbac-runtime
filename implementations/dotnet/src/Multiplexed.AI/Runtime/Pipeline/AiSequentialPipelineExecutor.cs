@@ -73,6 +73,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 Name = pipeline.Name,
                 Version = pipeline.Version,
                 ExecutionMode = pipeline.ExecutionMode,
+                Config = pipeline.Config,
                 Steps = orderedSteps
             };
         }

@@ -6,6 +6,28 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## Unreleased
+
+### Changed
+- Replaced the legacy execution state retention flow with the new policy-driven retention engine.
+- Added config-driven retention resolution using pipeline-level configuration with step-level overrides.
+- Integrated retention policies through the shared policy engine model.
+- Updated retention execution to preserve all policy decisions, applying compaction before eviction when both are selected.
+- Added step-aware inline payload size tracking through `AiStepState.InlinePayloadSizeBytes`.
+- Updated retention trigger logic to use precomputed step payload size instead of repeated serialization.
+- Integrated policy-driven retention into DAG execution persistence and finalization flow.
+- Ensured retention state changes are persisted and resolver cache is warmed incrementally after eviction.
+
+### Added
+- Added compact, evict, and hybrid retention policies.
+- Added retention context support for resolved trigger configuration.
+- Added pipeline-level runtime configuration propagation into execution state.
+- Added integration coverage for pipeline config persistence and step config override behavior.
+
+### Removed
+- Removed dependency on legacy options-driven retention flow from the DAG runtime path.
+
+---
 ## [1.0.4.0] - 2026-05-04 - Config-Driven and Policy-Driven Retry Engine
 
 ### Added
