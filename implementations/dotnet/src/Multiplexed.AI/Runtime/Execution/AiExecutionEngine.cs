@@ -145,6 +145,28 @@ namespace Multiplexed.AI.Runtime.Execution
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Executes one or more ready units of work for the specified execution.
+        /// Must be implemented by the derived engine.
+        /// </summary>
+        /// <param name="executionId">
+        /// The unique execution identifier.
+        /// </param>
+        /// <param name="maxSteps">
+        /// The maximum number of ready steps to execute.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The updated execution record after the batch execution attempt.
+        /// </returns>
+        public abstract Task<AiExecutionRecord> ExecuteBatchAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default);
+
+
+        /// <summary>
         /// Executes the remaining work until a terminal state is reached.
         /// Must be implemented by the derived engine.
         /// </summary>

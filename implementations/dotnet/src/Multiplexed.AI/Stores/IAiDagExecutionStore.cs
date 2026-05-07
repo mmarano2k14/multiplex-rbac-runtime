@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine;
 
@@ -89,7 +90,7 @@ namespace Multiplexed.AI.Stores
             string executionId,
             CancellationToken cancellationToken = default);
 
-        Task<ClaimedAiStep?> TryClaimNextReadyStepAsync(
+        Task<AiClaimedStep?> TryClaimNextReadyStepAsync(
             string executionId,
             string workerId,
             CancellationToken cancellationToken = default);
@@ -162,6 +163,46 @@ namespace Multiplexed.AI.Stores
         Task DeleteStepAsync(
             string executionId,
             string stepName,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to atomically claim multiple ready DAG steps for execution.
+        ///
+        /// PURPOSE:
+        /// - Supports bounded parallel DAG execution.
+        /// - Allows multiple independent ready steps to be claimed in a single operation.
+        /// - Preserves distributed execution safety across multiple runtime instances.
+        ///
+        /// BEHAVIOR:
+        /// - Only steps in a ready state may be claimed.
+        /// - Dependency validation must occur before a step is claimed.
+        /// - Successfully claimed steps transition to a running state.
+        /// - Each claimed step receives a unique distributed claim token.
+        ///
+        /// IMPORTANT:
+        /// - The implementation must remain atomic for each claimed step.
+        /// - Distributed claim ownership must be enforced.
+        /// - Returned steps are expected to be executed by the caller.
+        /// </summary>
+        /// <param name="executionId">
+        /// The unique execution identifier.
+        /// </param>
+        /// <param name="workerId">
+        /// The unique worker identifier requesting the claims.
+        /// </param>
+        /// <param name="maxSteps">
+        /// The maximum number of ready steps to claim.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The collection of successfully claimed DAG steps.
+        /// </returns>
+        Task<IReadOnlyList<AiClaimedStep>> TryClaimReadyStepsAsync(
+            string executionId,
+            string workerId,
+            int maxSteps,
             CancellationToken cancellationToken = default);
     }
 }

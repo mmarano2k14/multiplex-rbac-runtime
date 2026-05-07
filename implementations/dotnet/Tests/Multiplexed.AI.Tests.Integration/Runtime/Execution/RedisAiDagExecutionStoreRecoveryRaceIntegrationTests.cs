@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
@@ -154,7 +155,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             await CreateExecutionAsync(executionId, step);
 
-            var claimResults = new ConcurrentBag<ClaimedAiStep?>();
+            var claimResults = new ConcurrentBag<AiClaimedStep?>();
 
             // Act
             var recoveryTasks = Enumerable.Range(0, 10)

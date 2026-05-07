@@ -339,6 +339,21 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         }
 
         /// <inheritdoc />
+        public override Task<AiExecutionRecord> ExecuteBatchAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+
+            // Sequential execution intentionally processes
+            // a single step at a time.
+            return ExecuteNextAsync(
+                executionId,
+                cancellationToken);
+        }
+
+        /// <inheritdoc />
         public override async Task<AiExecutionRecord> ExecuteAllAsync(
             string executionId,
             CancellationToken cancellationToken = default)

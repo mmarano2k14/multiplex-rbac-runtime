@@ -4,6 +4,7 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -54,6 +55,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
             IAiPolicyEngineFactory policyEngineFactory,
+            IAiDagStepExecutionOrchestrator stepExecutionOrchestrator,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
         {
@@ -72,6 +74,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
             PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
+
+            StepExecutionOrchestrator = stepExecutionOrchestrator
+                ?? throw new ArgumentNullException(nameof(stepExecutionOrchestrator));
 
             DagStore = dagStore;
             SnapshotService = snapshotService;
@@ -127,5 +132,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
         /// <inheritdoc />
         public IAiPolicyEngineFactory PolicyEngineFactory { get; }
+
+        /// <inheritdoc />
+        public IAiDagStepExecutionOrchestrator StepExecutionOrchestrator { get; }
     }
 }

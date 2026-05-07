@@ -10,6 +10,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Metrics;
@@ -46,6 +47,7 @@ using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.Retention.Services;
+using Multiplexed.AI.Runtime.Execution.Scheduling;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Memory;
@@ -462,6 +464,13 @@ namespace Multiplexed.AI.DI
                 typeof(AiRuntimeAssemblyMarker).Assembly);
 
             services.TryAddSingleton<IAiPolicyEngineFactory, DefaultAiPolicyEngineFactory>();
+
+
+            // ------------------------------------------------------------
+            // ExecutionOrchestrator Scheduler
+            // ------------------------------------------------------------
+
+            services.AddScoped<IAiDagStepExecutionOrchestrator,DefaultAiDagStepExecutionOrchestrator>();
 
 
             // ------------------------------------------------------------

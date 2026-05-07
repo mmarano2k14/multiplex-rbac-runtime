@@ -5,6 +5,133 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+## [1.0.4.3] - 2026-07-04 - Distributed DAG Batch Execution
+
+## New Features
+
+Implemented bounded distributed DAG batch execution with deterministic multi-worker orchestration.
+
+---
+
+# Distributed Batch Execution
+
+Added:
+
+- `ExecuteBatchAsync(...)`
+- `ExecuteBatchDistributedAsync(...)`
+- `IAiDagStepExecutionOrchestrator`
+- `DefaultAiDagStepExecutionOrchestrator`
+
+The runtime now supports:
+
+- bounded parallel DAG execution
+- dependency-aware distributed scheduling
+- atomic multi-step claiming
+- multi-worker execution coordination
+- deterministic batch convergence
+- distributed-safe step ownership
+
+---
+
+# Redis DAG Claiming
+
+Added atomic Redis Lua batch claim support:
+
+- `TryClaimReadyStepsAsync(...)`
+- `ClaimBatchPreparedScript`
+- deterministic step ordering
+- retry-aware claim eligibility
+- claim-token ownership enforcement
+
+---
+
+# Parallel Execution Configuration
+
+Added pipeline-level parallel execution configuration:
+
+```json
+"parallelExecution": {
+  "enabled": true,
+  "maxDegreeOfParallelism": 8
+}
+```
+ Scheduling Architecture
+
+Introduced centralized scheduling orchestration layer:
+
+- orchestration isolated from DAG engine
+- future-ready admission policies
+- future-ready distributed throttling
+- future-ready execution governance
+- future-ready tracing integration
+
+---
+
+# Batch Execution Result Model
+
+Added:
+
+- `AiClaimedStepExecutionResult`
+
+This preserves explicit mapping between:
+
+- claimed distributed ownership
+- execution result
+
+without relying on positional ordering.
+
+---
+
+# Retention Compatibility
+
+Validated compatibility with:
+
+- retention compaction
+- retention eviction
+- archived payload resolution
+- bounded hot-state execution
+- payload externalization
+- distributed convergence
+
+---
+
+# Distributed Concurrency Validation
+
+Added large-scale integration tests validating:
+
+- 50-step DAG execution
+- dependency-aware scheduling
+- bounded parallel execution
+- concurrent multi-worker execution
+- atomic distributed claims
+- deterministic convergence
+- retention + compaction + eviction compatibility
+
+---
+
+# Stability Improvements
+
+Fixed:
+
+- Redis Lua empty-array serialization edge case (`{}` vs `[]`)
+- batch claim deserialization robustness
+- distributed batch record loading consistency
+- orchestration wiring consistency for local retry tests
+
+---
+
+# Result
+
+The runtime now supports:
+
+- deterministic distributed DAG orchestration
+- bounded parallel execution
+- atomic multi-worker scheduling
+- retention-safe distributed execution
+- policy-driven execution infrastructure
+- scalable hot-state bounded workflows
+
+---
 
 ## [1.0.4.2] - 2026-07-04 - Config-Driven and Policy-Driven Retention Engine
 

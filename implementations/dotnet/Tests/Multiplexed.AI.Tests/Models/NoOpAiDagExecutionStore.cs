@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Stores;
@@ -65,12 +66,12 @@ namespace Multiplexed.AI.Tests.Fakes
             return Task.CompletedTask;
         }
 
-        public Task<ClaimedAiStep?> TryClaimNextReadyStepAsync(
+        public Task<AiClaimedStep?> TryClaimNextReadyStepAsync(
             string executionId,
             string workerId,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult<ClaimedAiStep?>(null);
+            return Task.FromResult<AiClaimedStep?>(null);
         }
 
         public Task<bool> TryCompleteStepAsync(
@@ -118,6 +119,11 @@ namespace Multiplexed.AI.Tests.Fakes
         public Task DeleteStepAsync(string executionId, string stepName, CancellationToken cancellationToken = default)
         {
             return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AiClaimedStep>> TryClaimReadyStepsAsync(string executionId, string workerId, int maxSteps, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AiClaimedStep>>(Array.Empty<AiClaimedStep>());
         }
     }
 }

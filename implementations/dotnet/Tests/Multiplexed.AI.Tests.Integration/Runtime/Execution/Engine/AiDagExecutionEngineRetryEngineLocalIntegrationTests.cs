@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
@@ -20,6 +21,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Scheduling;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
@@ -237,6 +239,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 policyEngineRegistry,
                 observability);
 
+            var stepExecutionOrchestrator = new DefaultAiDagStepExecutionOrchestrator();
+
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
@@ -245,8 +249,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiExecutionStateReader)] = stateReader,
                 [typeof(IAiExecutionStateWriter)] = stateWriter,
                 [typeof(IAiExecutionStepResolver)] = stepResolver,
-                [typeof(IAiPolicyEngineFactory)] = policyFactory
+                [typeof(IAiPolicyEngineFactory)] = policyFactory,
+                [typeof(IAiDagStepExecutionOrchestrator)] = stepExecutionOrchestrator
             });
+
+            
 
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,

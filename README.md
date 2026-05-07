@@ -6,7 +6,7 @@ Distributed • State-Driven • Fault-Tolerant • Observable
 
 This repository provides a **reference implementation of a multiplexed, deterministic AI runtime**, demonstrating how to build **distributed, observable, and fault-tolerant execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.2-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.4.3-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---
@@ -1115,6 +1115,24 @@ This allows:
 - faster overall execution
 - better scalability
 
+Parallel execution is bounded and scheduler-driven.
+
+The runtime can atomically claim multiple eligible DAG steps and execute them concurrently across distributed workers.
+
+This allows:
+
+- scalable DAG throughput
+- deterministic distributed scheduling
+- controlled concurrency
+- safe multi-worker execution
+
+The orchestration layer ensures that:
+
+- dependency constraints are respected
+- ownership remains atomic
+- retries remain deterministic
+- convergence guarantees are preserved
+
 ---
 
 ### Dependency Resolution
@@ -1309,6 +1327,60 @@ The flow is:
 
 👉 No worker communicates directly with another worker.  
 👉 All coordination happens through Redis.
+
+---
+
+### Bounded Parallel DAG Execution
+
+The runtime supports bounded distributed parallel DAG execution.
+
+Instead of claiming and executing a single step at a time, workers can atomically claim multiple eligible DAG steps and execute them concurrently.
+
+This enables:
+
+- bounded parallel execution
+- dependency-aware scheduling
+- distributed-safe multi-worker orchestration
+- deterministic batch convergence
+
+Execution remains fully state-driven.
+
+Workers:
+
+1. evaluate eligible steps
+2. atomically claim batches through Redis Lua scripts
+3. execute steps concurrently
+4. persist completion/failure transitions safely
+
+Eligibility rules ensure that a step can only execute when:
+
+- all dependencies are completed
+- the step is Ready or retry-eligible
+- no other worker currently owns the step
+
+The execution scheduler supports:
+
+- configurable parallelism
+- deterministic convergence semantics
+- distributed-safe ownership
+- future execution admission policies
+
+Example:
+
+```json
+{
+  "parallelExecution": {
+    "enabled": true,
+    "maxDegreeOfParallelism": 8
+  }
+}
+```
+This allows the runtime to scale execution throughput while preserving:
+
+- deterministic convergence
+- retry safety
+- recovery correctness
+- retention compatibility
 
 ---
 
@@ -1512,6 +1584,9 @@ Step failure
 → Apply decision to RetryState
 → Persist via Redis Lua (atomic)
 ```
+
+Eligible steps may be claimed individually or in bounded parallel batches depending on scheduler configuration.
+
 ### Why This Matters
 
 Retry is no longer:

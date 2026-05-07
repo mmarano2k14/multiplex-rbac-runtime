@@ -72,5 +72,25 @@
         Task<AiExecutionRecord> ExecuteAllAsync(
             string executionId,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Executes multiple ready DAG steps for an existing AI execution.
+        /// </summary>
+        /// <param name="executionId">
+        /// The unique execution identifier.
+        /// </param>
+        /// <param name="maxSteps">
+        /// The maximum number of ready steps to execute.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The updated execution record.
+        /// </returns>
+        Task<AiExecutionRecord> ExecuteBatchAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default);
     }
 }

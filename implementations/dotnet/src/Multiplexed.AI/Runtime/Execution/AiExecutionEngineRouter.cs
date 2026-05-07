@@ -104,6 +104,54 @@ namespace Multiplexed.AI.Runtime.Execution
         }
 
         /// <summary>
+        /// Executes one or more ready units of work for the specified execution.
+        ///
+        /// The target engine is selected using the persisted execution mode.
+        /// </summary>
+        /// <param name="executionId">
+        /// The unique execution identifier.
+        /// </param>
+        /// <param name="maxSteps">
+        /// The maximum number of ready steps to execute.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The updated execution record after the batch execution attempt.
+        /// </returns>
+        public async Task<AiExecutionRecord> ExecuteBatchAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+            {
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+            }
+
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+
+            var record = await _store.GetRecordAsync(executionId, cancellationToken)
+                ?? throw new InvalidOperationException("Execution not found.");
+
+            return record.ExecutionMode switch
+            {
+                AiExecutionMode.Sequential => await _sequentialEngine.ExecuteNextAsync(
+                    executionId,
+                    cancellationToken),
+
+                AiExecutionMode.Dag => await _dagEngine.ExecuteBatchAsync(
+                    executionId,
+                    maxSteps,
+                    cancellationToken),
+
+                _ => throw new InvalidOperationException(
+                    $"Unsupported execution mode '{record.ExecutionMode}'.")
+            };
+        }
+
+        /// <summary>
         /// Executes the remaining work until a terminal state is reached,
         /// or until the delegated engine stops progressing.
         /// </summary>

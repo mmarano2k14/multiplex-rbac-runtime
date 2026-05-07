@@ -4,6 +4,7 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
@@ -83,11 +84,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         IOptions<AiEngineOptions> AiOptions { get; }
 
         /// <summary>
-        /// Gets runtime metrics collector.
-        /// </summary>
-        //IAiRuntimeMetrics Metrics { get; }
-
-        /// <summary>
         /// Gets the step result payload compactor.
         /// </summary>
         IAiStepResultPayloadCompactor PayloadCompactor { get; }
@@ -134,25 +130,22 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// <summary>
         /// Gets the factory used to create step-scoped AI policy engine instances.
         /// </summary>
-        /// <remarks>
-        /// This factory is responsible for instantiating the appropriate policy engine
-        /// (for example, retry, retention, eviction) based on the specified policy kind.
-        ///
-        /// DESIGN:
-        /// - Engines are created per step execution to ensure isolation and multi-worker safety.
-        /// - No engine instance is shared across executions.
-        /// - The factory resolves the correct engine implementation via the policy engine registry.
-        ///
-        /// USAGE:
-        /// - The DAG or runtime layer uses this factory to obtain a policy engine
-        ///   and execute domain-specific behavior (e.g., retry handling).
-        ///
-        /// EXAMPLE:
-        /// <code>
-        /// var engine = PolicyFactory.Create&lt;IAiRetryEngine&gt;(AiPolicyKind.Retry, stepContext);
-        /// await engine.HandleFailureAsync(...);
-        /// </code>
-        /// </remarks>
         IAiPolicyEngineFactory PolicyEngineFactory { get; }
+
+        /// <summary>
+        /// Gets the orchestrator responsible for executing claimed DAG steps.
+        ///
+        /// PURPOSE:
+        /// - Centralizes step execution orchestration.
+        /// - Supports bounded parallel execution.
+        /// - Provides the future integration point for distributed concurrency,
+        ///   policy-based execution admission, scheduling, tracing, and metrics.
+        ///
+        /// IMPORTANT:
+        /// - The DAG engine remains responsible for dependency resolution,
+        ///   convergence evaluation, and execution persistence.
+        /// - The orchestrator is responsible for how claimed steps are executed.
+        /// </summary>
+        IAiDagStepExecutionOrchestrator StepExecutionOrchestrator { get; }
     }
 }

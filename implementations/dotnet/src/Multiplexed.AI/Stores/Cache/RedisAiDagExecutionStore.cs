@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine;
@@ -516,6 +517,155 @@ namespace Multiplexed.AI.Stores.Cache
             return 1
             """);
 
+        /// <summary>
+        /// Claims multiple eligible DAG steps atomically for bounded parallel execution.
+        ///
+        /// ELIGIBILITY RULES:
+        /// - step must be in Ready or None state
+        /// - OR step must be in WaitingForRetry and its retry window must be open
+        /// - all dependencies must already be Completed
+        ///
+        /// IMPORTANT:
+        /// - Existing single-step claim behavior remains unchanged.
+        /// - Step names are sorted for deterministic ordering.
+        /// - At most maxSteps are claimed.
+        /// - Each claimed step receives its own claim token provided by the caller.
+        /// - Claim tokens must be unique per claimed step.
+        /// </summary>
+        private static readonly LuaScript ClaimBatchPreparedScript = LuaScript.Prepare(
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
+                end
+
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
+
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
+
+                return value
+            end
+
+            local stepNames = redis.call('SMEMBERS', @stepIndexKey)
+
+            local workerId = @workerId
+            local nowUnix = tonumber(@nowUnix)
+            local stepKeyPrefix = @stepKeyPrefix
+            local executionId = @executionId
+            local maxSteps = tonumber(@maxSteps)
+            local claimTokens = cjson.decode(@claimTokensJson)
+
+            local claimed = {}
+
+            table.sort(stepNames)
+
+            for _, stepName in ipairs(stepNames) do
+                if #claimed >= maxSteps then
+                    break
+                end
+
+                local stepKey = stepKeyPrefix .. stepName
+                local raw = redis.call('GET', stepKey)
+
+                if raw then
+                    local step = cjson.decode(raw)
+                    local canRun = false
+
+                    if step.Status == "Ready" or step.Status == "None" then
+                        canRun = true
+                    end
+
+                    if step.Status == "WaitingForRetry" then
+                        local retryState = step.RetryState
+
+                        if retryState == nil or retryState == cjson.null then
+                            canRun = false
+                        elseif retryState.NextRetryAtUtc == nil or retryState.NextRetryAtUtc == cjson.null then
+                            canRun = true
+                        else
+                            local nextRetryAtUtc = tonumber(retryState.NextRetryAtUtc)
+
+                            if nextRetryAtUtc ~= nil and nextRetryAtUtc <= nowUnix then
+                                canRun = true
+                            end
+                        end
+                    end
+
+                    if canRun then
+                        local deps = normalize_array(step.DependsOn)
+
+                        for _, depName in ipairs(deps) do
+                            local depKey = stepKeyPrefix .. depName
+                            local depRaw = redis.call('GET', depKey)
+
+                            if not depRaw then
+                                canRun = false
+                                break
+                            end
+
+                            local depStep = cjson.decode(depRaw)
+
+                            if depStep.Status ~= "Completed" then
+                                canRun = false
+                                break
+                            end
+                        end
+                    end
+
+                    if canRun then
+                        local claimToken = claimTokens[#claimed + 1]
+
+                        if claimToken == nil or claimToken == cjson.null or claimToken == "" then
+                            break
+                        end
+
+                        step.Status = "Running"
+                        step.ClaimedBy = workerId
+                        step.ClaimToken = claimToken
+                        step.ClaimedAtUtc = nowUnix
+
+                        if step.RetryState ~= nil and step.RetryState ~= cjson.null then
+                            step.RetryState.NextRetryAtUtc = cjson.null
+                        end
+
+                        local timeoutSeconds = tonumber(step.ClaimTimeoutSeconds)
+                        if timeoutSeconds ~= nil and timeoutSeconds > 0 then
+                            step.LeaseExpiresAtUtc = nowUnix + (timeoutSeconds * 1000)
+                        else
+                            step.LeaseExpiresAtUtc = cjson.null
+                        end
+
+                        if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
+                            step.StartedAtUtc = nowUnix
+                        end
+
+                        step.UpdatedAtUtc = nowUnix
+                        step.Version = (step.Version or 0) + 1
+                        step.DependsOn = normalize_array(step.DependsOn)
+
+                        redis.call('SET', stepKey, cjson.encode(step))
+
+                        table.insert(claimed, {
+                            ExecutionId = executionId,
+                            StepName = step.StepName,
+                            ClaimToken = claimToken
+                        })
+                    end
+                end
+            end
+
+            if #claimed == 0 then
+                return '[]'
+            end
+
+            return cjson.encode(claimed)
+            """);
+
         // ---------------------------------------------------------------------
         // LOADED SCRIPTS (SHA CACHED)
         // ---------------------------------------------------------------------
@@ -525,6 +675,7 @@ namespace Multiplexed.AI.Stores.Cache
         private LoadedLuaScript _failLoadedScript;
         private LoadedLuaScript _recoverLoadedScript;
         private LoadedLuaScript _finalizeLoadedScript;
+        private LoadedLuaScript _claimBatchLoadedScript;
 
         /// <summary>
         /// Initializes a new instance of the DAG Redis store.
@@ -564,6 +715,7 @@ namespace Multiplexed.AI.Stores.Cache
             _failLoadedScript = LoadScript(FailPreparedScript);
             _recoverLoadedScript = LoadScript(RecoverPreparedScript);
             _finalizeLoadedScript = LoadScript(FinalizeScript);
+            _claimBatchLoadedScript = LoadScript(ClaimBatchPreparedScript);
         }
 
         /// <summary>
@@ -880,7 +1032,7 @@ namespace Multiplexed.AI.Stores.Cache
         /// - a new claim token is generated per claim attempt
         /// - lease expiration is persisted atomically inside Lua
         /// </summary>
-        public async Task<ClaimedAiStep?> TryClaimNextReadyStepAsync(
+        public async Task<AiClaimedStep?> TryClaimNextReadyStepAsync(
             string executionId,
             string workerId,
             CancellationToken cancellationToken = default)
@@ -1336,11 +1488,120 @@ namespace Multiplexed.AI.Stores.Cache
             await _database.SetRemoveAsync(stepIndexKey, stepName);
         }
 
+        /// <summary>
+        /// Attempts to atomically claim multiple eligible DAG steps for bounded parallel execution.
+        ///
+        /// CLAIM RULES:
+        /// - each step must be Ready or None
+        /// - OR WaitingForRetry with retry window open
+        /// - all dependencies must already be Completed
+        /// - each claimed step transitions to Running atomically
+        ///
+        /// IMPORTANT:
+        /// - Existing single-step claim behavior remains unchanged.
+        /// - nowUnix is expressed in milliseconds.
+        /// - one unique claim token is generated per requested claim slot.
+        /// - at most <paramref name="maxSteps"/> steps are claimed.
+        /// </summary>
+        /// <param name="executionId">The unique execution identifier.</param>
+        /// <param name="workerId">The worker identifier requesting the claims.</param>
+        /// <param name="maxSteps">The maximum number of steps to claim.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The collection of successfully claimed DAG steps.</returns>
+        public async Task<IReadOnlyList<AiClaimedStep>> TryClaimReadyStepsAsync(
+            string executionId,
+            string workerId,
+            int maxSteps,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            if (string.IsNullOrWhiteSpace(workerId))
+                throw new ArgumentException("Worker id cannot be null or empty.", nameof(workerId));
+
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+
+            var nowUnix = NowMs();
+            var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
+            var stepKeyPrefix = GetStepKeyPrefix(executionId);
+
+            var claimTokens = Enumerable
+                .Range(0, maxSteps)
+                .Select(_ => Guid.NewGuid().ToString("N"))
+                .ToArray();
+
+            var claimTokensJson = JsonSerializer.Serialize(claimTokens, _jsonOptions);
+
+            try
+            {
+                var claimed = await ExecuteClaimBatchAsync(
+                    stepIndexKey,
+                    workerId,
+                    nowUnix,
+                    stepKeyPrefix,
+                    executionId,
+                    maxSteps,
+                    claimTokensJson);
+
+                if (claimed.Count > 0)
+                {
+                    foreach (var step in claimed)
+                    {
+                        _metrics.Execution.RecordStepClaimed(
+                            executionId,
+                            step.StepName);
+
+                        _logger.Engine.LogInformation(
+                            $"[AI DAG STORE] Step batch-claimed. ExecutionId='{executionId}', StepName='{step.StepName}', WorkerId='{workerId}', ClaimToken='{step.ClaimToken}'.");
+                    }
+                }
+                else
+                {
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
+                }
+
+                return claimed;
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _claimBatchLoadedScript = LoadScript(ClaimBatchPreparedScript);
+
+                var claimed = await ExecuteClaimBatchAsync(
+                    stepIndexKey,
+                    workerId,
+                    nowUnix,
+                    stepKeyPrefix,
+                    executionId,
+                    maxSteps,
+                    claimTokensJson);
+
+                if (claimed.Count > 0)
+                {
+                    foreach (var step in claimed)
+                    {
+                        _metrics.Execution.RecordStepClaimed(
+                            executionId,
+                            step.StepName);
+
+                        _logger.Engine.LogInformation(
+                            $"[AI DAG STORE] Step batch-claimed after NOSCRIPT reload. ExecutionId='{executionId}', StepName='{step.StepName}', WorkerId='{workerId}', ClaimToken='{step.ClaimToken}'.");
+                    }
+                }
+                else
+                {
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
+                }
+
+                return claimed;
+            }
+        }
+
         // ---------------------------------------------------------------------
         // SCRIPT EXECUTION HELPERS
         // ---------------------------------------------------------------------
 
-        private async Task<ClaimedAiStep?> ExecuteClaimAsync(
+        private async Task<AiClaimedStep?> ExecuteClaimAsync(
             string stepIndexKey,
             string workerId,
             long nowUnix,
@@ -1363,7 +1624,7 @@ namespace Multiplexed.AI.Stores.Cache
             if (result.IsNull)
                 return null;
 
-            return JsonSerializer.Deserialize<ClaimedAiStep>((string)result!, _jsonOptions);
+            return JsonSerializer.Deserialize<AiClaimedStep>((string)result!, _jsonOptions);
         }
 
         private async Task<bool> ExecuteCompleteAsync(
@@ -1419,6 +1680,60 @@ namespace Multiplexed.AI.Stores.Cache
                 });
 
             return (int)result!;
+        }
+
+        /// <summary>
+        /// Executes the prepared batch claim Lua script.
+        /// </summary>
+        /// <param name="stepIndexKey">The Redis key containing the execution step index.</param>
+        /// <param name="workerId">The worker identifier requesting the claims.</param>
+        /// <param name="nowUnix">The current UTC timestamp expressed in Unix milliseconds.</param>
+        /// <param name="stepKeyPrefix">The Redis key prefix used to address execution step keys.</param>
+        /// <param name="executionId">The unique execution identifier.</param>
+        /// <param name="maxSteps">The maximum number of ready steps to claim.</param>
+        /// <param name="claimTokensJson">The JSON array of pre-generated claim tokens.</param>
+        /// <returns>The collection of successfully claimed DAG steps.</returns>
+        private async Task<IReadOnlyList<AiClaimedStep>> ExecuteClaimBatchAsync(
+            string stepIndexKey,
+            string workerId,
+            long nowUnix,
+            string stepKeyPrefix,
+            string executionId,
+            int maxSteps,
+            string claimTokensJson)
+        {
+            var result = await _claimBatchLoadedScript.EvaluateAsync(
+                _database,
+                new
+                {
+                    stepIndexKey = (RedisKey)stepIndexKey,
+                    workerId = (RedisValue)workerId,
+                    nowUnix = (RedisValue)nowUnix,
+                    stepKeyPrefix = (RedisValue)stepKeyPrefix,
+                    executionId = (RedisValue)executionId,
+                    maxSteps = (RedisValue)maxSteps,
+                    claimTokensJson = (RedisValue)claimTokensJson
+                });
+
+            if (result.IsNull)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            var json = (string)result!;
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            List<AiClaimedStep>? claimed = JsonSerializer.Deserialize<List<AiClaimedStep>>(
+                json,
+                _jsonOptions);
+
+            return claimed is not null
+                ? claimed
+                : Array.Empty<AiClaimedStep>();
         }
 
         // ---------------------------------------------------------------------

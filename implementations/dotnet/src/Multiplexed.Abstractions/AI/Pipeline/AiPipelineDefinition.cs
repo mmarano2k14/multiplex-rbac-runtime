@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using System.Text.Json.Serialization;
 
 namespace Multiplexed.Abstractions.AI.Pipeline
@@ -49,5 +50,33 @@ namespace Multiplexed.Abstractions.AI.Pipeline
         /// </remarks>
         public IReadOnlyDictionary<string, object?> Config { get; init; }
             = new Dictionary<string, object?>();
+
+        /// <summary>
+        /// Gets or sets the optional parallel execution definition.
+        ///
+        /// This definition controls bounded parallel execution behavior
+        /// for DAG-based execution engines.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Defines how many DAG steps may execute concurrently.
+        /// - Enables config-driven parallel orchestration.
+        /// - Allows different pipelines to expose different execution concurrency models.
+        ///
+        /// IMPORTANT:
+        /// - This definition is orchestration-level metadata.
+        /// - It is intentionally strongly typed and not stored in the generic Config bag.
+        /// - Sequential execution engines may safely ignore this definition.
+        /// - DAG execution engines may use this definition to configure bounded parallelism.
+        ///
+        /// FUTURE EXTENSIBILITY:
+        /// This definition may later evolve to support:
+        /// - distributed concurrency limits
+        /// - admission control
+        /// - worker affinity
+        /// - scheduling strategies
+        /// - partition-aware execution
+        /// </remarks>
+        public AiParallelExecutionDefinition? ParallelExecution { get; init; }
     }
 }
