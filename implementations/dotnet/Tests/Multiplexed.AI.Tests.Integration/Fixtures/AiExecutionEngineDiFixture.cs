@@ -18,7 +18,7 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Providers.Llm.OpenAI.DI;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.DependencyInjection;
-using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Retention.Policies;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Prompt;
 using Multiplexed.AI.Tests.Fakes;

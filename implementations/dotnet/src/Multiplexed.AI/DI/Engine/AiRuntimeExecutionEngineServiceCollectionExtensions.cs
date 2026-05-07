@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
 
 namespace Multiplexed.AI.DI.Engine
 {

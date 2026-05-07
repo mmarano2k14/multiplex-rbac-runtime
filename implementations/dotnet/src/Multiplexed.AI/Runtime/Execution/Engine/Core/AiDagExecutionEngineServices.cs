@@ -19,7 +19,7 @@ using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 
-namespace Multiplexed.AI.Runtime.Execution.Engine
+namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 {
     /// <summary>
     /// Default implementation of <see cref="IAiDagExecutionEngineServices"/>.

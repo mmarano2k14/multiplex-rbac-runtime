@@ -9,7 +9,7 @@ using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
-using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Tests.Models;

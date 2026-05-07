@@ -5,6 +5,287 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+
+## [1.0.4.4] - 2026-08-04 - DAG Execution Engine Refactor
+
+## Overview
+
+Refactored the DAG execution engine into focused runtime services to reduce engine complexity, isolate responsibilities, and improve maintainability while preserving deterministic execution behavior and full backward compatibility.
+
+All existing tests are passing after the refactor.
+
+---
+
+# Architecture Refactor
+
+## Previous State
+
+The DAG engine previously centralized:
+
+- local execution
+- distributed orchestration
+- batch orchestration
+- retention coordination
+- finalization logic
+- cleanup lifecycle
+- distributed claims
+- step execution
+- convergence persistence
+
+inside a single large orchestration class.
+
+This created:
+
+- high coupling
+- difficult navigation
+- increased maintenance complexity
+- growing orchestration responsibilities
+- reduced long-term extensibility
+
+---
+
+# New Runtime Structure
+
+The runtime is now decomposed into focused orchestration services.
+
+## Core
+
+### AiDagExecutionEngine
+
+Main orchestration entrypoint responsible only for:
+
+- delegating execution flows
+- coordinating execution mode selection
+- exposing runtime API surface
+
+---
+
+## Creation
+
+### AiDagExecutionCreator
+
+Responsible for:
+
+- execution creation
+- initial state seeding
+- DAG step initialization
+- retry policy resolution
+- execution persistence
+
+---
+
+## Distributed
+
+### AiDagDistributedExecutionRunner
+
+Responsible for:
+
+- distributed orchestration flow
+- convergence coordination
+- distributed execution lifecycle
+- distributed persistence flow
+
+### AiDagStepClaimService
+
+Responsible for:
+
+- distributed step claiming
+- timeout recovery
+- batch claim acquisition
+
+---
+
+## Batch
+
+### AiDagBatchExecutionRunner
+
+Responsible for:
+
+- bounded distributed batch execution
+- controlled parallel execution coordination
+- distributed batch convergence flow
+
+---
+
+## Local
+
+### AiDagLocalExecutionRunner
+
+Responsible for:
+
+- local non-distributed DAG execution
+- local convergence orchestration
+- retry-aware local execution flow
+
+---
+
+## Steps
+
+### AiDagClaimedStepExecutor
+
+Responsible for:
+
+- executing already-claimed distributed steps
+- centralized step execution lifecycle
+- shared execution behavior across runners
+
+---
+
+## Retention
+
+### AiDagRetentionCoordinator
+
+Responsible for:
+
+- policy-driven retention execution
+- retention metrics/tracing
+- state persistence after retention
+- archive-aware resolver warming
+
+---
+
+## Finalization
+
+### AiDagExecutionFinalizationService
+
+Responsible for:
+
+- distributed-safe finalization
+- terminal convergence persistence
+- optimistic distributed finalization flow
+
+### AiDagExecutionRecordFinalizer
+
+Responsible for:
+
+- applying convergence results to records
+- applying authoritative persisted snapshots
+
+---
+
+## Helpers
+
+### AiDagExecutionLifecycleHelper
+
+Responsible for:
+
+- terminal snapshot persistence
+- automatic cleanup lifecycle
+
+### AiDagExecutionHelpers
+
+Shared execution helper methods for:
+
+- execution step key validation
+- DAG store validation
+- legacy convergence helpers
+
+---
+
+# Runtime Improvements
+
+## Separation of Concerns
+
+Execution responsibilities are now isolated by runtime domain:
+
+- creation
+- orchestration
+- retention
+- lifecycle
+- distributed coordination
+- convergence persistence
+- step execution
+
+---
+
+## Reduced Engine Complexity
+
+The main DAG engine now acts primarily as:
+
+- an orchestration facade
+- a runtime delegator
+
+instead of containing the full runtime implementation.
+
+---
+
+## Distributed Runtime Stability
+
+The refactor preserves:
+
+- deterministic convergence behavior
+- optimistic distributed persistence
+- Redis/Lua compatibility
+- retry orchestration
+- retention orchestration
+- archive-aware state resolution
+- distributed recovery semantics
+
+---
+
+## Observability Preservation
+
+Existing runtime observability remains intact:
+
+- execution tracing
+- storage tracing
+- retention tracing
+- retry metrics
+- execution metrics
+- lifecycle metrics
+
+---
+
+# Compatibility
+
+## Preserved Behavior
+
+The refactor preserves:
+
+- existing execution semantics
+- existing retry behavior
+- retention behavior
+- distributed orchestration semantics
+- snapshot persistence
+- cleanup behavior
+- execution persistence semantics
+
+---
+
+## Test Status
+
+All existing tests are passing after the refactor.
+
+Validated areas include:
+
+- local DAG execution
+- distributed DAG execution
+- retry orchestration
+- retention orchestration
+- convergence behavior
+- distributed recovery
+- batch execution
+- snapshot lifecycle
+- cleanup lifecycle
+- observability integration
+
+---
+
+# Result
+
+The runtime now provides:
+
+- cleaner orchestration architecture
+- improved maintainability
+- reduced coupling
+- improved extensibility
+- safer long-term runtime evolution
+- clearer execution domain boundaries
+- better runtime readability
+- improved operational separation
+
+---
+
 ## [1.0.4.3] - 2026-07-04 - Distributed DAG Batch Execution
 
 ## New Features

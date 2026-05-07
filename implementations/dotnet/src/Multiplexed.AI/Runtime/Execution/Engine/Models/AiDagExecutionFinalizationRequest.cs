@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.AI.Runtime.Execution.Engine
+namespace Multiplexed.AI.Runtime.Execution.Engine.Models
 {
     /// <summary>
     /// Represents a distributed-safe finalization request for a DAG execution.

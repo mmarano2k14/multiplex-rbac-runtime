@@ -9,7 +9,7 @@ using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
-using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;

@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.Execution.Engine;
+using Multiplexed.AI.Runtime.Execution.Engine.Models;
 using Multiplexed.AI.Stores;
 
 namespace Multiplexed.AI.Tests.Fakes

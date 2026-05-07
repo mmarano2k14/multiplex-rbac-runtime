@@ -21,7 +21,7 @@ using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 
-namespace Multiplexed.AI.Runtime.Execution.Engine
+namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 {
     /// <summary>
     /// Defines a strongly-typed dependency bundle for <see cref="AiDagExecutionEngine"/>.
