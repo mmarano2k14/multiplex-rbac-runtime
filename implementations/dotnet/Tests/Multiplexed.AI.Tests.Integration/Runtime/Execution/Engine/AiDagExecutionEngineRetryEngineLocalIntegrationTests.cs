@@ -271,6 +271,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stateWriter,
                 stepResolver,
                 policyFactory,
+                stepExecutionOrchestrator,
                 null);
 
             return new AiDagExecutionEngine(engineServices);

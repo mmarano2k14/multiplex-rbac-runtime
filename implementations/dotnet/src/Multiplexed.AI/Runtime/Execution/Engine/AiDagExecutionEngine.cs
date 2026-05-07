@@ -1407,6 +1407,60 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
             if (claimedSteps.Count == 0)
             {
+                var latestRecord = await _engineServices.DagStore.GetRecordAsync(
+                    executionId,
+                    cancellationToken);
+
+                if (latestRecord?.IsTerminal == true)
+                {
+                    return latestRecord;
+                }
+
+                var latestState = await _engineServices.DagStore.GetStateAsync(
+                    executionId,
+                    cancellationToken) ?? state;
+
+                record.Steps = resolvedPipeline.Steps
+                    .Select(x => x.Name)
+                    .ToList();
+
+                var idleConvergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+                    resolvedPipeline,
+                    latestState,
+                    _engineServices.StateWriter,
+                    _engineServices.StepResolver,
+                    DateTime.UtcNow,
+                    cancellationToken);
+
+                ApplyConvergenceToRecord(
+                    record,
+                    idleConvergence,
+                    latestState);
+
+                if (record.IsTerminal)
+                {
+                    var idleEpectedStepKey = record.ExecutionStepKey;
+
+                    if (string.IsNullOrWhiteSpace(idleEpectedStepKey))
+                    {
+                        throw new InvalidOperationException(
+                            "ExecutionStepKey must be set before persisting execution state.");
+                    }
+
+                    await PersistDistributedConvergedRecordAsync(
+                        record,
+                        idleConvergence,
+                        idleEpectedStepKey,
+                        latestState,
+                        resolvedPipeline,
+                        cancellationToken);
+
+                    return await _engineServices.DagStore.GetRecordAsync(
+                               executionId,
+                               cancellationToken)
+                           ?? record;
+                }
+
                 return record;
             }
 

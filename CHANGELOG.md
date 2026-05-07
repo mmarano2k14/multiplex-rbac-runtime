@@ -33,6 +33,12 @@ The runtime now supports:
 
 ---
 
+# Fixed
+
+- fixed distributed convergence edge case when concurrent workers observed empty claim batches before terminal persistence
+
+---
+
 # Redis DAG Claiming
 
 Added atomic Redis Lua batch claim support:

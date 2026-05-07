@@ -75,42 +75,38 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
 
                 var created = await host.Engine.CreateAsync(pipelineName, "hello");
 
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
                 var workers = Enumerable.Range(0, 4)
                     .Select(_ => Task.Run(async () =>
                     {
-                        AiExecutionRecord record;
-
-                        do
+                        while (!timeout.Token.IsCancellationRequested)
                         {
-                            record = await host.Engine
-                                .ExecuteBatchAsync(created.ExecutionId, maxSteps: 10)
-                                .WaitAsync(TimeSpan.FromSeconds(30));
-                        }
-                        while (!record.IsTerminal && record.Status != AiExecutionStatus.Waiting);
+                            var record = await host.Engine.ExecuteBatchAsync(
+                                created.ExecutionId,
+                                maxSteps: 10,
+                                timeout.Token);
 
-                        return record;
-                    }))
+                            if (record.IsTerminal)
+                            {
+                                return record;
+                            }
+
+                            await Task.Delay(10, timeout.Token);
+                        }
+
+                        throw new TimeoutException(
+                            $"Execution '{created.ExecutionId}' did not complete within the expected time.");
+                    }, timeout.Token))
                     .ToArray();
 
                 var records = await Task.WhenAll(workers);
 
-                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
-
-                AiExecutionRecord? finalRecord = null;
-
-                for (var i = 0; i < 10; i++)
-                {
-                    finalRecord = await dagStore.GetRecordAsync(
-                        created.ExecutionId,
-                        CancellationToken.None);
-
-                    if (finalRecord?.IsTerminal == true)
-                    {
-                        break;
-                    }
-
-                    await host.Engine.ExecuteBatchAsync(created.ExecutionId, maxSteps: 10);
-                }
+                var finalRecord = await dagStore.GetRecordAsync(
+                    created.ExecutionId,
+                    CancellationToken.None);
 
                 Assert.NotNull(finalRecord);
                 Assert.True(finalRecord!.IsTerminal);
