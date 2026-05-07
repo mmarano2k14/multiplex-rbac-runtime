@@ -13,7 +13,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
     /// <summary>
     /// Executes bounded distributed DAG step batches.
     /// </summary>
-    internal sealed class AiDagBatchExecutionRunner
+    public sealed class AiDagBatchExecutionRunner
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagStepClaimService _claimService;

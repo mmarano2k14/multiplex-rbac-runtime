@@ -18,7 +18,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
     /// <summary>
     /// Executes DAG pipelines using the local non-distributed execution path.
     /// </summary>
-    internal sealed class AiDagLocalExecutionRunner
+    public sealed class AiDagLocalExecutionRunner
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagExecutionLifecycleHelper _lifecycleHelper;

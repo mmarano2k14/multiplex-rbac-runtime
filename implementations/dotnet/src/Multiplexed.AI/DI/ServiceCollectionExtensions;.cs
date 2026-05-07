@@ -39,7 +39,15 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Context;
+using Multiplexed.AI.Runtime.Execution.Engine.Batch;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Engine.Creation;
+using Multiplexed.AI.Runtime.Execution.Engine.Distributed;
+using Multiplexed.AI.Runtime.Execution.Engine.Finalization;
+using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
+using Multiplexed.AI.Runtime.Execution.Engine.Local;
+using Multiplexed.AI.Runtime.Execution.Engine.Retention;
+using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
@@ -472,6 +480,22 @@ namespace Multiplexed.AI.DI
 
             services.AddScoped<IAiDagStepExecutionOrchestrator,DefaultAiDagStepExecutionOrchestrator>();
 
+
+
+            // ------------------------------------------------------------
+            // global execution engine runtime services
+            // ------------------------------------------------------------
+            services.AddTransient<AiDagExecutionLifecycleHelper>();
+            services.AddTransient<AiDagRetentionCoordinator>();
+            services.AddTransient<AiDagStepClaimService>();
+            services.AddTransient<AiDagClaimedStepExecutor>();
+            services.AddTransient<AiDagExecutionFinalizationService>();
+            services.AddTransient<AiDagExecutionCreator>();
+            services.AddTransient<AiDagLocalExecutionRunner>();
+            services.AddTransient<AiDagDistributedExecutionRunner>();
+            services.AddTransient<AiDagBatchExecutionRunner>();
+
+            services.AddTransient<IAiDagExecutionEngineRuntimeServices, AiDagExecutionEngineRuntimeServices>();
 
             // ------------------------------------------------------------
             // global execution engine services

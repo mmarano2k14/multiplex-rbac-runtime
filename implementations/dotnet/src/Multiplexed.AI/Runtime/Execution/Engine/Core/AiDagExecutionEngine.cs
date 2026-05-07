@@ -1,13 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Tracing;
-using Multiplexed.AI.Runtime.Execution.Engine.Batch;
-using Multiplexed.AI.Runtime.Execution.Engine.Creation;
-using Multiplexed.AI.Runtime.Execution.Engine.Distributed;
-using Multiplexed.AI.Runtime.Execution.Engine.Finalization;
-using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
-using Multiplexed.AI.Runtime.Execution.Engine.Local;
-using Multiplexed.AI.Runtime.Execution.Engine.Retention;
-using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 {
@@ -17,17 +9,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
     public sealed class AiDagExecutionEngine : AiExecutionEngine
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
-
-        private readonly AiDagExecutionCreator _creator;
-        private readonly AiDagLocalExecutionRunner _localRunner;
-        private readonly AiDagDistributedExecutionRunner _distributedRunner;
-        private readonly AiDagBatchExecutionRunner _batchRunner;
-
-        private readonly AiDagStepClaimService _claimService;
-        private readonly AiDagClaimedStepExecutor _claimedStepExecutor;
-        private readonly AiDagRetentionCoordinator _retentionCoordinator;
-        private readonly AiDagExecutionFinalizationService _finalizationService;
-        private readonly AiDagExecutionLifecycleHelper _lifecycleHelper;
+        private readonly IAiDagExecutionEngineRuntimeServices _runtime;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagExecutionEngine"/> class.
@@ -35,8 +17,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// <param name="engineServices">
         /// The DAG execution engine services.
         /// </param>
+        /// <param name="runtime">
+        /// The composed DAG execution runtime services.
+        /// </param>
         public AiDagExecutionEngine(
-            IAiDagExecutionEngineServices engineServices)
+            IAiDagExecutionEngineServices engineServices,
+            IAiDagExecutionEngineRuntimeServices runtime)
             : base(
                 engineServices.Store,
                 engineServices.ContextStore,
@@ -51,43 +37,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             _engineServices = engineServices
                 ?? throw new ArgumentNullException(nameof(engineServices));
 
-            _lifecycleHelper = new AiDagExecutionLifecycleHelper(
-                engineServices);
-
-            _retentionCoordinator = new AiDagRetentionCoordinator(
-                engineServices);
-
-            _claimService = new AiDagStepClaimService(
-                engineServices);
-
-            _claimedStepExecutor = new AiDagClaimedStepExecutor(
-                engineServices);
-
-            _finalizationService = new AiDagExecutionFinalizationService(
-                engineServices,
-                _retentionCoordinator);
-
-            _creator = new AiDagExecutionCreator(
-                engineServices);
-
-            _localRunner = new AiDagLocalExecutionRunner(
-                engineServices,
-                _lifecycleHelper);
-
-            _distributedRunner = new AiDagDistributedExecutionRunner(
-                engineServices,
-                _claimService,
-                _claimedStepExecutor,
-                _retentionCoordinator,
-                _finalizationService,
-                _lifecycleHelper);
-
-            _batchRunner = new AiDagBatchExecutionRunner(
-                engineServices,
-                _claimService,
-                _claimedStepExecutor,
-                _finalizationService,
-                _lifecycleHelper);
+            _runtime = runtime
+                ?? throw new ArgumentNullException(nameof(runtime));
         }
 
         /// <inheritdoc />
@@ -96,7 +47,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             string input,
             CancellationToken cancellationToken = default)
         {
-            return _creator.CreateAsync(
+            return _runtime.Creator.CreateAsync(
                 pipelineName,
                 input,
                 cancellationToken);
@@ -108,7 +59,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             IDictionary<string, object?> input,
             CancellationToken cancellationToken = default)
         {
-            return _creator.CreateAsync(
+            return _runtime.Creator.CreateAsync(
                 pipelineName,
                 input,
                 cancellationToken);
@@ -121,7 +72,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         {
             if (_engineServices.DagStore is not null)
             {
-                return await _distributedRunner.ExecuteNextAsync(
+                return await _runtime.DistributedRunner.ExecuteNextAsync(
                     executionId,
                     async contextKey =>
                     {
@@ -135,7 +86,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
                     cancellationToken);
             }
 
-            return await _localRunner.ExecuteNextAsync(
+            return await _runtime.LocalRunner.ExecuteNextAsync(
                 executionId,
                 LoadExecutionAsync,
                 async contextKey =>
@@ -160,7 +111,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 
             if (_engineServices.DagStore is not null)
             {
-                return await _batchRunner.ExecuteBatchAsync(
+                return await _runtime.BatchRunner.ExecuteBatchAsync(
                     executionId,
                     maxSteps,
                     async contextKey =>
@@ -175,7 +126,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
                     cancellationToken);
             }
 
-            return await _localRunner.ExecuteNextAsync(
+            return await _runtime.LocalRunner.ExecuteNextAsync(
                 executionId,
                 LoadExecutionAsync,
                 async contextKey =>

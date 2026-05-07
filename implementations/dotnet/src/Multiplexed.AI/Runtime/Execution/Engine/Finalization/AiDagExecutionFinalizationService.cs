@@ -12,7 +12,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
     /// <summary>
     /// Coordinates distributed execution convergence persistence and terminal finalization.
     /// </summary>
-    internal sealed class AiDagExecutionFinalizationService
+    public sealed class AiDagExecutionFinalizationService
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagRetentionCoordinator _retentionCoordinator;

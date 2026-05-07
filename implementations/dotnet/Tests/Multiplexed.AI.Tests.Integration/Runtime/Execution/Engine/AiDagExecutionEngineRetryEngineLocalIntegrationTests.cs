@@ -31,6 +31,7 @@ using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
@@ -275,7 +276,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stepExecutionOrchestrator,
                 null);
 
-            return new AiDagExecutionEngine(engineServices);
+            var runtimeServices =  AiDagExecutionEngineRuntimeServicesFixture.Create(engineServices);
+
+            return new AiDagExecutionEngine(engineServices, runtimeServices);
         }
 
         /// <summary>

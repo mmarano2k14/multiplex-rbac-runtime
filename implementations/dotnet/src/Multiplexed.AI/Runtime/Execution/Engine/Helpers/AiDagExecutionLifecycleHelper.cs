@@ -9,7 +9,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
     /// Handles terminal execution lifecycle side effects such as snapshot persistence
     /// and automatic cleanup.
     /// </summary>
-    internal sealed class AiDagExecutionLifecycleHelper
+    public sealed class AiDagExecutionLifecycleHelper
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
 

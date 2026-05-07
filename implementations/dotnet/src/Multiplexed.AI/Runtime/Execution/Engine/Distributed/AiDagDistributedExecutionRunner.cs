@@ -16,7 +16,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
     /// <summary>
     /// Executes DAG pipelines using the distributed execution path.
     /// </summary>
-    internal sealed class AiDagDistributedExecutionRunner
+    public sealed class AiDagDistributedExecutionRunner
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagStepClaimService _claimService;

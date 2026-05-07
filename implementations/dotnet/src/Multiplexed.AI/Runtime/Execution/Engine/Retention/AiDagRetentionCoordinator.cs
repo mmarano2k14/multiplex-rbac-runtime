@@ -21,7 +21,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
     /// - This coordinator does not evaluate convergence.
     /// - This coordinator does not finalize executions.
     /// </summary>
-    internal sealed class AiDagRetentionCoordinator
+    public sealed class AiDagRetentionCoordinator
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
 
