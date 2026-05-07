@@ -183,7 +183,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var step = CreateReadyStep("step-1", claimTimeoutSeconds: 30);
             step.Retry = new AiRetryPolicyDefinition
             {
-                Policies = new[] { "retry.transient.default" },
+                Policies = new List<string> { "retry.transient.default" },
                 MaxRetries = 1,
                 MaxDelayMs = 1000
             };

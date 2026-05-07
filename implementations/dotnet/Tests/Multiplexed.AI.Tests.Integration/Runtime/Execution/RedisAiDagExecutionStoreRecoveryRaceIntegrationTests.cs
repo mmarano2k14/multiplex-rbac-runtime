@@ -765,7 +765,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new[] { "retry.transient.default" },
+                        Policies = new List<string> { "retry.transient.default" },
                         MaxRetries = 2,
                         MaxDelayMs = 5
                     }
@@ -914,7 +914,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new[] { "retry.transient.default" },
+                        Policies = new List<string> { "retry.transient.default" },
                         MaxRetries = 1,
                         MaxDelayMs = 5
                     }
@@ -1193,7 +1193,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new[] { "retry.transient.default" },
+                        Policies = new List<string> { "retry.transient.default" },
                         MaxRetries = 2,
                         MaxDelayMs = 5
                     }

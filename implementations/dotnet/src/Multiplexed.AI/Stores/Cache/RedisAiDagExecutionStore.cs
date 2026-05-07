@@ -697,6 +697,7 @@ namespace Multiplexed.AI.Stores.Cache
                     continue;
 
                 var repairedJson = RepairStepJson((string)raw!);
+                repairedJson = RepairRetryJson(repairedJson);
                 var step = JsonSerializer.Deserialize<AiStepState>(repairedJson, _jsonOptions);
 
                 if (step is not null)
@@ -1571,5 +1572,96 @@ namespace Multiplexed.AI.Stores.Cache
 
             return Encoding.UTF8.GetString(stream.ToArray());
         }
+
+        /// <summary>
+        /// Repairs legacy or incompatible step JSON before deserializing into <see cref="AiStepState"/>.
+        /// Specifically ensures Retry.Policies is always a JSON array.
+        /// </summary>
+        private static string RepairRetryJson(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+            using var stream = new MemoryStream();
+
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (property.NameEquals("Retry"))
+                    {
+                        writer.WritePropertyName("Retry");
+
+                        if (property.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            WriteRepairedRetryJson(writer, property.Value);
+                        }
+                        else
+                        {
+                            property.Value.WriteTo(writer);
+                        }
+
+                        continue;
+                    }
+
+                    property.WriteTo(writer);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        /// <summary>
+        /// Writes a repaired Retry JSON object where Policies is guaranteed to be a JSON array.
+        /// </summary>
+        private static void WriteRepairedRetryJson(
+            Utf8JsonWriter writer,
+            JsonElement retry)
+        {
+            writer.WriteStartObject();
+
+            var hasPolicies = false;
+
+            foreach (var property in retry.EnumerateObject())
+            {
+                if (property.NameEquals("Policies"))
+                {
+                    hasPolicies = true;
+                    writer.WritePropertyName("Policies");
+
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        property.Value.WriteTo(writer);
+                    }
+                    else if (property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        writer.WriteStartArray();
+                        writer.WriteStringValue(property.Value.GetString());
+                        writer.WriteEndArray();
+                    }
+                    else
+                    {
+                        writer.WriteStartArray();
+                        writer.WriteEndArray();
+                    }
+
+                    continue;
+                }
+
+                property.WriteTo(writer);
+            }
+
+            if (!hasPolicies)
+            {
+                writer.WritePropertyName("Policies");
+                writer.WriteStartArray();
+                writer.WriteEndArray();
+            }
+
+            writer.WriteEndObject();
+        }
+
     }
 }

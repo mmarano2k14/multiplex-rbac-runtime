@@ -2,23 +2,11 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
-using Multiplexed.AI.Runtime.Execution.Metrics;
-using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
-using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Xunit;
@@ -27,20 +15,23 @@ using Xunit.Abstractions;
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 {
     /// <summary>
-    /// Validates the complete execution retention pipeline using the production runtime wiring.
-    ///
+    /// Validates the migration from legacy options-driven retention to the new
+    /// config-driven, policy-driven retention engine.
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
-    /// - Verify that adaptive retention trigger, decision service, decision evaluator,
-    ///   retention policies, and retention service work together safely.
-    /// - Validate retention behavior without touching DAG/Lua/convergence logic.
-    /// - Provide a dedicated safety suite before adding more intelligent retention policies.
+    /// - Validate that retention behavior is driven from pipeline configuration.
+    /// - Validate compact, evict, and hybrid retention policies through the DAG runtime.
+    /// - Validate that evicted steps remain archived and resolvable.
+    /// - Validate that the new policy-driven retention path replaces the legacy options path.
     ///
     /// IMPORTANT:
-    /// - Tests must be added one by one.
-    /// - Each test should validate one invariant.
-    /// - Retention must never remove data before external persistence succeeds.
-    /// </summary>
-    public sealed class AiExecutionRetentionSafetyIntegrationTests
+    /// - These tests intentionally do not use <c>AiExecutionStateRetentionOptions</c>.
+    /// - These tests intentionally do not use the legacy <c>IAiExecutionRetentionService</c>.
+    /// - Retention configuration is supplied through <see cref="AiPipelineDefinition.Config"/>.
+    /// - The DAG runtime invokes the new retention engine through the policy engine factory.
+    /// </remarks>
+    public sealed class AiPolicyDrivenRetentionMigrationIntegrationTests
     {
         private const int MaxCompletedStepsInState = 5;
         private const int DefaultMaxInlinePayloadBytes = 512;
@@ -50,394 +41,399 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         private readonly ITestOutputHelper _output;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="AiExecutionRetentionSafetyIntegrationTests"/> class.
+        /// Initializes a new instance of the <see cref="AiPolicyDrivenRetentionMigrationIntegrationTests"/> class.
         /// </summary>
         /// <param name="output">The xUnit output helper.</param>
-        public AiExecutionRetentionSafetyIntegrationTests(ITestOutputHelper output)
+        public AiPolicyDrivenRetentionMigrationIntegrationTests(ITestOutputHelper output)
         {
             _output = output;
         }
 
         /// <summary>
-        /// Validates that the full retention pipeline runs safely with hybrid retention enabled.
-        ///
-        /// EXPECTED:
-        /// - Adaptive trigger allows retention to run.
-        /// - Decision layer can add compaction candidates when payload exceeds threshold.
-        /// - Hybrid policy can evict old completed steps.
-        /// - Hot state remains bounded.
-        /// - Retention metrics report applied work.
+        /// Validates that hybrid retention runs through the new config-driven retention engine.
         /// </summary>
+        /// <remarks>
+        /// EXPECTED:
+        /// - Retention is resolved from pipeline config.
+        /// - Hybrid retention applies both compaction and eviction intent.
+        /// - Hot state remains bounded after execution.
+        /// - At least one completed step is archived and resolvable through the resolver.
+        /// </remarks>
         [Fact]
-        public async Task HybridRetention_Should_Run_Through_Trigger_Decision_And_Service_Safely()
+        public async Task HybridRetention_Should_Run_Through_Config_Driven_Engine_Safely()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Hybrid,
+                policies:
+                [
+                    "retention.compact.terminal",
+                    "retention.evict.terminal"
+                ],
                 payloadSize: LargePayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(HybridRetention_Should_Run_Through_Trigger_Decision_And_Service_Safely),
-                snapshot);
+            try
+            {
+                LogState(
+                    nameof(HybridRetention_Should_Run_Through_Config_Driven_Engine_Safely),
+                    state);
 
-            Assert.NotNull(state);
+                Assert.NotNull(state);
 
-            Assert.True(
-                snapshot.StepsPlannedForCompaction > 0 ||
-                snapshot.StepsPlannedForEviction > 0,
-                "Expected retention to be planned by the trigger/decision/policy pipeline.");
+                Assert.True(
+                    state.Steps.Count <= MaxCompletedStepsInState,
+                    $"Expected hot state to remain bounded. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
 
-            Assert.True(
-                snapshot.CompactedSteps > 0 ||
-                snapshot.EvictedSteps > 0,
-                "Expected retention to apply at least one compaction or eviction operation.");
+                var evictedStepName = FindEvictedStepName(state, 20);
 
-            Assert.True(
-                state.Steps.Count <= MaxCompletedStepsInState,
-                $"Expected hot state to remain bounded. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
+                Assert.False(
+                    string.IsNullOrWhiteSpace(evictedStepName),
+                    "Expected at least one completed step to be evicted from hot state.");
 
-            await host.DisposeAsync();
+                var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+                var resolvedStep = await resolver
+                    .GetStepAsync(state.ExecutionId, evictedStepName!, state)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.NotNull(resolvedStep);
+                Assert.True(resolvedStep!.IsCompleted);
+                Assert.NotNull(resolvedStep.Result);
+                Assert.True(resolvedStep.Result.Success);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
         /// Validates that eviction persists archived step payloads before removing steps from hot state.
-        ///
-        /// EXPECTED:
-        /// - Retention evicts completed steps.
-        /// - Hot state remains bounded.
-        /// - Each evicted step has an archived index entry.
-        /// - Each archived index entry points to a persisted external step payload.
-        ///
-        /// IMPORTANT:
-        /// - Uses a small payload below the inline threshold so the test focuses on eviction safety,
-        ///   not size-based compaction.
         /// </summary>
+        /// <remarks>
+        /// EXPECTED:
+        /// - Eviction is driven from pipeline config.
+        /// - Completed steps are removed from hot state.
+        /// - Each removed step has an archived index entry.
+        /// - Each archived index entry points to a persisted external step payload.
+        /// </remarks>
         [Fact]
         public async Task Evict_Should_Persist_Archived_Payload_Before_Removing_From_Hot_State()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Evict,
+                policies:
+                [
+                    "retention.evict.terminal"
+                ],
                 payloadSize: SmallPayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(Evict_Should_Persist_Archived_Payload_Before_Removing_From_Hot_State),
-                snapshot);
-
-            Assert.NotNull(state);
-
-            Assert.True(
-                snapshot.EvictedSteps > 0,
-                "Expected eviction to remove completed steps from hot state.");
-
-            Assert.True(
-                state.Steps.Count <= MaxCompletedStepsInState,
-                $"Expected hot state to remain bounded. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
-
-            var indexStore = host.ServiceProvider.GetRequiredService<IAiStepPayloadIndexStore>();
-            var stepPayloadStore = host.ServiceProvider.GetRequiredService<IAiStepPayloadStore>();
-
-            for (var i = 0; i < 20; i++)
+            try
             {
-                var stepName = $"step-{i}";
+                LogState(
+                    nameof(Evict_Should_Persist_Archived_Payload_Before_Removing_From_Hot_State),
+                    state);
 
-                if (state.Steps.ContainsKey(stepName))
+                Assert.NotNull(state);
+
+                Assert.True(
+                    state.Steps.Count <= MaxCompletedStepsInState,
+                    $"Expected hot state to remain bounded. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
+
+                var evictedStepNames = FindEvictedStepNames(state, 20).ToArray();
+
+                Assert.NotEmpty(evictedStepNames);
+
+                var indexStore = host.ServiceProvider.GetRequiredService<IAiStepPayloadIndexStore>();
+                var stepPayloadStore = host.ServiceProvider.GetRequiredService<IAiStepPayloadStore>();
+
+                foreach (var stepName in evictedStepNames)
                 {
-                    continue;
+                    var archived = await indexStore
+                        .GetAsync(state.ExecutionId, stepName)
+                        .WaitAsync(TimeSpan.FromSeconds(10));
+
+                    Assert.NotNull(archived);
+                    Assert.Equal(state.ExecutionId, archived!.ExecutionId);
+                    Assert.Equal(stepName, archived.StepName);
+                    Assert.NotNull(archived.Payload);
+                    Assert.False(string.IsNullOrWhiteSpace(archived.Payload.ArtifactId));
+
+                    var restoredStep = await stepPayloadStore
+                        .LoadStepAsync(state.ExecutionId, stepName, archived.Payload)
+                        .WaitAsync(TimeSpan.FromSeconds(10));
+
+                    Assert.NotNull(restoredStep);
+                    Assert.True(restoredStep!.IsCompleted);
+                    Assert.NotNull(restoredStep.Result);
+                    Assert.True(restoredStep.Result.Success);
                 }
-
-                var archived = await indexStore
-                    .GetAsync(state.ExecutionId, stepName)
-                    .WaitAsync(TimeSpan.FromSeconds(10));
-
-                Assert.NotNull(archived);
-                Assert.Equal(state.ExecutionId, archived!.ExecutionId);
-                Assert.Equal(stepName, archived.StepName);
-                Assert.NotNull(archived.Payload);
-                Assert.False(string.IsNullOrWhiteSpace(archived.Payload.ArtifactId));
-
-                var restoredStep = await stepPayloadStore
-                    .LoadStepAsync(state.ExecutionId, stepName, archived.Payload)
-                    .WaitAsync(TimeSpan.FromSeconds(10));
-
-                Assert.NotNull(restoredStep);
-                Assert.True(restoredStep!.IsCompleted);
-                Assert.NotNull(restoredStep.Result);
             }
-
-            await host.DisposeAsync();
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
         /// Validates that archived / evicted steps remain resolvable through the execution step resolver.
-        ///
-        /// EXPECTED:
-        /// - Retention evicts completed steps from hot state.
-        /// - Archived step index entries are written.
-        /// - Evicted steps can still be resolved from external payload storage.
-        /// - Resolved archived steps preserve their completed result.
-        ///
-        /// IMPORTANT:
-        /// - Uses a small payload below the inline threshold so the test focuses on resolver behavior
-        ///   after eviction.
         /// </summary>
+        /// <remarks>
+        /// EXPECTED:
+        /// - Evicted steps are absent from hot state.
+        /// - Evicted steps remain resolvable from external payload storage.
+        /// - Resolved archived steps preserve their completed result.
+        /// </remarks>
         [Fact]
         public async Task Archived_Steps_Should_Remain_Resolvable_After_Eviction()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Evict,
+                policies:
+                [
+                    "retention.evict.terminal"
+                ],
                 payloadSize: SmallPayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(Archived_Steps_Should_Remain_Resolvable_After_Eviction),
-                snapshot);
+            try
+            {
+                LogState(
+                    nameof(Archived_Steps_Should_Remain_Resolvable_After_Eviction),
+                    state);
 
-            Assert.NotNull(state);
+                Assert.NotNull(state);
 
-            Assert.True(
-                snapshot.EvictedSteps > 0,
-                "Expected eviction to archive at least one completed step.");
+                var evictedStepName = FindEvictedStepName(state, 20);
 
-            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+                Assert.False(
+                    string.IsNullOrWhiteSpace(evictedStepName),
+                    "Expected at least one step to be evicted from hot state.");
 
-            var evictedStepName = Enumerable
-                .Range(0, 20)
-                .Select(i => $"step-{i}")
-                .FirstOrDefault(stepName => !state.Steps.ContainsKey(stepName));
+                var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
 
-            Assert.False(
-                string.IsNullOrWhiteSpace(evictedStepName),
-                "Expected at least one step to be evicted from hot state.");
+                var resolvedStep = await resolver
+                    .GetStepAsync(state.ExecutionId, evictedStepName!, state)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            var resolvedStep = await resolver
-                .GetStepAsync(state.ExecutionId, evictedStepName!, state)
-                .WaitAsync(TimeSpan.FromSeconds(10));
-
-            Assert.NotNull(resolvedStep);
-            Assert.True(resolvedStep!.IsCompleted);
-            Assert.NotNull(resolvedStep.Result);
-            Assert.True(resolvedStep.Result.Success);
-
-            await host.DisposeAsync();
+                Assert.NotNull(resolvedStep);
+                Assert.True(resolvedStep!.IsCompleted);
+                Assert.NotNull(resolvedStep.Result);
+                Assert.True(resolvedStep.Result.Success);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
-        /// Validates that hybrid retention applies compaction before eviction and keeps behavior consistent.
-        ///
-        /// EXPECTED:
-        /// - Steps selected for eviction are NOT compacted.
-        /// - Other eligible steps are compacted.
-        /// - Eviction still persists payloads safely.
-        /// - Hot state remains bounded.
+        /// Validates that hybrid retention preserves both policy decisions:
+        /// compact first, then evict.
         /// </summary>
+        /// <remarks>
+        /// EXPECTED:
+        /// - Hybrid policy selects terminal steps for both compaction and eviction.
+        /// - Runtime applies compaction before eviction.
+        /// - Evicted steps remain archived and resolvable.
+        /// - Archived step state no longer contributes inline payload pressure.
+        /// </remarks>
         [Fact]
-        public async Task Hybrid_Should_Respect_Compaction_Then_Eviction()
+        public async Task Hybrid_Should_Apply_Compaction_Before_Eviction()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Hybrid,
+                policies:
+                [
+                    "retention.compact.terminal",
+                    "retention.evict.terminal"
+                ],
                 payloadSize: LargePayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(Hybrid_Should_Respect_Compaction_Then_Eviction),
-                snapshot);
+            try
+            {
+                LogState(
+                    nameof(Hybrid_Should_Apply_Compaction_Before_Eviction),
+                    state);
 
-            Assert.NotNull(state);
+                Assert.NotNull(state);
 
-            // Hybrid should do BOTH (based on actual applied operations)
-            Assert.True(
-                snapshot.CompactedSteps > 0,
-                "Expected hybrid retention to compact at least one step.");
+                Assert.True(
+                    state.Steps.Count <= MaxCompletedStepsInState,
+                    $"Expected bounded hot state. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
 
-            Assert.True(
-                snapshot.EvictedSteps > 0,
-                "Expected hybrid retention to evict at least one step.");
+                var evictedStepName = FindEvictedStepName(state, 20);
 
-            // Critical invariant:
-            // Evicted steps must NOT be compacted
-            // → Total applied actions should cover planned compaction intent
-            Assert.True(
-                snapshot.CompactedSteps + snapshot.EvictedSteps >= snapshot.StepsPlannedForCompaction,
-                "Unexpected mismatch between planned and applied retention actions.");
+                Assert.False(
+                    string.IsNullOrWhiteSpace(evictedStepName),
+                    "Expected at least one step to be evicted from hot state.");
 
-            // State bounded
-            Assert.True(
-                state.Steps.Count <= MaxCompletedStepsInState,
-                $"Expected bounded state. Actual={state.Steps.Count}");
+                var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
 
-            // Verify at least one evicted step is recoverable
-            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+                var resolvedStep = await resolver
+                    .GetStepAsync(state.ExecutionId, evictedStepName!, state)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            var evictedStepName = Enumerable
-                .Range(0, 20)
-                .Select(i => $"step-{i}")
-                .FirstOrDefault(stepName => !state.Steps.ContainsKey(stepName));
+                Assert.NotNull(resolvedStep);
+                Assert.True(resolvedStep!.IsCompleted);
+                Assert.NotNull(resolvedStep.Result);
+                Assert.True(resolvedStep.Result.Success);
 
-            Assert.NotNull(evictedStepName);
-
-            var resolved = await resolver
-                .GetStepAsync(state.ExecutionId, evictedStepName!, state)
-                .WaitAsync(TimeSpan.FromSeconds(10));
-
-            Assert.NotNull(resolved);
-            Assert.True(resolved!.IsCompleted);
-            Assert.True(resolved.Result!.Success);
-
-            await host.DisposeAsync();
+                Assert.Null(resolvedStep.InlinePayloadSizeBytes);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
-        /// Validates that applying retention multiple times remains safe and stable.
-        ///
+        /// Validates that running the terminal execution path again remains safe.
+        /// </summary>
+        /// <remarks>
         /// EXPECTED:
         /// - First execution applies retention.
-        /// - Re-applying retention does not corrupt state.
-        /// - Hot state remains bounded.
-        /// - Archived steps remain resolvable.
-        /// - No restored / archived payload is lost after a second retention pass.
-        /// </summary>
+        /// - Re-entering the execution path does not corrupt hot state.
+        /// - Archived steps remain resolvable after the second call.
+        /// </remarks>
         [Fact]
-        public async Task Retention_Should_Be_Idempotent()
+        public async Task Retention_Should_Be_Idempotent_Through_Runtime_Reentry()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Hybrid,
+                policies:
+                [
+                    "retention.compact.terminal",
+                    "retention.evict.terminal"
+                ],
                 payloadSize: LargePayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(Retention_Should_Be_Idempotent),
-                snapshot);
+            try
+            {
+                LogState(
+                    nameof(Retention_Should_Be_Idempotent_Through_Runtime_Reentry),
+                    state);
 
-            Assert.NotNull(state);
+                var stepsAfterFirstRetention = state.Steps.Count;
+                var evictedStepName = FindEvictedStepName(state, 20);
 
-            Assert.True(
-                snapshot.CompactedSteps > 0 || snapshot.EvictedSteps > 0,
-                "Expected first retention pass to apply work.");
+                Assert.False(
+                    string.IsNullOrWhiteSpace(evictedStepName),
+                    "Expected at least one step to be evicted after first retention.");
 
-            Assert.True(
-                state.Steps.Count <= MaxCompletedStepsInState,
-                $"Expected bounded state after first retention. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
+                await host.Engine
+                    .ExecuteAllAsync(state.ExecutionId)
+                    .WaitAsync(TimeSpan.FromSeconds(30));
 
-            var stepsAfterFirstRetention = state.Steps.Count;
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
 
-            var evictedStepName = Enumerable
-                .Range(0, 20)
-                .Select(i => $"step-{i}")
-                .FirstOrDefault(stepName => !state.Steps.ContainsKey(stepName));
+                var stateAfterSecondRun = await dagStore
+                    .GetStateAsync(state.ExecutionId)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            Assert.False(
-                string.IsNullOrWhiteSpace(evictedStepName),
-                "Expected at least one step to be evicted after first retention.");
+                Assert.NotNull(stateAfterSecondRun);
 
-            var retentionService = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionService>();
+                Assert.True(
+                    stateAfterSecondRun!.Steps.Count <= stepsAfterFirstRetention,
+                    $"Expected second runtime entry not to increase hot state. Before={stepsAfterFirstRetention}, After={stateAfterSecondRun.Steps.Count}.");
 
-            var secondResult = await retentionService
-                .ApplyAsync(state, AiExecutionRetentionMode.Hybrid)
-                .AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(10));
+                var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
 
-            Assert.NotNull(secondResult);
+                var resolved = await resolver
+                    .GetStepAsync(stateAfterSecondRun.ExecutionId, evictedStepName!, stateAfterSecondRun)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            Assert.True(
-                state.Steps.Count <= MaxCompletedStepsInState,
-                $"Expected bounded state after second retention. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}.");
-
-            Assert.True(
-                state.Steps.Count <= stepsAfterFirstRetention,
-                $"Expected second retention not to increase hot state. Before={stepsAfterFirstRetention}, After={state.Steps.Count}.");
-
-            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
-
-            var resolved = await resolver
-                .GetStepAsync(state.ExecutionId, evictedStepName!, state)
-                .WaitAsync(TimeSpan.FromSeconds(10));
-
-            Assert.NotNull(resolved);
-            Assert.True(resolved!.IsCompleted);
-            Assert.NotNull(resolved.Result);
-            Assert.True(resolved.Result.Success);
-
-            await host.DisposeAsync();
+                Assert.NotNull(resolved);
+                Assert.True(resolved!.IsCompleted);
+                Assert.NotNull(resolved.Result);
+                Assert.True(resolved.Result.Success);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
         /// Validates that a retained execution can be reloaded and still resolve archived steps.
-        ///
+        /// </summary>
+        /// <remarks>
         /// EXPECTED:
-        /// - Hybrid retention evicts completed steps.
+        /// - Retention evicts completed steps.
         /// - State is reloaded from the DAG execution store.
         /// - Archived steps are still resolvable after reload.
         /// - Resolved step keeps its completed result.
-        ///
-        /// IMPORTANT:
-        /// - Uses a small payload below the inline threshold so the test focuses on archived state
-        ///   reload and resolution rather than payload-size compaction.
-        /// </summary>
+        /// </remarks>
         [Fact]
         public async Task Retention_Replayed_State_Should_Resolve_Archived_Steps()
         {
-            var (state, snapshot, host) = await RunPipelineWithHost(
+            var (state, host) = await RunPipelineWithHost(
                 stepCount: 20,
-                mode: AiExecutionRetentionMode.Hybrid,
+                policies:
+                [
+                    "retention.compact.terminal",
+                    "retention.evict.terminal"
+                ],
                 payloadSize: SmallPayloadSize);
 
-            LogRetentionSnapshot(
-                nameof(Retention_Replayed_State_Should_Resolve_Archived_Steps),
-                snapshot);
+            try
+            {
+                LogState(
+                    nameof(Retention_Replayed_State_Should_Resolve_Archived_Steps),
+                    state);
 
-            Assert.NotNull(state);
-            Assert.True(snapshot.EvictedSteps > 0, "Expected at least one evicted step.");
+                var evictedStepName = FindEvictedStepName(state, 20);
 
-            var evictedStepName = Enumerable
-                .Range(0, 20)
-                .Select(i => $"step-{i}")
-                .FirstOrDefault(stepName => !state.Steps.ContainsKey(stepName));
+                Assert.False(
+                    string.IsNullOrWhiteSpace(evictedStepName),
+                    "Expected at least one step to be evicted from hot state.");
 
-            Assert.False(
-                string.IsNullOrWhiteSpace(evictedStepName),
-                "Expected at least one step to be evicted from hot state.");
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
 
-            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var reloadedState = await dagStore
+                    .GetStateAsync(state.ExecutionId)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            var reloadedState = await dagStore
-                .GetStateAsync(state.ExecutionId)
-                .WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.NotNull(reloadedState);
 
-            Assert.NotNull(reloadedState);
-            Assert.False(
-                reloadedState!.Steps.ContainsKey(evictedStepName!),
-                "Expected evicted step to remain outside hot state after reload.");
+                Assert.False(
+                    reloadedState!.Steps.ContainsKey(evictedStepName!),
+                    "Expected evicted step to remain outside hot state after reload.");
 
-            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+                var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
 
-            var resolvedStep = await resolver
-                .GetStepAsync(reloadedState.ExecutionId, evictedStepName!, reloadedState)
-                .WaitAsync(TimeSpan.FromSeconds(10));
+                var resolvedStep = await resolver
+                    .GetStepAsync(reloadedState.ExecutionId, evictedStepName!, reloadedState)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
 
-            Assert.NotNull(resolvedStep);
-            Assert.True(resolvedStep!.IsCompleted);
-            Assert.NotNull(resolvedStep.Result);
-            Assert.True(resolvedStep.Result.Success);
-
-            await host.DisposeAsync();
+                Assert.NotNull(resolvedStep);
+                Assert.True(resolvedStep!.IsCompleted);
+                Assert.NotNull(resolvedStep.Result);
+                Assert.True(resolvedStep.Result.Success);
+            }
+            finally
+            {
+                await host.DisposeAsync();
+            }
         }
 
         /// <summary>
-        /// Runs a DAG pipeline and returns the final execution state, retention metrics snapshot, and test host.
+        /// Runs a DAG pipeline and returns the final execution state and test host.
         /// </summary>
-        private async Task<(AiExecutionState State, AiExecutionRetentionServiceMetricsSnapshot Snapshot, AiDagExecutionEngineTestHost Host)>
-            RunPipelineWithHost(
-                int stepCount,
-                AiExecutionRetentionMode mode,
-                int payloadSize,
-                int maxInlinePayloadBytes = DefaultMaxInlinePayloadBytes)
+        private async Task<(AiExecutionState State, AiDagExecutionEngineTestHost Host)> RunPipelineWithHost(
+            int stepCount,
+            IReadOnlyCollection<string> policies,
+            int payloadSize,
+            int maxInlinePayloadBytes = DefaultMaxInlinePayloadBytes)
         {
-            var pipeline = CreateFullyParallelPipeline(stepCount, payloadSize);
-            var host = await CreateHost(pipeline, mode, maxInlinePayloadBytes);
+            var pipeline = CreateFullyParallelPipeline(
+                stepCount,
+                policies,
+                payloadSize,
+                maxInlinePayloadBytes);
+
+            var host = await CreateHost(pipeline);
 
             _output.WriteLine(
-                $"Pipeline='{pipeline.Name}', Steps='{stepCount}', Mode='{mode}', PayloadSize='{payloadSize}', MaxInlinePayloadBytes='{maxInlinePayloadBytes}'.");
+                $"Pipeline='{pipeline.Name}', Steps='{stepCount}', Policies='{string.Join(",", policies)}', PayloadSize='{payloadSize}', MaxInlinePayloadBytes='{maxInlinePayloadBytes}'.");
 
             var created = await host.Engine.CreateAsync(
                 pipeline.Name,
@@ -452,39 +448,27 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             _output.WriteLine($"Execution completed. ExecutionId='{created.ExecutionId}'.");
 
             var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
-            var state = await dagStore.GetStateAsync(created.ExecutionId);
+            var state = await dagStore
+                .GetStateAsync(created.ExecutionId)
+                .WaitAsync(TimeSpan.FromSeconds(10));
 
-            var metrics = host.ServiceProvider.GetRequiredService<IAiExecutionRetentionServiceMetrics>();
-            var snapshot = ((InMemoryAiExecutionRetentionServiceMetrics)metrics).Snapshot();
+            Assert.NotNull(state);
 
-            _output.WriteLine($"State loaded. StepsAfterRetention='{state?.Steps.Count ?? 0}'.");
+            _output.WriteLine($"State loaded. StepsAfterRetention='{state!.Steps.Count}'.");
 
-            return (state!, snapshot, host);
+            return (state, host);
         }
 
         /// <summary>
-        /// Creates a production-like DAG engine test host configured for retention safety validation.
+        /// Creates a production-like DAG engine test host for policy-driven retention validation.
         /// </summary>
         private static async Task<AiDagExecutionEngineTestHost> CreateHost(
-            AiPipelineDefinition pipeline,
-            AiExecutionRetentionMode mode,
-            int maxInlinePayloadBytes)
+            AiPipelineDefinition pipeline)
         {
             var options = new AiEngineOptions
             {
-                DefaultPipelineDefinitionSource = "InMemory",
-
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    Mode = mode,
-                    MaxCompletedStepsInState = MaxCompletedStepsInState
-                }
+                DefaultPipelineDefinitionSource = "InMemory"
             };
-
-            options.RetentionTrigger.MaxCompletedStepsInState = MaxCompletedStepsInState;
-            options.RetentionTrigger.MaxStepsInState = MaxCompletedStepsInState;
-            options.RetentionTrigger.MaxInlinePayloadBytes = maxInlinePayloadBytes;
 
             return await AiDagExecutionEngineFixture.CreateAsync(
                 options,
@@ -499,44 +483,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                     services.AddSingleton(provider);
 
                     services.AddAiStepsFromAssemblies(
-                        typeof(AiExecutionRetentionSafetyIntegrationTests).Assembly);
-
-                    services.RemoveAll<IAiExecutionRetentionPolicy>();
-                    services.RemoveAll<IAiExecutionRetentionPolicyResolver>();
-                    services.RemoveAll<IAiExecutionRetentionService>();
-                    services.RemoveAll<IAiExecutionRetentionServiceMetrics>();
-
-                    services.RemoveAll<IAiExecutionRetentionDecisionService>();
-                    services.RemoveAll<IAiExecutionRetentionDecisionEvaluator>();
-                    services.RemoveAll<IAiExecutionRetentionDecisionPolicy>();
-
-                    services.AddSingleton<IAiExecutionRetentionPolicy, NoopAiExecutionRetentionPolicy>();
-                    services.AddSingleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>();
-                    services.AddSingleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>();
-                    services.AddSingleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>();
-
-                    services.AddSingleton<
-                        IAiExecutionRetentionPolicyResolver,
-                        DefaultAiExecutionRetentionPolicyResolver>();
-
-                    services.AddSingleton<
-                        IAiExecutionRetentionDecisionEvaluator,
-                        CompositeAiExecutionRetentionDecisionEvaluator>();
-
-                    services.AddSingleton<
-                        IAiExecutionRetentionDecisionService,
-                        DefaultAiExecutionRetentionDecisionService>();
-
-                    services.AddSingleton<IAiExecutionRetentionDecisionPolicy>(
-                        new SizeBasedAiExecutionRetentionDecisionPolicy(maxInlinePayloadBytes));
-
-                    services.AddSingleton<
-                        IAiExecutionRetentionServiceMetrics,
-                        InMemoryAiExecutionRetentionServiceMetrics>();
-
-                    services.AddSingleton<
-                        IAiExecutionRetentionService,
-                        AiExecutionRetentionService>();
+                        typeof(AiPolicyDrivenRetentionMigrationIntegrationTests).Assembly);
                 },
                 "mongodb://localhost:27017",
                 "multiplexed_ai_tests",
@@ -544,11 +491,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         }
 
         /// <summary>
-        /// Creates a fully parallel DAG pipeline where completed steps are safe candidates for retention.
+        /// Creates a fully parallel DAG pipeline where completed steps are safe retention candidates.
         /// </summary>
         private static AiPipelineDefinition CreateFullyParallelPipeline(
             int steps,
-            int payloadSize)
+            IReadOnlyCollection<string> policies,
+            int payloadSize,
+            int maxInlinePayloadBytes)
         {
             var list = new List<AiPipelineStepDefinition>();
 
@@ -557,7 +506,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 list.Add(new AiPipelineStepDefinition
                 {
                     Name = $"step-{i}",
-                    StepKey = "test.retention.safety",
+                    StepKey = "test.policy-driven-retention.safety",
                     Order = i,
                     DependsOn = new List<string>(),
                     Config = new Dictionary<string, object?>
@@ -569,41 +518,90 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
             return new AiPipelineDefinition
             {
-                Name = $"retention-safety-{Guid.NewGuid():N}",
+                Name = $"policy-driven-retention-safety-{Guid.NewGuid():N}",
                 Version = "1",
                 ExecutionMode = AiExecutionMode.Dag,
+                Config = CreateRetentionConfig(
+                    policies,
+                    maxInlinePayloadBytes),
                 Steps = list
             };
         }
 
         /// <summary>
-        /// Writes retention metrics to the test output.
+        /// Creates pipeline-level retention configuration for the new policy-driven retention engine.
         /// </summary>
-        private void LogRetentionSnapshot(
-            string testName,
-            AiExecutionRetentionServiceMetricsSnapshot snapshot)
+        private static Dictionary<string, object?> CreateRetentionConfig(
+            IReadOnlyCollection<string> policies,
+            int maxInlinePayloadBytes)
         {
-            _output.WriteLine(
-                $"[{testName}] Retention service metrics: " +
-                $"Mode={snapshot.LastMode}, " +
-                $"Before={snapshot.TotalStepsBefore}, " +
-                $"After={snapshot.TotalStepsAfter}, " +
-                $"PlannedCompact={snapshot.StepsPlannedForCompaction}, " +
-                $"PlannedEvict={snapshot.StepsPlannedForEviction}, " +
-                $"Compacted={snapshot.CompactedSteps}, " +
-                $"Evicted={snapshot.EvictedSteps}");
+            return new Dictionary<string, object?>
+            {
+                ["retention"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["policies"] = policies.ToArray(),
+                    ["archiveReason"] = "policy-driven-retention-test",
+                    ["trigger"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxStepsInState"] = MaxCompletedStepsInState,
+                        ["maxCompletedStepsInState"] = MaxCompletedStepsInState,
+                        ["maxInlinePayloadBytes"] = maxInlinePayloadBytes
+                    }
+                }
+            };
         }
 
         /// <summary>
-        /// Test step producing a configurable payload size for retention safety validation.
+        /// Finds the first step name that has been evicted from hot state.
         /// </summary>
-        [AiStep("test.retention.safety")]
-        private sealed class RetentionSafetyStep : IAiStep
+        private static string? FindEvictedStepName(
+            AiExecutionState state,
+            int totalSteps)
+        {
+            return FindEvictedStepNames(state, totalSteps).FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Finds all step names that have been evicted from hot state.
+        /// </summary>
+        private static IEnumerable<string> FindEvictedStepNames(
+            AiExecutionState state,
+            int totalSteps)
+        {
+            for (var i = 0; i < totalSteps; i++)
+            {
+                var stepName = $"step-{i}";
+
+                if (!state.Steps.ContainsKey(stepName))
+                {
+                    yield return stepName;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes current hot-state retention information to test output.
+        /// </summary>
+        private void LogState(
+            string testName,
+            AiExecutionState state)
+        {
+            _output.WriteLine(
+                $"[{testName}] ExecutionId={state.ExecutionId}, HotSteps={state.Steps.Count}, Steps=[{string.Join(",", state.Steps.Keys.OrderBy(x => x, StringComparer.Ordinal))}]");
+        }
+
+        /// <summary>
+        /// Test step producing a configurable payload size for policy-driven retention validation.
+        /// </summary>
+        [AiStep("test.policy-driven-retention.safety")]
+        private sealed class PolicyDrivenRetentionSafetyStep : IAiStep
         {
             /// <summary>
             /// Gets the test step name.
             /// </summary>
-            public string Name => "test.retention.safety";
+            public string Name => "test.policy-driven-retention.safety";
 
             /// <inheritdoc />
             public Task<AiStepResult> ExecuteAsync(

@@ -51,8 +51,15 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Policies
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(context.ExecutionState);
 
+            var protectedDependencies = context.ExecutionState.Steps.Values
+                .Where(step => !IsTerminal(step))
+                .SelectMany(step => step.DependsOn ?? Enumerable.Empty<string>())
+                .ToHashSet(StringComparer.Ordinal);
+
             var stepsToEvict = context.ExecutionState.Steps
-                .Where(step => IsTerminal(step.Value))
+                .Where(step =>
+                    IsTerminal(step.Value) &&
+                    !protectedDependencies.Contains(step.Key))
                 .Select(step => step.Key)
                 .ToArray();
 

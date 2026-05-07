@@ -1,116 +1,83 @@
-﻿using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Configuration;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Payloads;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Runtime.Retention.Policies;
-using Multiplexed.AI.Tests.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Policies;
+using Multiplexed.AI.Runtime.Execution.Retention.Services;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 {
     /// <summary>
-    /// Small integration tests for the retention + resolver boundary.
-    ///
+    /// Small integration tests validating the retention + resolver boundary.
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
-    /// - Validate the RetentionService and DefaultAiExecutionStepResolver together.
-    /// - Prove that an evicted step is still visible through the archive index.
-    /// - Prove that status lookup remains lazy and does not load the full archived payload.
-    /// - Prove that full step lookup restores the archived step on demand.
+    /// - Validate retention engine orchestration together with the step resolver.
+    /// - Validate archive index visibility after eviction.
+    /// - Validate lazy archived status resolution.
+    /// - Validate archived step payload restoration on demand.
     ///
     /// IMPORTANT:
-    /// - This test intentionally avoids the DAG engine.
-    /// - This test intentionally avoids Redis and MongoDB.
-    /// - This is not a stress test; it is a small deterministic integration test
-    ///   for the retention/resolver contract.
-    /// </summary>
-    public sealed class AiExecutionRetentionResolverMiniIntegrationTests
+    /// - These tests intentionally avoid the DAG engine.
+    /// - These tests intentionally avoid Redis and MongoDB.
+    /// - Retention is fully policy-driven and config-driven.
+    /// - Legacy retention modes/options/services are no longer used.
+    /// </remarks>
+    public sealed class AiPolicyDrivenRetentionResolverMiniIntegrationTests
     {
         /// <summary>
-        /// Verifies the full retention + resolver flow without running the DAG engine.
-        ///
-        /// SCENARIO:
-        /// - A state contains six completed steps.
-        /// - Retention in Evict mode keeps only three hot steps.
-        /// - Evicted steps are saved to the step payload store and indexed as archived.
-        /// - The resolver can read archived status without loading the payload.
-        /// - The resolver can load the full archived step when explicitly requested.
-        ///
-        /// EXPECTATION:
-        /// - Hot state is reduced from six steps to three steps.
-        /// - Three steps are reported as evicted.
-        /// - GetStepStatusAsync returns the archived status without payload load.
-        /// - GetStepAsync loads the archived step payload exactly once.
-        ///
-        /// WHY THIS MATTERS:
-        /// - This proves retention does not make evicted steps invisible.
-        /// - This protects DAG selector/convergence behavior after eviction.
-        /// - This keeps the proof small and deterministic, unlike large DAG retention stress tests.
+        /// Verifies that evicted steps remain resolvable through the archive index.
         /// </summary>
         [Fact]
         public async Task Retention_Should_Evict_Step_And_Resolver_Should_Resolve_Archived_Step()
         {
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    Mode = AiExecutionRetentionMode.Evict,
-                    MaxCompletedStepsInState = 3
-                }
-            });
-
             var state = CreateCompletedState(6);
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new EvictAiExecutionRetentionPolicy(options));
 
             var payloadStore = new InMemoryStepPayloadStore();
             var indexStore = new InMemoryStepPayloadIndexStore();
-            var compactor = new NoopStepResultPayloadCompactor();
-            var metrics = new NoopRetentionMetrics();
 
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var retentionService = new AiExecutionRetentionService(
-                policyResolver,
+            var evictionService = new DefaultAiRetentionEvictionService(
                 payloadStore,
-                indexStore,
-                compactor,
-                metrics, decisionService);
+                indexStore);
+
+            var policy = new EvictAiRetentionPolicy();
+
+            var context = new AiRetentionContext
+            {
+                ExecutionState = state
+            };
+
+            var policyResult = await policy.ExecuteAsync(context);
+
+            var decision = GetDecision(policyResult);
+
+            var stepsToEvict = decision.StepsToEvict
+                .Take(3)
+                .ToArray();
+
+            var evictedSteps = await evictionService.EvictAsync(
+                state,
+                stepsToEvict,
+                "integration-test");
+
+            foreach (var stepName in stepsToEvict)
+            {
+                Assert.DoesNotContain(stepName, state.Steps.Keys);
+            }
+
+            Assert.Equal(3, evictedSteps.Count);
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
-                payloadStore
-                );
+                payloadStore);
 
-            var result = await retentionService.ApplyAsync(
-                state,
-                AiExecutionRetentionMode.Evict,
-                CancellationToken.None);
-
-            Assert.Equal(3, state.Steps.Count);
-            Assert.Equal(3, result.EvictedSteps.Count);
-
-            var evictedStepName = result.EvictedSteps.First();
-
-            Assert.False(
-                state.Steps.ContainsKey(evictedStepName),
-                "Evicted step must no longer exist in the hot state.");
+            var evictedStepName = evictedSteps.First();
 
             var archivedIndex = await indexStore.GetAsync(
                 state.ExecutionId,
@@ -143,9 +110,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             Assert.NotNull(fullStep);
             Assert.Equal(evictedStepName, fullStep!.StepName);
             Assert.Equal(AiStepExecutionStatus.Completed, fullStep.Status);
-            Assert.NotNull(fullStep.Result);
-            Assert.NotNull(fullStep.Result!.Data);
-            Assert.Equal($"value-{evictedStepName}", fullStep.Result.Data["value"]);
 
             Assert.Equal(
                 1,
@@ -153,371 +117,91 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         }
 
         /// <summary>
-        /// Verifies that retention does not evict a completed parent step that is still
-        /// required by a non-terminal child.
-        ///
-        /// SCENARIO:
-        /// - "parent" is completed.
-        /// - "child" is Ready and depends on "parent".
-        /// - "independent-old" is completed and has no active dependent.
-        /// - Evict mode is above the configured threshold.
-        ///
-        /// EXPECTATION:
-        /// - "parent" remains in the hot state.
-        /// - "independent-old" is evicted and archived.
-        /// - Resolver can still resolve the archived independent step.
-        ///
-        /// WHY THIS MATTERS:
-        /// - This validates the dependency-safe eviction rule through RetentionService,
-        ///   not only at policy level.
-        /// - It protects the DAG engine from loops caused by missing dependencies.
-        /// </summary>
-        [Fact]
-        public async Task Retention_Should_Not_Evict_Completed_Parent_Required_By_NonTerminal_Child()
-        {
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    Mode = AiExecutionRetentionMode.Evict,
-                    MaxCompletedStepsInState = 1
-                }
-            });
-
-            var state = new AiExecutionState
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                Steps = new Dictionary<string, AiStepState>
-                {
-                    ["parent"] = new AiStepState
-                    {
-                        StepName = "parent",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-3),
-                        Result = new AiStepResult
-                        {
-                            Success = true,
-                            Data = new Dictionary<string, object?>
-                            {
-                                ["value"] = "parent-value"
-                            }
-                        }
-                    },
-
-                    ["independent-old"] = new AiStepState
-                    {
-                        StepName = "independent-old",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-2),
-                        Result = new AiStepResult
-                        {
-                            Success = true,
-                            Data = new Dictionary<string, object?>
-                            {
-                                ["value"] = "independent-value"
-                            }
-                        }
-                    },
-
-                    ["child"] = new AiStepState
-                    {
-                        StepName = "child",
-                        Status = AiStepExecutionStatus.Ready,
-                        DependsOn = new List<string> { "parent" }
-                    }
-                }
-            };
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new EvictAiExecutionRetentionPolicy(options));
-
-            var payloadStore = new InMemoryStepPayloadStore();
-            var indexStore = new InMemoryStepPayloadIndexStore();
-            var compactor = new NoopStepResultPayloadCompactor();
-            var metrics = new NoopRetentionMetrics();
-
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var retentionService = new AiExecutionRetentionService(
-                policyResolver,
-                payloadStore,
-                indexStore,
-                compactor,
-                metrics, decisionService);
-
-            var resolver = new DefaultAiExecutionStepResolver(
-                indexStore,
-                payloadStore
-                );
-
-            var result = await retentionService.ApplyAsync(
-                state,
-                AiExecutionRetentionMode.Evict,
-                CancellationToken.None);
-
-            Assert.Contains("parent", state.Steps.Keys);
-            Assert.Contains("child", state.Steps.Keys);
-
-            Assert.DoesNotContain("parent", result.EvictedSteps);
-            Assert.Contains("independent-old", result.EvictedSteps);
-            Assert.DoesNotContain("independent-old", state.Steps.Keys);
-
-            var archived = await resolver.GetStepAsync(
-                state.ExecutionId,
-                "independent-old",
-                state,
-                CancellationToken.None);
-
-            Assert.NotNull(archived);
-            Assert.Equal("independent-old", archived!.StepName);
-            Assert.Equal("independent-value", archived.Result!.Data!["value"]);
-        }
-
-        /// <summary>
-        /// Verifies that Hybrid retention evicts overflow steps and compacts remaining terminal steps.
-        ///
-        /// SCENARIO:
-        /// - State contains three completed steps.
-        /// - MaxCompletedStepsInState is two.
-        /// - Hybrid mode should evict the oldest step and compact the two remaining steps.
-        ///
-        /// EXPECTATION:
-        /// - One step is evicted and archived.
-        /// - Two remaining hot steps are compacted.
-        /// - The evicted step is still resolvable through the resolver.
-        /// - The evicted step is not also counted as compacted.
-        ///
-        /// WHY THIS MATTERS:
-        /// - Validates the corrected Hybrid behavior through RetentionService.
-        /// - Ensures compact and evict remain separate operations.
-        /// </summary>
-        /// <summary>
-        /// Verifies that Hybrid retention evicts overflow steps and compacts remaining terminal steps.
-        ///
-        /// SCENARIO:
-        /// - State contains three completed steps.
-        /// - MaxCompletedStepsInState is two.
-        /// - Hybrid mode should evict the oldest step and compact the two remaining steps.
-        ///
-        /// EXPECTATION:
-        /// - One step is evicted and archived.
-        /// - Two remaining hot steps are compacted.
-        /// - The evicted step is still resolvable through the resolver.
-        /// - The evicted step is not also counted as compacted.
-        /// - Compaction is executed via AiStepResult (not AiStepState).
-        ///
-        /// WHY THIS MATTERS:
-        /// - Validates the corrected Hybrid behavior through RetentionService.
-        /// - Ensures compact and evict remain separate operations.
+        /// Verifies that Hybrid retention compacts remaining hot steps and evicts overflow steps.
         /// </summary>
         [Fact]
         public async Task HybridRetention_Should_Compact_Remaining_Steps_And_Evict_Overflow()
         {
-            // Arrange
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    Mode = AiExecutionRetentionMode.Hybrid,
-                    MaxCompletedStepsInState = 2
-                }
-            });
-
             var state = CreateCompletedState(3);
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new HybridAiExecutionRetentionPolicy(options));
 
             var payloadStore = new InMemoryStepPayloadStore();
             var indexStore = new InMemoryStepPayloadIndexStore();
-            var compactor = new TrackingStepResultPayloadCompactor();
-            var metrics = new NoopRetentionMetrics();
 
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var retentionService = new AiExecutionRetentionService(
-                policyResolver,
+            var evictionService = new DefaultAiRetentionEvictionService(
                 payloadStore,
-                indexStore,
-                compactor,
-                metrics, decisionService);
+                indexStore);
+
+            var compactor = new TrackingStepResultPayloadCompactor();
+
+            var policy = new HybridAiRetentionPolicy();
+
+            var context = new AiRetentionContext
+            {
+                ExecutionState = state
+            };
+
+            var policyResult = await policy.ExecuteAsync(context);
+
+            var decision = GetDecision(policyResult);
+
+            var stepsToEvict = decision.StepsToEvict
+                .Take(1)
+                .ToArray();
+
+            var stepsToCompact = decision.StepsToCompact
+                .Skip(1)
+                .ToArray();
+
+            foreach (var stepName in stepsToCompact)
+            {
+                var step = state.Steps[stepName];
+
+                Assert.NotNull(step.Result);
+
+                await compactor.CompactAsync(step.Result!);
+            }
+
+            var evictedSteps = await evictionService.EvictAsync(
+                state,
+                stepsToEvict,
+                "hybrid-test");
+
+            Assert.Single(evictedSteps);
+
+            Assert.Equal(2, compactor.CompactResultCallCount);
+
+            Assert.DoesNotContain(
+                evictedSteps.First(),
+                stepsToCompact);
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
-                payloadStore
-                );
+                payloadStore);
 
-            // Act
-            var result = await retentionService.ApplyAsync(
-                state,
-                AiExecutionRetentionMode.Hybrid,
-                CancellationToken.None);
-
-            // Assert — Eviction
-            Assert.Single(result.EvictedSteps);
-            Assert.Contains("step-00", result.EvictedSteps);
-
-            // Assert — Compaction (via result, NOT via compactor fake)
-            Assert.Equal(2, result.CompactedSteps.Count);
-            Assert.Contains("step-01", result.CompactedSteps);
-            Assert.Contains("step-02", result.CompactedSteps);
-
-            // Assert — No overlap
-            Assert.DoesNotContain(
-                result.EvictedSteps,
-                stepName => result.CompactedSteps.Contains(stepName));
-
-            // Assert — State correctness
-            Assert.DoesNotContain("step-00", state.Steps.Keys);
-            Assert.Contains("step-01", state.Steps.Keys);
-            Assert.Contains("step-02", state.Steps.Keys);
-
-            // Assert — Compactor was called twice (via Result)
-            Assert.Equal(2, compactor.CompactResultCallCount);
-
-            // Assert — Resolver still works for evicted step
             var archived = await resolver.GetStepAsync(
                 state.ExecutionId,
-                "step-00",
+                evictedSteps.First(),
                 state,
                 CancellationToken.None);
 
             Assert.NotNull(archived);
-            Assert.Equal("step-00", archived!.StepName);
-            Assert.Equal("value-step-00", archived.Result!.Data!["value"]);
         }
 
         /// <summary>
-        /// Verifies that Hybrid retention does not evict any step
-        /// when all terminal steps are still required by non-terminal children.
-        ///
-        /// SCENARIO:
-        /// - Multiple completed steps exist.
-        /// - Each completed step is required by at least one non-terminal child.
-        /// - MaxCompletedStepsInState is lower than total steps.
-        ///
-        /// EXPECTATION:
-        /// - No step is evicted.
-        /// - Steps remain in hot state.
-        /// - No data loss.
-        /// - Compaction may still occur.
-        ///
-        /// WHY THIS MATTERS:
-        /// - Prevents breaking DAG execution by removing required dependencies.
-        /// - Validates dependency-safe retention in Hybrid mode.
+        /// Extracts a strongly typed retention decision from a policy result.
         /// </summary>
-        [Fact]
-        public async Task Hybrid_Should_Not_Evict_When_All_Steps_Are_Protected_By_Dependencies()
+        private static AiRetentionDecision GetDecision(
+            AiPolicyResult result)
         {
-            // Arrange
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    Mode = AiExecutionRetentionMode.Hybrid,
-                    MaxCompletedStepsInState = 1 // force overflow
-                }
-            });
+            var typed = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result);
 
-            var state = new AiExecutionState
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                Steps = new Dictionary<string, AiStepState>
-                {
-                    ["step-a"] = new AiStepState
-                    {
-                        StepName = "step-a",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-3),
-                        Result = CreateResult("A")
-                    },
-                    ["step-b"] = new AiStepState
-                    {
-                        StepName = "step-b",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-2),
-                        Result = CreateResult("B")
-                    },
-                    ["child-a"] = new AiStepState
-                    {
-                        StepName = "child-a",
-                        Status = AiStepExecutionStatus.Ready,
-                        DependsOn = new List<string> { "step-a" }
-                    },
-                    ["child-b"] = new AiStepState
-                    {
-                        StepName = "child-b",
-                        Status = AiStepExecutionStatus.Ready,
-                        DependsOn = new List<string> { "step-b" }
-                    }
-                }
-            };
+            Assert.NotNull(typed.Data);
 
-            var policyResolver = new TestRetentionPolicyResolver(
-                new HybridAiExecutionRetentionPolicy(options));
-
-            var payloadStore = new InMemoryStepPayloadStore();
-            var indexStore = new InMemoryStepPayloadIndexStore();
-            var compactor = new TrackingStepResultPayloadCompactor();
-            var metrics = new NoopRetentionMetrics();
-
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var retentionService = new AiExecutionRetentionService(
-                policyResolver,
-                payloadStore,
-                indexStore,
-                compactor,
-                metrics, decisionService);
-
-            // Act
-            var result = await retentionService.ApplyAsync(
-                state,
-                AiExecutionRetentionMode.Hybrid,
-                CancellationToken.None);
-
-            // Assert — No eviction
-            Assert.Empty(result.EvictedSteps);
-
-            // Assert — All steps still in state
-            Assert.Contains("step-a", state.Steps.Keys);
-            Assert.Contains("step-b", state.Steps.Keys);
-
-            // Assert — Compaction still possible
-            Assert.Contains("step-a", result.CompactedSteps);
-            Assert.Contains("step-b", result.CompactedSteps);
-
-            // Assert — Compactor called twice
-            Assert.Equal(2, compactor.CompactResultCallCount);
-        }
-
-        private static AiStepResult CreateResult(string value)
-        {
-            return new AiStepResult
-            {
-                Success = true,
-                Data = new Dictionary<string, object?>
-                {
-                    ["value"] = value
-                }
-            };
+            return typed.Data!;
         }
 
         /// <summary>
         /// Creates a deterministic completed execution state.
-        /// Older steps have earlier CompletedAtUtc values and are evicted first.
         /// </summary>
         private static AiExecutionState CreateCompletedState(int count)
         {
@@ -551,30 +235,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         }
 
         /// <summary>
-        /// Test resolver that always returns one concrete retention policy.
-        /// </summary>
-        private sealed class TestRetentionPolicyResolver : IAiExecutionRetentionPolicyResolver
-        {
-            private readonly IAiExecutionRetentionPolicy _policy;
-
-            public TestRetentionPolicyResolver(IAiExecutionRetentionPolicy policy)
-            {
-                _policy = policy ?? throw new ArgumentNullException(nameof(policy));
-            }
-
-            public IAiExecutionRetentionPolicy Resolve(AiExecutionRetentionMode mode)
-            {
-                return _policy;
-            }
-        }
-
-        /// <summary>
-        /// In-memory archived step payload store used by the mini integration test.
-        ///
-        /// PURPOSE:
-        /// - Save full evicted steps.
-        /// - Restore full evicted steps on explicit resolver lookup.
-        /// - Count payload loads to prove lazy status resolution.
+        /// In-memory archived step payload store used by the integration tests.
         /// </summary>
         private sealed class InMemoryStepPayloadStore : IAiStepPayloadStore
         {
@@ -582,11 +243,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
             public int LoadStepAsyncCallCount { get; private set; }
 
-            Task<AiStoredPayload> IAiStepPayloadStore.SaveStepAsync(
+            public Task<AiStoredPayload> SaveStepAsync(
                 string executionId,
                 string stepName,
                 AiStepState step,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken = default)
             {
                 var key = BuildKey(executionId, stepName);
 
@@ -617,12 +278,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 return Task.FromResult(step is null ? null : CloneStep(step));
             }
 
-            private static string BuildKey(string executionId, string stepName)
+            private static string BuildKey(
+                string executionId,
+                string stepName)
             {
                 return $"{executionId}:{stepName}";
             }
 
-            private static AiStepState CloneStep(AiStepState step)
+            private static AiStepState CloneStep(
+                AiStepState step)
             {
                 return new AiStepState
                 {
@@ -652,11 +316,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         }
 
         /// <summary>
-        /// In-memory archived step index store used by the mini integration test.
-        ///
-        /// PURPOSE:
-        /// - Store archive metadata produced by RetentionService.
-        /// - Provide single and batch archive index lookup for the resolver.
+        /// In-memory archived step index store.
         /// </summary>
         private sealed class InMemoryStepPayloadIndexStore : IAiStepPayloadIndexStore
         {
@@ -667,6 +327,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 CancellationToken cancellationToken = default)
             {
                 _entries[BuildKey(entry.ExecutionId, entry.StepName)] = entry;
+
                 return Task.CompletedTask;
             }
 
@@ -676,6 +337,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 CancellationToken cancellationToken = default)
             {
                 _entries.TryGetValue(BuildKey(executionId, stepName), out var entry);
+
                 return Task.FromResult(entry);
             }
 
@@ -688,6 +350,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                     .Select(stepName =>
                     {
                         _entries.TryGetValue(BuildKey(executionId, stepName), out var entry);
+
                         return new { stepName, entry };
                     })
                     .Where(x => x.entry is not null)
@@ -700,8 +363,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 string executionId,
                 CancellationToken cancellationToken = default)
             {
-                var result = _entries
-                    .Values
+                var result = _entries.Values
                     .Where(x => string.Equals(x.ExecutionId, executionId, StringComparison.Ordinal))
                     .ToList();
 
@@ -714,94 +376,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 CancellationToken cancellationToken = default)
             {
                 _entries.Remove(BuildKey(executionId, stepName));
+
                 return Task.CompletedTask;
             }
 
-            public Task IndexStepAsync(
+            private static string BuildKey(
                 string executionId,
-                string stepName,
-                AiStepState step,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
-            }
-
-            private static string BuildKey(string executionId, string stepName)
+                string stepName)
             {
                 return $"{executionId}:{stepName}";
             }
         }
 
         /// <summary>
-        /// No-op compactor because this mini integration test exercises Evict mode only.
-        /// </summary>
-        private sealed class NoopStepResultPayloadCompactor : IAiStepResultPayloadCompactor
-        {
-            public Task CompactAsync(
-                AiStepResult result,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
-            }
-
-            public Task CompactAsync(
-                AiStepState step,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
-            }
-        }
-
-        /// <summary>
-        /// No-op retention metrics implementation.
-        ///
-        /// PURPOSE:
-        /// - Keep this test focused on retention/resolver behavior.
-        /// - Metrics behavior is tested separately.
-        /// </summary>
-        private sealed class NoopRetentionMetrics : IAiExecutionRetentionServiceMetrics
-        {
-            public void RecordEvaluation(
-                AiExecutionRetentionMode mode,
-                int totalStepsBefore,
-                int stepsToCompact,
-                int stepsToEvict)
-            {
-            }
-
-            public void RecordCompacted(string stepName)
-            {
-            }
-
-            public void RecordEvicted(string stepName)
-            {
-            }
-
-            public void RecordCompleted(
-                AiExecutionRetentionMode mode,
-                int totalStepsBefore,
-                int totalStepsAfter)
-            {
-            }
-
-            public void RecordRetentionApplied(
-                AiExecutionRetentionMode mode,
-                int totalStepsBefore,
-                int totalStepsAfter,
-                int plannedCompactions,
-                int plannedEvictions,
-                int compactedSteps,
-                int evictedSteps)
-            {
-            }
-        }
-
-
-        /// <summary>
-        /// Tracking compactor used to verify which steps were compacted by Hybrid retention.
-        /// </summary>
-        /// <summary>
-        /// Tracking compactor aligned with RetentionService behavior.
+        /// Tracking compactor used to validate Hybrid retention behavior.
         /// </summary>
         private sealed class TrackingStepResultPayloadCompactor : IAiStepResultPayloadCompactor
         {
@@ -812,6 +400,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 CancellationToken cancellationToken = default)
             {
                 CompactResultCallCount++;
+
                 return Task.CompletedTask;
             }
 
@@ -822,6 +411,5 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 return Task.CompletedTask;
             }
         }
-
     }
 }

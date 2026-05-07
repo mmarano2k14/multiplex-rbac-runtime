@@ -2,14 +2,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Cleanup;
-using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
@@ -27,13 +22,13 @@ using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Helpers;
-using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
@@ -44,25 +39,30 @@ using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
 {
     /// <summary>
-    /// Validates retry scheduling behavior for DAG execution.
-    ///
+    /// Validates local retry scheduling behavior for DAG execution.
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
-    /// - Validate existing distributed Redis/Lua retry behavior.
-    /// - Validate local retry-engine behavior through <see cref="RetryExecutionAdapter"/>.
+    /// - Validate local retry-engine behavior through the policy-driven retry engine.
+    /// - Validate local retry scheduling after a transient failure.
     /// - Validate local retry recovery from a transient failure to a successful second attempt.
     ///
-    /// IMPORTANT:
-    /// - Distributed mode uses <see cref="IAiDagExecutionStore"/> and legacy Lua retry state.
-    /// - Local mode uses <see cref="IAiExecutionStore"/> and the new retry adapter.
-    /// </summary>
+    /// RETRY:
+    /// - Retry configuration is provided through step-level <c>config.retry</c>.
+    /// - Retry policies are resolved through the shared policy engine.
+    ///
+    /// RETENTION MIGRATION:
+    /// - This test no longer wires the legacy retention service.
+    /// - This test no longer uses legacy retention options or retention modes.
+    /// - Local retry behavior does not require retention.
+    /// </remarks>
     public sealed class AiDagRetryEngineLocalIntegrationTests
     {
-        private const string ConnectionString = "mongodb://localhost:27017";
-        private const string DatabaseName = "multiplexed_ai_tests";
-
-
+        /// <summary>
+        /// Verifies that a local DAG step failure schedules retry using the policy-driven retry engine.
+        /// </summary>
         [Fact]
-        public async Task Local_Dag_Should_Schedule_Retry_With_Retry_Adapter_When_Step_Fails()
+        public async Task Local_Dag_Should_Schedule_Retry_With_Retry_Engine_When_Step_Fails()
         {
             var engine = CreateLocalEngine();
 
@@ -99,6 +99,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 $"Unexpected execution status: {record.Status}");
         }
 
+        /// <summary>
+        /// Verifies that a local DAG step retries and succeeds on the second attempt.
+        /// </summary>
         [Fact]
         public async Task Local_Dag_Should_Retry_And_Succeed_On_Second_Attempt()
         {
@@ -154,37 +157,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             Assert.Equal(AiExecutionStatus.Completed, secondRecord.Status);
         }
 
-        private static AiEngineOptions CreateOptions()
-        {
-            return new AiEngineOptions
-            {
-                JsonPipelineDefinitionFilePath = "config\\dag-retry-fail.json",
-
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
-                },
-
-                Snapshots = new AiExecutionSnapshotOptions
-                {
-                    Enabled = false
-                },
-
-                Cleanup = new AiExecutionCleanupOptions
-                {
-                    AutoCleanupOnCompleted = false,
-                    AutoCleanupOnFailed = false,
-                    SuppressCleanupExceptions = true
-                }
-            };
-        }
-
-        private static AiDagExecutionEngine CreateLocalEngine(AiPipelineDefinition? pipeline = null)
+        /// <summary>
+        /// Creates a local DAG engine with policy-driven retry wiring.
+        /// </summary>
+        private static AiDagExecutionEngine CreateLocalEngine(
+            AiPipelineDefinition? pipeline = null)
         {
             var executionStore = new MemoryAiExecutionStore();
 
             var memoryCache = new MemoryCache(new MemoryCacheOptions());
-            var contextStore = new MemoryContextStore(memoryCache, TimeSpan.FromMinutes(5));
+            var contextStore = new MemoryContextStore(
+                memoryCache,
+                TimeSpan.FromMinutes(5));
 
             var accessor = new ExecutionContextAccessor();
             var contextFactory = new ExecutionContextFactory();
@@ -220,11 +204,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                     AutoCleanupOnCompleted = false,
                     AutoCleanupOnFailed = false,
                     SuppressCleanupExceptions = true
-                },
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false,
-                    Mode = AiExecutionRetentionMode.None
                 }
             };
 
@@ -236,12 +215,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 new DefaultAiExecutionStateReader(new NoopPayloadResolver());
 
             var payloadCompactor = new NoopStepResultPayloadCompactor();
-            var retentionService = new NoopExecutionRetentionService();
             var stepResolver = new LocalStateExecutionStepResolver();
 
-
             var retryPolicies = new IAiPolicy[]
-{
+            {
                 new DefaultTransientRetryPolicy(),
                 new DefaultTimeoutRetryPolicy(),
                 new DefaultRateLimitRetryPolicy()
@@ -255,11 +232,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                     typeof(DefaultAiRetryEngine)
                 });
 
-            var obs = ObservabilityFactory.Create();
-
             var policyFactory = new DefaultAiPolicyEngineFactory(
                 policyRegistry,
-                policyEngineRegistry, obs);
+                policyEngineRegistry,
+                observability);
 
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
@@ -268,7 +244,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiExecutionStore)] = executionStore,
                 [typeof(IAiExecutionStateReader)] = stateReader,
                 [typeof(IAiExecutionStateWriter)] = stateWriter,
-                [typeof(IAiExecutionRetentionService)] = retentionService,
                 [typeof(IAiExecutionStepResolver)] = stepResolver,
                 [typeof(IAiPolicyEngineFactory)] = policyFactory
             });
@@ -288,13 +263,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stateReader,
                 stateWriter,
                 stepResolver,
-                retentionService,
                 policyFactory,
                 null);
 
             return new AiDagExecutionEngine(engineServices);
         }
 
+        /// <summary>
+        /// Creates a local retry pipeline whose step always fails.
+        /// </summary>
         private static AiPipelineDefinition CreateLocalRetryPipeline()
         {
             return new AiPipelineDefinition
@@ -314,9 +291,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                         {
                             ["retry"] = new Dictionary<string, object?>
                             {
-                                ["policy"] = "retry.transient.default",
+                                ["policies"] = new[]
+                                {
+                                    "retry.transient.default"
+                                },
                                 ["maxRetries"] = 3,
+                                ["strategy"] = "Fixed",
                                 ["baseDelayMs"] = 50,
+                                ["maxDelayMs"] = 50,
                                 ["jitter"] = false
                             }
                         }
@@ -325,6 +307,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             };
         }
 
+        /// <summary>
+        /// Creates a local retry pipeline whose step fails once and then succeeds.
+        /// </summary>
         private static AiPipelineDefinition CreateLocalRetrySuccessPipeline()
         {
             return new AiPipelineDefinition
@@ -344,9 +329,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                         {
                             ["retry"] = new Dictionary<string, object?>
                             {
-                                ["policy"] = "retry.transient.default",
+                                ["policies"] = new[]
+                                {
+                                    "retry.transient.default"
+                                },
                                 ["maxRetries"] = 3,
+                                ["strategy"] = "Fixed",
                                 ["baseDelayMs"] = 0,
+                                ["maxDelayMs"] = 0,
                                 ["jitter"] = false
                             }
                         }
@@ -355,6 +345,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             };
         }
 
+        /// <summary>
+        /// Creates an in-memory pipeline source selector for the supplied pipeline.
+        /// </summary>
         private static IAiPipelineDefinitionSourceSelector CreateInMemorySourceSelector(
             AiPipelineDefinition pipeline)
         {
@@ -380,6 +373,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 serviceProvider);
         }
 
+        /// <summary>
+        /// Creates a deterministic runtime context for local engine tests.
+        /// </summary>
         private static ExecutionContext CreateRuntimeContext()
         {
             return new ExecutionContext
@@ -406,7 +402,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             };
         }
 
-        private static T GetRequiredService<T>(AiDagExecutionEngine engine)
+        /// <summary>
+        /// Resolves a required service from the engine private service provider.
+        /// </summary>
+        private static T GetRequiredService<T>(
+            AiDagExecutionEngine engine)
         {
             var property = typeof(AiExecutionEngine)
                 .GetProperty(
@@ -421,11 +421,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                     $"Required service '{typeof(T).FullName}' is not registered."));
         }
 
+        /// <summary>
+        /// Test step that always fails.
+        /// </summary>
         [AiStep("test.fail")]
         private sealed class TestFailStep : IAiStep
         {
+            /// <summary>
+            /// Gets the step name.
+            /// </summary>
             public string Name => "test.fail";
 
+            /// <inheritdoc />
             public Task<AiStepResult> ExecuteAsync(
                 AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
@@ -434,18 +441,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             }
         }
 
+        /// <summary>
+        /// Test step that fails once and then succeeds.
+        /// </summary>
         [AiStep("test.fail.then.success")]
         private sealed class TestFailThenSuccessStep : IAiStep
         {
             private static int _counter;
 
+            /// <summary>
+            /// Gets the step name.
+            /// </summary>
             public string Name => "test.fail.then.success";
 
+            /// <summary>
+            /// Resets the static attempt counter.
+            /// </summary>
             public static void Reset()
             {
                 _counter = 0;
             }
 
+            /// <inheritdoc />
             public Task<AiStepResult> ExecuteAsync(
                 AiStepExecutionContext context,
                 CancellationToken cancellationToken = default)
@@ -461,8 +478,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             }
         }
 
+        /// <summary>
+        /// Payload resolver that should not be used in this test.
+        /// </summary>
         private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
         {
+            /// <inheritdoc />
             public Task<object?> ResolveAsync(
                 AiStoredPayload payload,
                 CancellationToken cancellationToken = default)
@@ -472,8 +493,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             }
         }
 
+        /// <summary>
+        /// No-op step result payload compactor.
+        /// </summary>
         private sealed class NoopStepResultPayloadCompactor : IAiStepResultPayloadCompactor
         {
+            /// <inheritdoc />
             public Task CompactAsync(
                 AiStepResult result,
                 CancellationToken cancellationToken = default)
@@ -482,19 +507,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             }
         }
 
-        private sealed class NoopExecutionRetentionService : IAiExecutionRetentionService
-        {
-            public ValueTask<AiExecutionRetentionApplyResult> ApplyAsync(
-                AiExecutionState state,
-                AiExecutionRetentionMode mode,
-                CancellationToken cancellationToken = default)
-            {
-                return ValueTask.FromResult(AiExecutionRetentionApplyResult.Empty);
-            }
-        }
-
+        /// <summary>
+        /// Local step resolver backed only by hot execution state.
+        /// </summary>
         private sealed class LocalStateExecutionStepResolver : IAiExecutionStepResolver
         {
+            /// <inheritdoc />
             public Task WarmAsync(
                 string executionId,
                 AiExecutionState state,
@@ -503,6 +521,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 return Task.CompletedTask;
             }
 
+            /// <inheritdoc />
             public Task WarmStepsAsync(
                 string executionId,
                 AiExecutionState state,
@@ -512,6 +531,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 return Task.CompletedTask;
             }
 
+            /// <inheritdoc />
             public Task<AiStepState?> GetStepAsync(
                 string executionId,
                 string stepName,
@@ -519,9 +539,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 CancellationToken cancellationToken = default)
             {
                 state.Steps.TryGetValue(stepName, out var step);
+
                 return Task.FromResult(step);
             }
 
+            /// <inheritdoc />
             public Task<AiStepState?> GetStepStatusAsync(
                 string executionId,
                 string stepName,
@@ -529,20 +551,29 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 CancellationToken cancellationToken = default)
             {
                 state.Steps.TryGetValue(stepName, out var step);
+
                 return Task.FromResult(step);
             }
         }
 
+        /// <summary>
+        /// Minimal service provider for local engine tests.
+        /// </summary>
         private sealed class TestServiceProvider : IServiceProvider
         {
             private readonly Dictionary<Type, object> _services;
 
+            /// <summary>
+            /// Initializes a new instance of the <see cref="TestServiceProvider"/> class.
+            /// </summary>
+            /// <param name="services">The service map.</param>
             public TestServiceProvider(Dictionary<Type, object> services)
             {
                 _services = services;
                 _services[typeof(IServiceProvider)] = this;
             }
 
+            /// <inheritdoc />
             public object? GetService(Type serviceType)
             {
                 return _services.TryGetValue(serviceType, out var service)

@@ -2,101 +2,52 @@
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.AI.Runtime.Execution.Retention;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Tests.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Services;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 {
     /// <summary>
-    /// Unit tests for <see cref="AiExecutionRetentionService"/>.
-    ///
+    /// Unit tests for the policy-driven <see cref="DefaultAiRetentionEvictionService"/>.
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
-    /// - Validate retention application order without involving the DAG engine.
-    /// - Ensure evicted steps are persisted before they are removed from the hot state.
-    /// - Protect against data loss during retention.
+    /// - Validate physical eviction ordering independently from the DAG runtime.
+    /// - Ensure archived payload persistence happens before hot-state removal.
+    /// - Protect against data loss during retention eviction.
     ///
     /// IMPORTANT:
-    /// - These tests validate service orchestration only.
-    /// - Policy selection is tested separately in AiExecutionRetentionPolicyTests.
-    /// - Resolver behavior will be tested separately in AiExecutionStepResolverTests.
-    /// </summary>
-    public sealed class AiExecutionRetentionServiceTests
+    /// - These tests intentionally validate only eviction orchestration behavior.
+    /// - Policy selection and retention planning are validated separately.
+    /// - These tests target the simplified policy-driven eviction API.
+    /// </remarks>
+    public sealed class AiPolicyDrivenRetentionEvictionServiceTests
     {
         /// <summary>
-        /// Verifies that an evicted step is saved before it is removed from the hot state.
-        ///
-        /// EXPECTATION:
-        /// - RetentionService receives a plan containing one step to evict.
-        /// - The step is persisted through IAiStepPayloadStore before removal.
-        /// - The step is indexed before removal.
-        /// - Only after successful persistence/indexing is the step removed from state.Steps.
-        ///
-        /// WHY THIS MATTERS:
-        /// - Removing before persisting would permanently lose execution step data.
-        /// - This protects replay, resolver lookup, and post-retention recovery.
+        /// Verifies that a step payload is persisted and indexed before removal from hot state.
         /// </summary>
         [Fact]
-        public async Task ApplyAsync_Should_Save_And_Index_Step_Before_Removing_From_State()
+        public async Task EvictAsync_Should_Save_And_Index_Step_Before_Removing_From_State()
         {
-            var state = new AiExecutionState
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                Steps = new Dictionary<string, AiStepState>
-                {
-                    ["step-1"] = new AiStepState
-                    {
-                        StepName = "step-1",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-1),
-                        Result = new AiStepResult
-                        {
-                            Success = true,
-                            Data = new Dictionary<string, object?>
-                            {
-                                ["value"] = "test"
-                            }
-                        }
-                    }
-                }
-            };
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new AiExecutionRetentionPlan
-                {
-                    StepsToEvict = new[] { "step-1" }
-                });
+            var state = CreateState();
 
             var callLog = new List<string>();
 
             var stepPayloadStore = new TestStepPayloadStore(callLog);
             var stepPayloadIndexStore = new TestStepPayloadIndexStore(callLog, state);
-            var payloadCompactor = new TestPayloadCompactor(callLog);
-            var metrics = new TestRetentionMetrics();
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
 
-            var service = new AiExecutionRetentionService(
-                policyResolver,
+            var service = new DefaultAiRetentionEvictionService(
                 stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                metrics, decisionService);
+                stepPayloadIndexStore);
 
-            await service.ApplyAsync(
+            var result = await service.EvictAsync(
                 state,
-                AiExecutionRetentionMode.Evict,
+                new[] { "step-1" },
+                "unit-test",
                 CancellationToken.None);
+
+            Assert.NotNull(result);
 
             Assert.Contains("save:step-1", callLog);
             Assert.Contains("index:step-1", callLog);
@@ -109,155 +60,70 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             Assert.True(
                 saveIndex < indexIndex,
-                "Step must be saved before it is indexed.");
+                "Step payload must be saved before archive indexing.");
 
             Assert.DoesNotContain("step-1", state.Steps.Keys);
+
+            Assert.Single(result);
+            Assert.Contains("step-1", result);
         }
 
         /// <summary>
-        /// Verifies that the service does not remove a step from the hot state
-        /// when step persistence fails.
-        ///
-        /// EXPECTATION:
-        /// - SaveStepAsync throws.
-        /// - MarkArchivedAsync is not called.
-        /// - The step remains in state.Steps.
-        ///
-        /// WHY THIS MATTERS:
-        /// - If persistence fails and the step is removed anyway, the runtime loses
-        ///   execution history permanently.
+        /// Verifies that a step remains in hot state when payload persistence fails.
         /// </summary>
         [Fact]
-        public async Task ApplyAsync_Should_Not_Remove_Step_When_Save_Fails()
+        public async Task EvictAsync_Should_Not_Remove_Step_When_Save_Fails()
         {
-            var state = new AiExecutionState
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                Steps = new Dictionary<string, AiStepState>
-                {
-                    ["step-1"] = new AiStepState
-                    {
-                        StepName = "step-1",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-1),
-                        Result = new AiStepResult
-                        {
-                            Success = true,
-                            Data = new Dictionary<string, object?>
-                            {
-                                ["value"] = "test"
-                            }
-                        }
-                    }
-                }
-            };
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new AiExecutionRetentionPlan
-                {
-                    StepsToEvict = new[] { "step-1" }
-                });
+            var state = CreateState();
 
             var callLog = new List<string>();
 
             var stepPayloadStore = new FailingStepPayloadStore(callLog);
             var stepPayloadIndexStore = new TestStepPayloadIndexStore(callLog, state);
-            var payloadCompactor = new TestPayloadCompactor(callLog);
-            var metrics = new TestRetentionMetrics();
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
 
-            var service = new AiExecutionRetentionService(
-                policyResolver,
+            var service = new DefaultAiRetentionEvictionService(
                 stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                metrics, decisionService);
+                stepPayloadIndexStore);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                service.ApplyAsync(
+                service.EvictAsync(
                     state,
-                    AiExecutionRetentionMode.Evict,
-                    CancellationToken.None).AsTask());
+                    new[] { "step-1" },
+                    "unit-test",
+                    CancellationToken.None));
 
             Assert.Contains("save-failed:step-1", callLog);
+
             Assert.DoesNotContain("index:step-1", callLog);
 
             Assert.True(
                 state.Steps.ContainsKey("step-1"),
-                "Step must remain in hot state when persistence fails.");
+                "Step must remain in hot state when payload persistence fails.");
         }
 
         /// <summary>
-        /// Verifies that the service does not remove a step from the hot state
-        /// when archive indexing fails after the payload was saved.
-        ///
-        /// EXPECTATION:
-        /// - SaveStepAsync succeeds.
-        /// - MarkArchivedAsync throws.
-        /// - The step remains in state.Steps.
-        ///
-        /// WHY THIS MATTERS:
-        /// - If the step is removed after payload save but before archive index write,
-        ///   the payload may exist but the resolver cannot find it.
+        /// Verifies that a step remains in hot state when archive indexing fails.
         /// </summary>
         [Fact]
-        public async Task ApplyAsync_Should_Not_Remove_Step_When_Index_Fails()
+        public async Task EvictAsync_Should_Not_Remove_Step_When_Index_Fails()
         {
-            var state = new AiExecutionState
-            {
-                ExecutionId = Guid.NewGuid().ToString("N"),
-                Steps = new Dictionary<string, AiStepState>
-                {
-                    ["step-1"] = new AiStepState
-                    {
-                        StepName = "step-1",
-                        Status = AiStepExecutionStatus.Completed,
-                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-1),
-                        Result = new AiStepResult
-                        {
-                            Success = true,
-                            Data = new Dictionary<string, object?>
-                            {
-                                ["value"] = "test"
-                            }
-                        }
-                    }
-                }
-            };
-
-            var policyResolver = new TestRetentionPolicyResolver(
-                new AiExecutionRetentionPlan
-                {
-                    StepsToEvict = new[] { "step-1" }
-                });
+            var state = CreateState();
 
             var callLog = new List<string>();
 
             var stepPayloadStore = new TestStepPayloadStore(callLog);
             var stepPayloadIndexStore = new FailingStepPayloadIndexStore(callLog, state);
-            var payloadCompactor = new TestPayloadCompactor(callLog);
-            var metrics = new TestRetentionMetrics();
 
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var service = new AiExecutionRetentionService(
-                policyResolver,
+            var service = new DefaultAiRetentionEvictionService(
                 stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                metrics, decisionService);
+                stepPayloadIndexStore);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                service.ApplyAsync(
+                service.EvictAsync(
                     state,
-                    AiExecutionRetentionMode.Evict,
-                    CancellationToken.None).AsTask());
+                    new[] { "step-1" },
+                    "unit-test",
+                    CancellationToken.None));
 
             Assert.Contains("save:step-1", callLog);
             Assert.Contains("index-failed:step-1", callLog);
@@ -268,47 +134,35 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
         }
 
         /// <summary>
-        /// Test policy resolver returning a fixed retention plan.
+        /// Creates a deterministic execution state for eviction validation.
         /// </summary>
-        private sealed class TestRetentionPolicyResolver : IAiExecutionRetentionPolicyResolver
+        private static AiExecutionState CreateState()
         {
-            private readonly IAiExecutionRetentionPolicy _policy;
-
-            public TestRetentionPolicyResolver(AiExecutionRetentionPlan plan)
+            return new AiExecutionState
             {
-                _policy = new TestRetentionPolicy(plan);
-            }
-
-            public IAiExecutionRetentionPolicy Resolve(AiExecutionRetentionMode mode)
-            {
-                return _policy;
-            }
+                ExecutionId = Guid.NewGuid().ToString("N"),
+                Steps = new Dictionary<string, AiStepState>
+                {
+                    ["step-1"] = new AiStepState
+                    {
+                        StepName = "step-1",
+                        Status = AiStepExecutionStatus.Completed,
+                        CompletedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+                        Result = new AiStepResult
+                        {
+                            Success = true,
+                            Data = new Dictionary<string, object?>
+                            {
+                                ["value"] = "test"
+                            }
+                        }
+                    }
+                }
+            };
         }
 
         /// <summary>
-        /// Test retention policy returning a predefined plan.
-        /// </summary>
-        private sealed class TestRetentionPolicy : IAiExecutionRetentionPolicy
-        {
-            private readonly AiExecutionRetentionPlan _plan;
-
-            public TestRetentionPolicy(AiExecutionRetentionPlan plan)
-            {
-                _plan = plan;
-            }
-
-            public AiExecutionRetentionMode Mode => AiExecutionRetentionMode.Evict;
-
-            public ValueTask<AiExecutionRetentionPlan> EvaluateAsync(
-                AiExecutionState state,
-                CancellationToken cancellationToken = default)
-            {
-                return new ValueTask<AiExecutionRetentionPlan>(_plan);
-            }
-        }
-
-        /// <summary>
-        /// Test step payload store that records save ordering.
+        /// Test payload store recording save ordering.
         /// </summary>
         private sealed class TestStepPayloadStore : IAiStepPayloadStore
         {
@@ -319,36 +173,18 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 _callLog = callLog;
             }
 
-            public Task SaveStepAsync(
+            public Task<AiStoredPayload> SaveStepAsync(
                 string executionId,
                 string stepName,
                 AiStepState step,
                 CancellationToken cancellationToken = default)
-            {
-                _callLog.Add($"save:{stepName}");
-                return Task.CompletedTask;
-            }
-
-            public Task<AiStepState?> LoadStepAsync(
-                string executionId,
-                string stepName,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.FromResult<AiStepState?>(null);
-            }
-
-            Task<AiStoredPayload> IAiStepPayloadStore.SaveStepAsync(
-                string executionId,
-                string stepName,
-                AiStepState step,
-                CancellationToken cancellationToken)
             {
                 _callLog.Add($"save:{stepName}");
 
                 return Task.FromResult(new AiStoredPayload
                 {
                     IsInline = true,
-                    InlineValue = step.Result?.Data, // ou null si tu veux minimal
+                    InlineValue = step.Result?.Data,
                     SizeBytes = 0,
                     ContentType = "application/json"
                 });
@@ -365,7 +201,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
         }
 
         /// <summary>
-        /// Test step index store that records index ordering.
+        /// Test archive index store recording archive ordering.
         /// </summary>
         private sealed class TestStepPayloadIndexStore : IAiStepPayloadIndexStore
         {
@@ -389,6 +225,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                     "Step must still exist in hot state while archive index is written.");
 
                 _callLog.Add($"index:{entry.StepName}");
+
                 return Task.CompletedTask;
             }
 
@@ -424,78 +261,10 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 return Task.FromResult<IReadOnlyDictionary<string, AiArchivedStepPayloadIndex>>(
                     new Dictionary<string, AiArchivedStepPayloadIndex>());
             }
-
-            public Task IndexStepAsync(
-                string executionId,
-                string stepName,
-                AiStepState step,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
-            }
         }
 
         /// <summary>
-        /// Test payload compactor.
-        /// </summary>
-        private sealed class TestPayloadCompactor : IAiStepResultPayloadCompactor
-        {
-            private readonly List<string> _callLog;
-
-            public TestPayloadCompactor(List<string> callLog)
-            {
-                _callLog = callLog;
-            }
-
-            public Task CompactAsync(
-                AiStepState step,
-                CancellationToken cancellationToken = default)
-            {
-                _callLog.Add($"compact:{step.StepName}");
-                return Task.CompletedTask;
-            }
-
-            public Task CompactAsync(AiStepResult result, CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
-            }
-        }
-
-        /// <summary>
-        /// Minimal test metrics implementation.
-        /// </summary>
-        private sealed class TestRetentionMetrics : IAiExecutionRetentionServiceMetrics
-        {
-            public void RecordCompacted(string stepName)
-            {
-            }
-
-            public void RecordCompleted(AiExecutionRetentionMode mode, int totalStepsBefore, int totalStepsAfter)
-            {
-            }
-
-            public void RecordEvaluation(AiExecutionRetentionMode mode, int totalStepsBefore, int stepsToCompact, int stepsToEvict)
-            {
-            }
-
-            public void RecordEvicted(string stepName)
-            {
-            }
-
-            public void RecordRetentionApplied(
-                AiExecutionRetentionMode mode,
-                int totalStepsBefore,
-                int totalStepsAfter,
-                int plannedCompactions,
-                int plannedEvictions,
-                int compactedSteps,
-                int evictedSteps)
-            {
-            }
-        }
-
-        /// <summary>
-        /// Step payload store that simulates a persistence failure.
+        /// Payload store simulating persistence failure.
         /// </summary>
         private sealed class FailingStepPayloadStore : IAiStepPayloadStore
         {
@@ -506,15 +275,16 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 _callLog = callLog;
             }
 
-            Task<AiStoredPayload> IAiStepPayloadStore.SaveStepAsync(
+            public Task<AiStoredPayload> SaveStepAsync(
                 string executionId,
                 string stepName,
                 AiStepState step,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken = default)
             {
                 _callLog.Add($"save-failed:{stepName}");
 
-                throw new InvalidOperationException("Simulated step persistence failure.");
+                throw new InvalidOperationException(
+                    "Simulated step payload persistence failure.");
             }
 
             public Task<AiStepState?> LoadStepAsync(
@@ -528,7 +298,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
         }
 
         /// <summary>
-        /// Archive index store that simulates an indexing failure.
+        /// Archive index store simulating archive write failure.
         /// </summary>
         private sealed class FailingStepPayloadIndexStore : IAiStepPayloadIndexStore
         {
@@ -549,11 +319,12 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             {
                 Assert.True(
                     _state.Steps.ContainsKey(entry.StepName),
-                    "Step must still exist in hot state while archive index write is attempted.");
+                    "Step must still exist in hot state while archive indexing is attempted.");
 
                 _callLog.Add($"index-failed:{entry.StepName}");
 
-                throw new InvalidOperationException("Simulated archive index failure.");
+                throw new InvalidOperationException(
+                    "Simulated archive index write failure.");
             }
 
             public Task DeleteAsync(
@@ -587,15 +358,6 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             {
                 return Task.FromResult<IReadOnlyDictionary<string, AiArchivedStepPayloadIndex>>(
                     new Dictionary<string, AiArchivedStepPayloadIndex>());
-            }
-
-            public Task IndexStepAsync(
-                string executionId,
-                string stepName,
-                AiStepState step,
-                CancellationToken cancellationToken = default)
-            {
-                return Task.CompletedTask;
             }
         }
     }

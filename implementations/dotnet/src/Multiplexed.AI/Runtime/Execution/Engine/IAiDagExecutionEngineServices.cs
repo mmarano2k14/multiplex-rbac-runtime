@@ -4,7 +4,6 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
@@ -126,11 +125,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
         /// Gets the execution snapshot service.
         /// </summary>
         IAiExecutionSnapshotService<ExecutionContextSnapshot>? SnapshotService { get; }
-
-        /// <summary>
-        /// Gets the execution retention service used to apply step compaction and eviction.
-        /// </summary>
-        IAiExecutionRetentionService RetentionService { get; }
 
         /// <summary>
         /// Gets the execution Runtime Observability service used to emit structured events about execution lifecycle and behavior.

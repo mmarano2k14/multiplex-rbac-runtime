@@ -1,97 +1,127 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Metrics;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.AI.Runtime.Execution.Metrics;
-using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Abstractions.AI.Policies;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Policies;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 {
     /// <summary>
-    /// Integration-style tests for graph-aware execution state retention.
-    ///
-    /// PURPOSE:
-    /// - Validates the retention policy directly without engine/store noise.
-    /// - Proves graph-aware behavior for linear, non-linear, retry, failed and disabled cases.
-    /// - Ensures retention metrics remain coherent.
+    /// Unit tests validating policy-driven retention selection behavior.
     /// </summary>
-    public sealed class AiExecutionStateRetentionPolicyTests
+    /// <remarks>
+    /// PURPOSE:
+    /// - Validate retention policy selection behavior directly without engine/store noise.
+    /// - Validate compact, evict, and hybrid retention candidate selection.
+    /// - Validate deterministic retention policy outcomes.
+    ///
+    /// MIGRATION:
+    /// - Legacy DefaultAiExecutionStateRetentionPolicy is removed.
+    /// - Legacy retention metrics are removed.
+    /// - Retention is now policy-driven through AiPolicyResultGeneric&lt;AiRetentionDecision&gt;.
+    /// - These tests validate policy decisions directly.
+    /// </remarks>
+    public sealed class AiPolicyDrivenRetentionPolicyTests
     {
+        /// <summary>
+        /// Validates that compact retention selects all terminal steps.
+        /// </summary>
         [Fact]
-        public void LinearGraph_Should_Not_Evict_When_Dependencies_Require_Full_Chain()
+        public async Task CompactPolicy_Should_Select_All_Terminal_Steps()
         {
-            var state = CreateLinearCompletedState(stepCount: 200);
-            var metrics = new InMemoryAiExecutionRetentionMetrics();
+            var state = CreateLinearCompletedState(200);
 
-            var policy = CreatePolicy(maxCompletedSteps: 50, metrics);
+            var policy = new CompactAiRetentionPolicy();
 
-            policy.Apply(state);
+            var result = await policy.ExecuteAsync(
+                new AiRetentionContext
+                {
+                    ExecutionState = state
+                });
 
-            var snapshot = metrics.Snapshot();
+            var decision = GetDecision(result);
 
-            Assert.Equal(200, snapshot.TotalStepsBefore);
-            Assert.Equal(200, snapshot.TotalStepsAfter);
-            Assert.Equal(0, snapshot.EvictedSteps);
+            Assert.Equal(AiRetentionDecisionKind.Compact, decision.Kind);
+
+            Assert.NotNull(decision.StepsToCompact);
+            Assert.Equal(200, decision.StepsToCompact.Count);
+
             Assert.Equal(200, state.Steps.Count);
         }
 
+        /// <summary>
+        /// Validates that eviction policy selects all terminal steps.
+        /// </summary>
         [Fact]
-        public void IndependentGraph_Should_Evict_Old_Completed_Steps()
+        public async Task EvictPolicy_Should_Select_All_Terminal_Steps()
         {
-            var state = CreateIndependentCompletedState(stepCount: 200);
-            var metrics = new InMemoryAiExecutionRetentionMetrics();
+            var state = CreateIndependentCompletedState(200);
 
-            var policy = CreatePolicy(maxCompletedSteps: 50, metrics);
+            var policy = new EvictAiRetentionPolicy();
 
-            policy.Apply(state);
+            var result = await policy.ExecuteAsync(
+                new AiRetentionContext
+                {
+                    ExecutionState = state
+                });
 
-            var snapshot = metrics.Snapshot();
+            var decision = GetDecision(result);
 
-            Assert.Equal(200, snapshot.TotalStepsBefore);
-            Assert.Equal(50, snapshot.TotalStepsAfter);
-            Assert.Equal(150, snapshot.EvictedSteps);
-            Assert.Equal(50, state.Steps.Count);
+            Assert.Equal(AiRetentionDecisionKind.Evict, decision.Kind);
 
-            Assert.All(state.Steps.Keys, key =>
+            Assert.NotNull(decision.StepsToEvict);
+            Assert.Equal(200, decision.StepsToEvict.Count);
+
+            Assert.Equal(200, state.Steps.Count);
+
+            Assert.All(decision.StepsToEvict, stepName =>
             {
-                var index = ExtractStepIndex(key);
-                Assert.True(index >= 150, $"Unexpected retained step '{key}'.");
+                var index = ExtractStepIndex(stepName);
+
+                Assert.True(index >= 0);
             });
         }
 
+        /// <summary>
+        /// Validates that hybrid retention selects terminal steps for both compaction and eviction.
+        /// </summary>
         [Fact]
-        public void BranchedGraph_Should_Protect_Transitive_Dependencies_Of_Retained_Window()
+        public async Task HybridPolicy_Should_Select_Steps_For_Compaction_And_Eviction()
         {
             var state = CreateBranchedState();
-            var metrics = new InMemoryAiExecutionRetentionMetrics();
 
-            var policy = CreatePolicy(maxCompletedSteps: 2, metrics);
+            var policy = new HybridAiRetentionPolicy();
 
-            policy.Apply(state);
+            var result = await policy.ExecuteAsync(
+                new AiRetentionContext
+                {
+                    ExecutionState = state
+                });
 
-            var snapshot = metrics.Snapshot();
+            var decision = GetDecision(result);
 
-            Assert.Equal(6, snapshot.TotalStepsBefore);
+            Assert.Equal(AiRetentionDecisionKind.Hybrid, decision.Kind);
 
-            // step-4 and step-5 are retained by window.
-            // step-5 depends on step-3, which depends on step-1 and step-2.
-            // step-4 depends on step-2.
-            Assert.Contains("step-1", state.Steps.Keys);
-            Assert.Contains("step-2", state.Steps.Keys);
-            Assert.Contains("step-3", state.Steps.Keys);
-            Assert.Contains("step-4", state.Steps.Keys);
-            Assert.Contains("step-5", state.Steps.Keys);
+            Assert.NotNull(decision.StepsToCompact);
+            Assert.NotNull(decision.StepsToEvict);
 
-            // step-0 is old and not required by the retained subgraph.
-            Assert.DoesNotContain("step-0", state.Steps.Keys);
+            Assert.Equal(6, decision.StepsToCompact.Count);
+            Assert.Equal(6, decision.StepsToEvict.Count);
 
-            Assert.Equal(1, snapshot.EvictedSteps);
+            Assert.Contains("step-0", decision.StepsToCompact);
+            Assert.Contains("step-5", decision.StepsToCompact);
+
+            Assert.Contains("step-0", decision.StepsToEvict);
+            Assert.Contains("step-5", decision.StepsToEvict);
         }
 
+        /// <summary>
+        /// Validates that non-terminal steps are excluded from retention decisions.
+        /// </summary>
         [Fact]
-        public void Retention_Should_Not_Remove_NonTerminal_Steps()
+        public async Task Policies_Should_Ignore_NonTerminal_Steps()
         {
-            var state = CreateIndependentCompletedState(stepCount: 20);
+            var state = CreateIndependentCompletedState(20);
 
             state.Steps["running-step"] = CreateStep(
                 "running-step",
@@ -108,77 +138,70 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 AiStepExecutionStatus.WaitingForRetry,
                 completedAtUtc: null);
 
-            state.Steps["failed-step"] = CreateStep(
-                "failed-step",
-                AiStepExecutionStatus.Failed,
-                completedAtUtc: null);
+            var compactPolicy = new CompactAiRetentionPolicy();
 
-            var metrics = new InMemoryAiExecutionRetentionMetrics();
-            var policy = CreatePolicy(maxCompletedSteps: 5, metrics);
-
-            policy.Apply(state);
-
-            Assert.Contains("running-step", state.Steps.Keys);
-            Assert.Contains("ready-step", state.Steps.Keys);
-            Assert.Contains("retry-step", state.Steps.Keys);
-            Assert.Contains("failed-step", state.Steps.Keys);
-
-            var snapshot = metrics.Snapshot();
-
-            Assert.Equal(24, snapshot.TotalStepsBefore);
-            Assert.Equal(9, snapshot.TotalStepsAfter);
-            Assert.Equal(15, snapshot.EvictedSteps);
-            Assert.Equal(1, snapshot.ActiveSteps);
-            Assert.Equal(2, snapshot.PendingSteps);
-        }
-
-        [Fact]
-        public void DisabledRetention_Should_Not_Modify_State_Or_Record_Metrics()
-        {
-            var state = CreateIndependentCompletedState(stepCount: 200);
-            var metrics = new InMemoryAiExecutionRetentionMetrics();
-
-            var policy = new DefaultAiExecutionStateRetentionPolicy(
-                new AiExecutionStateRetentionOptions
+            var compactResult = await compactPolicy.ExecuteAsync(
+                new AiRetentionContext
                 {
-                    Enabled = false,
-                    MaxCompletedStepsInState = 50
-                },
-                metrics);
+                    ExecutionState = state
+                });
 
-            policy.Apply(state);
+            var compactDecision = GetDecision(compactResult);
 
-            var snapshot = metrics.Snapshot();
+            Assert.Equal(20, compactDecision.StepsToCompact.Count);
 
-            Assert.Equal(200, state.Steps.Count);
-            Assert.Equal(0, snapshot.TotalStepsBefore);
-            Assert.Equal(0, snapshot.TotalStepsAfter);
-            Assert.Equal(0, snapshot.EvictedSteps);
-        }
+            Assert.DoesNotContain("running-step", compactDecision.StepsToCompact);
+            Assert.DoesNotContain("ready-step", compactDecision.StepsToCompact);
+            Assert.DoesNotContain("retry-step", compactDecision.StepsToCompact);
 
-        private static DefaultAiExecutionStateRetentionPolicy CreatePolicy(
-            int maxCompletedSteps,
-            IAiExecutionRetentionMetrics metrics)
-        {
-            return new DefaultAiExecutionStateRetentionPolicy(
-                new AiExecutionStateRetentionOptions
+            var evictPolicy = new EvictAiRetentionPolicy();
+
+            var evictResult = await evictPolicy.ExecuteAsync(
+                new AiRetentionContext
                 {
-                    Enabled = true,
-                    MaxCompletedStepsInState = maxCompletedSteps
-                },
-                metrics);
+                    ExecutionState = state
+                });
+
+            var evictDecision = GetDecision(evictResult);
+
+            Assert.Equal(20, evictDecision.StepsToEvict.Count);
+
+            Assert.DoesNotContain("running-step", evictDecision.StepsToEvict);
+            Assert.DoesNotContain("ready-step", evictDecision.StepsToEvict);
+            Assert.DoesNotContain("retry-step", evictDecision.StepsToEvict);
         }
 
-        private static AiExecutionState CreateLinearCompletedState(int stepCount)
+        /// <summary>
+        /// Extracts a strongly typed retention decision from a policy result.
+        /// </summary>
+        private static AiRetentionDecision GetDecision(
+            AiPolicyResult result)
+        {
+            var typed = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result);
+
+            Assert.NotNull(typed.Data);
+
+            return typed.Data!;
+        }
+
+        /// <summary>
+        /// Creates a linear completed state.
+        /// </summary>
+        private static AiExecutionState CreateLinearCompletedState(
+            int stepCount)
         {
             var state = CreateEmptyState();
 
             for (var i = 0; i < stepCount; i++)
             {
                 var stepName = $"step-{i}";
+
                 var dependsOn = i == 0
                     ? new List<string>()
-                    : new List<string> { $"step-{i - 1}" };
+                    : new List<string>
+                    {
+                        $"step-{i - 1}"
+                    };
 
                 state.Steps[stepName] = CreateStep(
                     stepName,
@@ -190,7 +213,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             return state;
         }
 
-        private static AiExecutionState CreateIndependentCompletedState(int stepCount)
+        /// <summary>
+        /// Creates a completed state with fully independent steps.
+        /// </summary>
+        private static AiExecutionState CreateIndependentCompletedState(
+            int stepCount)
         {
             var state = CreateEmptyState();
 
@@ -208,6 +235,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             return state;
         }
 
+        /// <summary>
+        /// Creates a branched execution graph.
+        /// </summary>
         private static AiExecutionState CreateBranchedState()
         {
             var state = CreateEmptyState();
@@ -232,23 +262,36 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 "step-3",
                 AiStepExecutionStatus.Completed,
                 now.AddSeconds(3),
-                new List<string> { "step-1", "step-2" });
+                new List<string>
+                {
+                    "step-1",
+                    "step-2"
+                });
 
             state.Steps["step-4"] = CreateStep(
                 "step-4",
                 AiStepExecutionStatus.Completed,
                 now.AddSeconds(4),
-                new List<string> { "step-2" });
+                new List<string>
+                {
+                    "step-2"
+                });
 
             state.Steps["step-5"] = CreateStep(
                 "step-5",
                 AiStepExecutionStatus.Completed,
                 now.AddSeconds(5),
-                new List<string> { "step-3" });
+                new List<string>
+                {
+                    "step-3"
+                });
 
             return state;
         }
 
+        /// <summary>
+        /// Creates an empty execution state.
+        /// </summary>
         private static AiExecutionState CreateEmptyState()
         {
             return new AiExecutionState
@@ -259,6 +302,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             };
         }
 
+        /// <summary>
+        /// Creates a step state.
+        /// </summary>
         private static AiStepState CreateStep(
             string stepName,
             AiStepExecutionStatus status,
@@ -274,9 +320,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             };
         }
 
-        private static int ExtractStepIndex(string stepName)
+        /// <summary>
+        /// Extracts the numeric step index from a step name.
+        /// </summary>
+        private static int ExtractStepIndex(
+            string stepName)
         {
             var parts = stepName.Split('-');
+
             return int.Parse(parts[1]);
         }
     }

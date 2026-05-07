@@ -1,4 +1,7 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Payloads;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
@@ -44,15 +47,16 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <param name="compactionService">The service used to apply retention compaction.</param>
         /// <param name="evictionService">The service used to apply safe retention eviction.</param>
         public DefaultAiRetentionEngine(
-            IAiPolicyRegistry policyRegistry,
-            AiStepExecutionContext stepContext,
-            IAiRuntimeObservability observability,
-            IAiRetentionCompactionService compactionService,
-            IAiRetentionEvictionService evictionService)
+             IAiPolicyRegistry policyRegistry,
+             AiStepExecutionContext stepContext,
+             IAiRuntimeObservability observability)
             : base(policyRegistry, stepContext, observability)
         {
-            _compactionService = compactionService ?? throw new ArgumentNullException(nameof(compactionService));
-            _evictionService = evictionService ?? throw new ArgumentNullException(nameof(evictionService));
+            _compactionService = new DefaultAiRetentionCompactionService(
+                stepContext.Services.GetRequiredService<IAiStepResultPayloadCompactor>());
+            _evictionService = new DefaultAiRetentionEvictionService(
+                stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
+                stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
         }
 
         /// <inheritdoc />

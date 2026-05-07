@@ -8,7 +8,6 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
@@ -25,16 +24,32 @@ using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
 {
+    /// <summary>
+    /// Integration tests validating payload metrics with Mongo + Redis cache.
+    /// </summary>
+    /// <remarks>
+    /// PURPOSE:
+    /// - Validate compactor-level inline/external payload metrics.
+    /// - Validate engine-level payload metrics through real DAG execution.
+    /// - Validate MongoRedis cached payload store behavior.
+    ///
+    /// RETENTION MIGRATION:
+    /// - These tests no longer configure legacy StateRetention options.
+    /// - No retention configuration is attached to the generated pipelines.
+    /// - Policy-driven retention therefore remains a no-op and does not interfere with payload metrics.
+    /// </remarks>
     public sealed class AiPipelinePayloadMetricsMongoRedisIntegrationTests
     {
+        /// <summary>
+        /// Verifies payload metrics at compactor level with MongoRedis cached payload store.
+        /// </summary>
         [Fact]
         public async Task CompactorLevel_DynamicStepResults_Should_Record_PayloadMetrics_And_Use_MongoRedis_Cache()
         {
             const int stepCount = 20;
             const int inlineThresholdBytes = 1024;
 
-            var redis = await ConnectionMultiplexer.ConnectAsync("localhost:6379");
-            var redisDb = redis.GetDatabase();
+            await using var redis = await ConnectionMultiplexer.ConnectAsync("localhost:6379");
 
             var metrics = new InMemoryAiPayloadMetrics();
 
@@ -92,6 +107,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             Assert.True(snapshot.ExternalizedBytes > snapshot.InlineBytes);
         }
 
+        /// <summary>
+        /// Verifies payload metrics at engine level using a code-first pipeline and MongoRedis cache.
+        /// </summary>
         [Fact]
         public async Task EngineLevel_CodeFirstPipeline_Should_Record_PayloadMetrics_And_Use_MongoRedis_Cache()
         {
@@ -102,10 +120,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             var engineOptions = new AiEngineOptions
             {
                 DefaultPipelineDefinitionSource = "InMemory",
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
-                },
                 PayloadStore = new AiPayloadStoreOptions
                 {
                     Enabled = true,
@@ -135,7 +149,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
                 engineOptions,
                 services =>
                 {
-                    // 🔥 FIX ICI
                     var provider = new InMemoryAiPipelineDefinitionProvider(new[] { definition });
 
                     services.RemoveAll<IAiPipelineDefinitionProvider>();
@@ -154,7 +167,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             var engine = host.Engine;
             var metrics = host.ServiceProvider.GetRequiredService<IAiPayloadMetrics>();
 
-            var created = await engine.CreateAsync(pipelineName, new Dictionary<string, object?>());
+            var created = await engine.CreateAsync(
+                pipelineName,
+                new Dictionary<string, object?>());
+
             var result = await engine.ExecuteAllAsync(created.ExecutionId);
 
             Assert.Equal(AiExecutionStatus.Completed, result.Status);
@@ -166,6 +182,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             Assert.True(snapshot.ExternalizedCount >= stepCount / 2);
         }
 
+        /// <summary>
+        /// Verifies payload metrics remain stable during a longer engine-level run.
+        /// </summary>
         [Fact]
         public async Task EngineLevel_LongRun_CodeFirstPipeline_Should_Record_Stable_PayloadMetrics_With_MongoRedis_Cache()
         {
@@ -177,13 +196,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             var engineOptions = new AiEngineOptions
             {
                 DefaultPipelineDefinitionSource = "InMemory",
-
-                // 🔥 IMPORTANT : éviter interférence retention
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
-                },
-
                 PayloadStore = new AiPayloadStoreOptions
                 {
                     Enabled = true,
@@ -240,8 +252,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             var metrics = host.ServiceProvider.GetRequiredService<IAiPayloadMetrics>();
             var snapshot = ((InMemoryAiPayloadMetrics)metrics).Snapshot();
 
-            // ✅ Invariants (robustes, non fragiles)
-
             Assert.True(
                 snapshot.InlineCount >= stepCount / 2,
                 $"InlineCount too low: {snapshot.InlineCount}");
@@ -252,25 +262,32 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
 
             Assert.True(
                 snapshot.InlineBytes > 0,
-                $"InlineBytes should be > 0");
+                "InlineBytes should be > 0");
 
             Assert.True(
                 snapshot.ExternalizedBytes > 0,
-                $"ExternalizedBytes should be > 0");
+                "ExternalizedBytes should be > 0");
         }
 
-        private static AiPipelineDefinition CreatePipeline(string name, int steps)
+        /// <summary>
+        /// Creates a linear DAG pipeline with alternating small and large payload sizes.
+        /// </summary>
+        private static AiPipelineDefinition CreatePipeline(
+            string name,
+            int steps)
         {
             var list = new List<AiPipelineStepDefinition>();
 
-            for (int i = 0; i < steps; i++)
+            for (var i = 0; i < steps; i++)
             {
                 list.Add(new AiPipelineStepDefinition
                 {
                     Name = $"step-{i}",
                     StepKey = "test.payload",
                     Order = i,
-                    DependsOn = i == 0 ? new List<string>() : new List<string> { $"step-{i - 1}" },
+                    DependsOn = i == 0
+                        ? new List<string>()
+                        : new List<string> { $"step-{i - 1}" },
                     Config = new Dictionary<string, object?>
                     {
                         ["size"] = i % 2 == 0 ? 128 : 4096
@@ -287,12 +304,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             };
         }
 
+        /// <summary>
+        /// Test step producing a configurable payload size.
+        /// </summary>
         [AiStep("test.payload")]
         private sealed class TestStep : IAiStep
         {
+            /// <summary>
+            /// Gets the step key.
+            /// </summary>
             public string Name => "test.payload";
 
-            public Task<AiStepResult> ExecuteAsync(AiStepExecutionContext context, CancellationToken ct = default)
+            /// <inheritdoc />
+            public Task<AiStepResult> ExecuteAsync(
+                AiStepExecutionContext context,
+                CancellationToken ct = default)
             {
                 var size = Convert.ToInt32(context.Step.Config["size"]);
 
@@ -310,11 +336,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             }
         }
 
-        private static IReadOnlyList<AiStepResult> CreateDynamicStepResults(int count)
+        /// <summary>
+        /// Creates dynamic step results with alternating small and large payload sizes.
+        /// </summary>
+        private static IReadOnlyList<AiStepResult> CreateDynamicStepResults(
+            int count)
         {
             var list = new List<AiStepResult>();
 
-            for (int i = 0; i < count; i++)
+            for (var i = 0; i < count; i++)
             {
                 list.Add(new AiStepResult
                 {
@@ -331,11 +361,22 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             return list;
         }
 
+        /// <summary>
+        /// Test payload store resolver returning a fixed payload store.
+        /// </summary>
         private sealed class TestPayloadStoreResolver : IAiPayloadStoreResolver
         {
             private readonly IAiPayloadStore _store;
-            public TestPayloadStoreResolver(IAiPayloadStore store) => _store = store;
-            public IAiPayloadStore Resolve() => _store;
+
+            public TestPayloadStoreResolver(IAiPayloadStore store)
+            {
+                _store = store;
+            }
+
+            public IAiPayloadStore Resolve()
+            {
+                return _store;
+            }
         }
     }
 }

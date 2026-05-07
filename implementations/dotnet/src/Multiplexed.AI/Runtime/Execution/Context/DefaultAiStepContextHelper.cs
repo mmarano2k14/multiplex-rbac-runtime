@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
@@ -107,6 +108,8 @@ namespace Multiplexed.AI.Runtime.Execution.Context
             }
 
             var rawValue = await GetRawConfigAsync(key, cancellationToken).ConfigureAwait(false);
+            rawValue = NormalizeRawValue(rawValue);
+
             return await _resolver.ResolveAsync<T>(_context, rawValue, cancellationToken).ConfigureAwait(false);
         }
 
@@ -477,6 +480,98 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         }
 
         /// <summary>
+        /// Normalizes raw configuration values before typed resolution.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Prevents mixed runtime object graphs from leaking into typed config binding.
+        /// - Converts <see cref="JsonElement"/> values into plain CLR values.
+        /// - Preserves step override / pipeline fallback behavior without deep-merging raw objects.
+        ///
+        /// WHY:
+        /// Pipeline configuration loaded from JSON may be stored as <see cref="JsonElement"/>,
+        /// while step configuration can be stored as dictionaries, arrays, or primitive CLR values.
+        /// If JsonElement values are serialized later as normal objects, nested values such as
+        /// retry.policies can become impossible to deserialize into strongly typed collections.
+        ///
+        /// RULE:
+        /// - Step config still has priority over pipeline config.
+        /// - This method only normalizes the selected raw value.
+        /// - It does not merge step and pipeline configuration sections.
+        /// </remarks>
+        /// <param name="value">The raw value to normalize.</param>
+        /// <returns>A JSON-safe CLR representation of the value.</returns>
+        private static object? NormalizeRawValue(object? value)
+        {
+            return value switch
+            {
+                null => null,
+
+                JsonElement element => NormalizeJsonElement(element),
+
+                IReadOnlyDictionary<string, object?> readOnlyDictionary => readOnlyDictionary
+                    .ToDictionary(
+                        pair => pair.Key,
+                        pair => NormalizeRawValue(pair.Value),
+                        StringComparer.Ordinal),
+
+                IDictionary<string, object?> dictionary => dictionary
+                    .ToDictionary(
+                        pair => pair.Key,
+                        pair => NormalizeRawValue(pair.Value),
+                        StringComparer.Ordinal),
+
+                IEnumerable<object?> enumerable when value is not string => enumerable
+                    .Select(NormalizeRawValue)
+                    .ToArray(),
+
+                _ => value
+            };
+        }
+
+        /// <summary>
+        /// Converts a <see cref="JsonElement"/> into a plain CLR value.
+        /// </summary>
+        /// <param name="element">The JSON element to normalize.</param>
+        /// <returns>A plain CLR representation of the JSON element.</returns>
+        private static object? NormalizeJsonElement(JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.Object => element
+                    .EnumerateObject()
+                    .ToDictionary(
+                        property => property.Name,
+                        property => NormalizeJsonElement(property.Value),
+                        StringComparer.Ordinal),
+
+                JsonValueKind.Array => element
+                    .EnumerateArray()
+                    .Select(NormalizeJsonElement)
+                    .ToArray(),
+
+                JsonValueKind.String => element.GetString(),
+
+                JsonValueKind.Number when element.TryGetInt32(out var intValue) => intValue,
+
+                JsonValueKind.Number when element.TryGetInt64(out var longValue) => longValue,
+
+                JsonValueKind.Number when element.TryGetDouble(out var doubleValue) => doubleValue,
+
+                JsonValueKind.True => true,
+
+                JsonValueKind.False => false,
+
+                JsonValueKind.Null => null,
+
+                JsonValueKind.Undefined => null,
+
+                _ => element.GetRawText()
+            };
+        }
+
+
+        /// <summary>
         /// Determines whether the current step has an input key either inline or payload-backed.
         /// </summary>
         private bool HasInput(string key)
@@ -492,8 +587,12 @@ namespace Multiplexed.AI.Runtime.Execution.Context
         private bool HasConfig(string key)
         {
             return _context.StepState.Config.ContainsKey(key) ||
+
                    (_context.StepState.ConfigPayloads != null &&
-                    _context.StepState.ConfigPayloads.ContainsKey(key));
+                    _context.StepState.ConfigPayloads.ContainsKey(key)) ||
+
+                   (_context.State.PipelineConfig != null &&
+                    _context.State.PipelineConfig.ContainsKey(key));
         }
 
         /// <summary>

@@ -10,11 +10,6 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
-using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Memory;
 using Multiplexed.Abstractions.AI.Metrics;
@@ -65,11 +60,6 @@ using Multiplexed.AI.Runtime.Observability;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Runtime.Retention.Decisions.Policies;
-using Multiplexed.AI.Runtime.Retention.Policies;
-using Multiplexed.AI.Runtime.Retention.Triggers;
 using Multiplexed.AI.Runtime.Tracing;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
@@ -153,126 +143,6 @@ namespace Multiplexed.AI.DI
             services.TryAddScoped<IAiRetentionEngine>(_ => null!);
             services.TryAddScoped<IAiRetentionCompactionService, DefaultAiRetentionCompactionService>();
             services.TryAddScoped<IAiRetentionEvictionService, DefaultAiRetentionEvictionService>();
-
-            services.TryAddSingleton(sp =>
-            {
-                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
-
-                var trigger = options.RetentionTrigger ?? new AiExecutionRetentionTriggerOptions();
-
-                // ------------------------------------------------------------
-                // ALIGNMENT: Trigger ↔ StateRetention
-                //
-                // PURPOSE:
-                // - Ensure retention is actually triggered when state exceeds limits
-                // - Avoid situations where retention never runs
-                // - Keep configuration consistent without forcing duplication in tests
-                // ------------------------------------------------------------
-
-                if (options.StateRetention.Enabled &&
-                    options.StateRetention.MaxCompletedStepsInState > 0)
-                {
-                    trigger.MaxCompletedStepsInState =
-                        options.StateRetention.MaxCompletedStepsInState;
-
-                    trigger.MaxStepsInState =
-                        Math.Min(
-                            trigger.MaxStepsInState,
-                            options.StateRetention.MaxCompletedStepsInState);
-                }
-
-                return trigger;
-            });
-
-            services.TryAddSingleton<
-                IAiExecutionRetentionTrigger,
-                DefaultAiExecutionRetentionTrigger>();
-
-            services.TryAddSingleton<
-                IAiExecutionRetentionDecisionEvaluator,
-                CompositeAiExecutionRetentionDecisionEvaluator>();
-
-            services.TryAddSingleton<
-                IAiExecutionRetentionDecisionService,
-                DefaultAiExecutionRetentionDecisionService>();
-
-            services.TryAddSingleton<SizeBasedAiExecutionRetentionDecisionPolicy>(sp =>
-            {
-                var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
-                var trigger = options.RetentionTrigger ?? new AiExecutionRetentionTriggerOptions();
-
-                return new SizeBasedAiExecutionRetentionDecisionPolicy(
-                    trigger.MaxInlinePayloadBytes);
-            });
-
-            services.TryAddSingleton<IAiExecutionRetentionDecisionPolicy>(sp =>
-                sp.GetRequiredService<SizeBasedAiExecutionRetentionDecisionPolicy>());
-            // ------------------------------------------------------------
-            // Legacy execution state retention policy
-            //
-            // IMPORTANT:
-            // - Kept for backward compatibility with existing constructors/tests.
-            // - This is the old state-level retention policy.
-            // - The new retention system below is policy/resolver/service based.
-            // ------------------------------------------------------------
-
-            services.TryAddSingleton<IAiExecutionStateRetentionPolicy>(sp =>
-            {
-                var resolvedOptions = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
-                return new DefaultAiExecutionStateRetentionPolicy(resolvedOptions.StateRetention);
-            });
-
-            // ------------------------------------------------------------
-            // New execution retention system
-            //
-            // DESIGN:
-            // - IAiExecutionRetentionPolicy = pure decision.
-            // - IAiExecutionRetentionPolicyResolver = selects policy by mode.
-            // - IAiExecutionRetentionService = applies compaction / eviction safely.
-            //
-            // IMPORTANT:
-            // - Policies must not mutate state.
-            // - Policies must not write payloads.
-            // - The service applies the plan in the safe order:
-            //   1. compact result payloads
-            //   2. persist full step payloads
-            //   3. evict from hot state
-            // ------------------------------------------------------------
-
-            services.TryAddSingleton<IAiExecutionRetentionPolicy, NoopAiExecutionRetentionPolicy>();
-            services.TryAddSingleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>();
-            services.TryAddSingleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>();
-            services.TryAddSingleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>();
-
-            services.TryAddSingleton<IAiExecutionRetentionPolicyResolver, DefaultAiExecutionRetentionPolicyResolver>();
-
-            // ------------------------------------------------------------
-            // Retention metrics (NEW SYSTEM)
-            //
-            // PURPOSE:
-            // - Tracks Compact / Evict / Hybrid activity.
-            // - Allows integration tests to validate the new retention system.
-            // - Provides runtime observability for state reduction.
-            // ------------------------------------------------------------
-
-            services.TryAddSingleton<
-                IAiExecutionRetentionServiceMetrics,
-                InMemoryAiExecutionRetentionServiceMetrics>();
-
-            // ------------------------------------------------------------
-            // Retention service (NEW SYSTEM)
-            //
-            // IMPORTANT:
-            // - Depends on policy resolver, step payload store, compactor, and metrics.
-            // - Applies retention in the safe order:
-            //   1. compact
-            //   2. persist step payload
-            //   3. evict from hot state
-            // ------------------------------------------------------------
-
-            services.TryAddSingleton<
-                IAiExecutionRetentionService,
-                AiExecutionRetentionService>();
 
             // ------------------------------------------------------------
             // Payload store: options

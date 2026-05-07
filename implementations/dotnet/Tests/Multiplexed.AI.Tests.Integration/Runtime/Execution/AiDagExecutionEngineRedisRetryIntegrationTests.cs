@@ -1,18 +1,9 @@
-﻿using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
-using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
-using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
@@ -20,91 +11,86 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
-using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
-using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Normalization;
-using Multiplexed.AI.Runtime.Execution.Payloads;
-using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
-using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
-using Multiplexed.AI.Runtime.Execution.Retention;
-using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Pipeline;
-using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Runtime.Retention.Policies;
-using Multiplexed.AI.Runtime.Retention.Triggers;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
+using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores;
 using Multiplexed.Rbac.Core.Stores.Cache;
 using Multiplexed.Rbac.Core.Stores.Memory;
 using StackExchange.Redis;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Xunit;
 using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
-using static Multiplexed.AI.Tests.Integration.Runtime.Execution.AiDagExecutionEngineTests;
-using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 {
     /// <summary>
     /// End-to-end Redis integration tests for distributed retry behavior in <see cref="AiDagExecutionEngine"/>.
-    ///
-    /// COVERED BEHAVIORS:
-    /// - first failure moves step into WaitingForRetry
-    /// - retry delay prevents premature re-execution
-    /// - retry promotion allows later re-execution
-    /// - retry exhaustion converges to terminal failure
-    /// - timeout recovery increments RecoveryCount without mutating business RetryCount
-    ///
-    /// ARCHITECTURE:
-    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
-    /// - Step-state mutation/access is routed through <see cref="IAiExecutionStateWriter"/>.
-    /// - Payload-aware reads are available through <see cref="IAiExecutionStateReader"/>.
-    ///
-    /// IMPORTANT:
-    /// These tests never call CreateAsync(record, state) to patch an existing execution.
-    /// The execution bundle is created once, then progressed only through engine/store operations.
     /// </summary>
+    /// <remarks>
+    /// PURPOSE:
+    /// - Validate distributed retry behavior through the DAG engine.
+    /// - Validate retry delay, retry promotion, and retry exhaustion.
+    /// - Validate timeout recovery without mutating business retry count.
+    ///
+    /// RETRY MIGRATION:
+    /// - These tests use step-level <c>config.retry</c>.
+    /// - Legacy <c>Execution.RetryDelayMs</c> and <c>Execution.MaxRetries</c> are no longer used.
+    ///
+    /// RETENTION MIGRATION:
+    /// - These tests do not wire legacy retention services.
+    /// - Engine creation goes through the production-like migrated fixture.
+    /// - Pipelines without retention config run retention as no-op.
+    /// </remarks>
     [Collection("redis")]
     public sealed class AiDagExecutionEngineRedisRetryIntegrationTests
     {
         private readonly IConnectionMultiplexer _connection;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiDagExecutionEngineRedisRetryIntegrationTests"/> class.
+        /// </summary>
+        /// <param name="fixture">The Redis fixture.</param>
         public AiDagExecutionEngineRedisRetryIntegrationTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
+
             _connection = fixture.Connection;
         }
 
+        /// <summary>
+        /// Verifies that the first step failure moves the step to WaitingForRetry.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Move_Step_To_WaitingForRetry_On_FirstFailure()
         {
-            var engine = CreateEngine("dag-retry-fail-once.json");
+            await using var host = await CreateRetryHostAsync(
+                pipelineName: "dag-retry-fail-once",
+                stepKey: "fail-once-then-succeed",
+                maxRetries: 2,
+                baseDelayMs: 1000,
+                maxDelayMs: 1000);
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+            var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-retry-fail-once", "Marco");
+            var created = await host.Engine.CreateAsync("dag-retry-fail-once", "Marco");
 
             try
             {
-                await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                await ExecuteIgnoringFailureAsync(host.Engine, created.ExecutionId);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
                 var state = await dagStore.GetStateAsync(created.ExecutionId);
 
                 Assert.NotNull(state);
@@ -112,8 +98,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step = stateWriter.GetOrCreateStep(state!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-                Assert.Equal(1, step?.RetryState?.RetryCount);
-                Assert.NotNull(step?.RetryState?.NextRetryAtUtc);
+                Assert.Equal(1, step.RetryState?.RetryCount);
+                Assert.NotNull(step.RetryState?.NextRetryAtUtc);
                 Assert.Null(step.ClaimedBy);
                 Assert.Null(step.ClaimToken);
             }
@@ -123,29 +109,34 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that a retryable step is not re-executed before the retry delay opens.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Not_Reexecute_Step_Before_RetryDelay()
         {
-            var engine = CreateEngine("dag-retry-delay.json");
+            await using var host = await CreateRetryHostAsync(
+                pipelineName: "dag-retry-delay",
+                stepKey: "fail-once-then-succeed",
+                maxRetries: 1,
+                baseDelayMs: 500,
+                maxDelayMs: 500);
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+            var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-retry-delay", "Marco");
+            var created = await host.Engine.CreateAsync("dag-retry-delay", "Marco");
 
             try
             {
-                await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                await ExecuteIgnoringFailureAsync(host.Engine, created.ExecutionId);
 
-                var second = await engine.ExecuteNextAsync(created.ExecutionId);
+                var second = await host.Engine.ExecuteNextAsync(created.ExecutionId);
 
                 Assert.True(
                     second.Status == AiExecutionStatus.Waiting ||
                     second.Status == AiExecutionStatus.Running);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
                 var state = await dagStore.GetStateAsync(created.ExecutionId);
 
                 Assert.NotNull(state);
@@ -153,9 +144,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var step = stateWriter.GetOrCreateStep(state!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, step.Status);
-                Assert.Equal(1, step?.RetryState?.RetryCount);
-                Assert.NotNull(step?.RetryState?.NextRetryAtUtc);
-                Assert.True(step?.RetryState?.NextRetryAtUtc > DateTime.UtcNow);
+                Assert.Equal(1, step.RetryState?.RetryCount);
+                Assert.NotNull(step.RetryState?.NextRetryAtUtc);
+                Assert.True(step.RetryState?.NextRetryAtUtc > DateTime.UtcNow);
             }
             finally
             {
@@ -163,23 +154,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that a step retries and completes when the retry window is open.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Retry_And_Complete_When_RetryWindow_Is_Open()
         {
-            var engine = CreateEngine("dag-retry-fail-once.json");
+            await using var host = await CreateRetryHostAsync(
+                pipelineName: "dag-retry-fail-once",
+                stepKey: "fail-once-then-succeed",
+                maxRetries: 2,
+                baseDelayMs: 100,
+                maxDelayMs: 100);
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+            var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-retry-fail-once", "Marco");
+            var created = await host.Engine.CreateAsync("dag-retry-fail-once", "Marco");
 
             try
             {
-                await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                await ExecuteIgnoringFailureAsync(host.Engine, created.ExecutionId);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
 
                 var beforeRetry = await dagStore.GetStateAsync(created.ExecutionId);
                 Assert.NotNull(beforeRetry);
@@ -187,7 +183,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var retryStep = stateWriter.GetOrCreateStep(beforeRetry!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, retryStep.Status);
-                Assert.NotNull(retryStep?.RetryState?.NextRetryAtUtc);
+                Assert.NotNull(retryStep.RetryState?.NextRetryAtUtc);
 
                 await WaitForRetryWindowAsync(
                     dagStore,
@@ -195,7 +191,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     created.ExecutionId,
                     "retry-step");
 
-                await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                await ExecuteIgnoringFailureAsync(host.Engine, created.ExecutionId);
 
                 var finalState = await dagStore.GetStateAsync(created.ExecutionId);
                 Assert.NotNull(finalState);
@@ -203,8 +199,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = stateWriter.GetOrCreateStep(finalState!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.Completed, finalStep.Status);
-                Assert.Equal(1, finalStep?.RetryState?.RetryCount);
-                Assert.Null(finalStep?.RetryState?.NextRetryAtUtc);
+                Assert.Equal(1, finalStep.RetryState?.RetryCount);
+                Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
 
                 var finalRecord = await dagStore.GetRecordAsync(created.ExecutionId);
                 Assert.NotNull(finalRecord);
@@ -216,25 +212,30 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that retry exhaustion converges to a failed execution.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteAllAsync_Should_Fail_After_MaxRetries_Are_Exhausted()
         {
-            var engine = CreateEngine("dag-retry-always-fail.json");
+            await using var host = await CreateRetryHostAsync(
+                pipelineName: "dag-retry-always-fail",
+                stepKey: "always-fail",
+                maxRetries: 3,
+                baseDelayMs: 100,
+                maxDelayMs: 100);
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+            var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-retry-always-fail", "Marco");
+            var created = await host.Engine.CreateAsync("dag-retry-always-fail", "Marco");
 
             try
             {
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
 
                 for (var i = 0; i < 10; i++)
                 {
-                    await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                    await ExecuteIgnoringFailureAsync(host.Engine, created.ExecutionId);
 
                     var state = await dagStore.GetStateAsync(created.ExecutionId);
                     Assert.NotNull(state);
@@ -266,8 +267,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 var finalStep = stateWriter.GetOrCreateStep(finalState!, "retry-step");
 
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
-                Assert.Equal(finalStep?.Retry?.MaxRetries, finalStep?.RetryState?.RetryCount);
-                Assert.Null(finalStep?.RetryState?.NextRetryAtUtc);
+                Assert.Equal(finalStep.Retry?.MaxRetries, finalStep.RetryState?.RetryCount);
+                Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
             }
             finally
             {
@@ -275,6 +276,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that timeout recovery increments recovery count without incrementing retry count.
+        /// </summary>
         [RedisFact]
         public async Task RecoverTimedOutStepsAsync_Should_Increment_RecoveryCount_Without_Incrementing_RetryCount()
         {
@@ -330,8 +334,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Null(step.ClaimToken);
                 Assert.Null(step.ClaimedAtUtc);
                 Assert.Null(step.LeaseExpiresAtUtc);
-                Assert.Equal(1, step?.RetryState?.RetryCount);
-                Assert.Equal(1, step?.RecoveryCount);
+                Assert.Equal(1, step.RetryState?.RetryCount);
+                Assert.Equal(1, step.RecoveryCount);
             }
             finally
             {
@@ -339,6 +343,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Executes one step and ignores expected test failures.
+        /// </summary>
         private static async Task ExecuteIgnoringFailureAsync(
             AiDagExecutionEngine engine,
             string executionId)
@@ -353,16 +360,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Waits until the retry window opens.
+        /// </summary>
         private static async Task WaitForRetryWindowAsync(
-    IAiDagExecutionStore dagStore,
-    IAiExecutionStateWriter stateWriter,
-    string executionId,
-    string stepName,
-    CancellationToken cancellationToken = default)
+            IAiDagExecutionStore dagStore,
+            IAiExecutionStateWriter stateWriter,
+            string executionId,
+            string stepName,
+            CancellationToken cancellationToken = default)
         {
             for (var i = 0; i < 50; i++)
             {
                 var state = await dagStore.GetStateAsync(executionId, cancellationToken);
+
                 if (state is null)
                 {
                     throw new InvalidOperationException($"State '{executionId}' was not found.");
@@ -370,7 +381,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                // SI step terminé → sortir
                 if (step.Status == AiStepExecutionStatus.Failed ||
                     step.Status == AiStepExecutionStatus.Completed)
                 {
@@ -379,7 +389,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var nextRetryAtUtc = step.RetryState?.NextRetryAtUtc;
 
-                // plus de retry → sortir
                 if (!nextRetryAtUtc.HasValue)
                 {
                     return;
@@ -389,7 +398,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 if (delay <= TimeSpan.Zero)
                 {
-                    // fenêtre ouverte
                     return;
                 }
 
@@ -404,121 +412,35 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 $"Retry window did not open in time for step '{stepName}' in execution '{executionId}'.");
         }
 
-        private static void EnsureRetryPipelineFiles()
+        /// <summary>
+        /// Creates a production-like host for a retry pipeline.
+        /// </summary>
+        private async Task<AiDagExecutionEngineTestHost> CreateRetryHostAsync(
+            string pipelineName,
+            string stepKey,
+            int maxRetries,
+            int baseDelayMs,
+            int maxDelayMs)
         {
-            WritePipelineDefinitionToConfig(new AiPipelineDefinition
+            var jsonFileName = $"{pipelineName}-{Guid.NewGuid():N}.json";
+            var jsonPath = WriteRetryPipelineDefinitionToConfig(
+                jsonFileName,
+                pipelineName,
+                stepKey,
+                maxRetries,
+                baseDelayMs,
+                maxDelayMs);
+
+            var options = new AiEngineOptions
             {
-                Name = "dag-retry-fail-once",
-                Version = "1",
-                ExecutionMode = AiExecutionMode.Dag,
-                Steps =
-                [
-                    new AiPipelineStepDefinition
-                    {
-                        Name = "retry-step",
-                        StepKey = "fail-once-then-succeed",
-                        Order = 1,
-                        DependsOn = [],
-                        Execution = new AiPipelineStepExecutionDefinition
-                        {
-                            RetryDelayMs = 1000,
-                            MaxRetries = 2
-                        }
-                    }
-                ]
-            });
+                DefaultPipelineDefinitionSource = "Json",
+                JsonPipelineDefinitionFilePath = "config/" + jsonFileName,
 
-            WritePipelineDefinitionToConfig(new AiPipelineDefinition
-            {
-                Name = "dag-retry-delay",
-                Version = "1",
-                ExecutionMode = AiExecutionMode.Dag,
-                Steps =
-                [
-                    new AiPipelineStepDefinition
-                    {
-                        Name = "retry-step",
-                        StepKey = "fail-once-then-succeed",
-                        Order = 1,
-                        DependsOn = [],
-                        Execution = new AiPipelineStepExecutionDefinition
-                        {
-                            RetryDelayMs = 500,
-                            MaxRetries = 1
-                        }
-                    }
-                ]
-            });
+                Snapshots = new AiExecutionSnapshotOptions
+                {
+                    Enabled = false
+                },
 
-            WritePipelineDefinitionToConfig(new AiPipelineDefinition
-            {
-                Name = "dag-retry-always-fail",
-                Version = "1",
-                ExecutionMode = AiExecutionMode.Dag,
-                Steps =
-                [
-                    new AiPipelineStepDefinition
-                    {
-                        Name = "retry-step",
-                        StepKey = "always-fail",
-                        Order = 1,
-                        DependsOn = [],
-                        Execution = new AiPipelineStepExecutionDefinition
-                        {
-                            RetryDelayMs = 1000,
-                            MaxRetries = 3
-                        }
-                    }
-                ]
-            });
-        }
-
-        private AiDagExecutionEngine CreateEngine(string fileName)
-        {
-            EnsureRetryPipelineFiles();
-
-            var executionStore = GetExecutionStore();
-            var dagStore = CreateDagStore();
-
-            var contextOptions = Options.Create(new ContextRuntimeOptions
-            {
-                UseRedisLuaScriptShaCaching = true
-            });
-
-            var redisContextStore = new RedisContextStore(_connection, contextOptions);
-            var memoryContextStore = new MemoryContextStore(
-                new MemoryCache(new MemoryCacheOptions()),
-                TimeSpan.FromMinutes(5));
-
-            var contextStore = new CompositeContextStore(redisContextStore, memoryContextStore);
-
-            var accessor = new ExecutionContextAccessor();
-            var contextFactory = new ExecutionContextFactory();
-            var logger = new NoopLogger();
-
-            var stepExecutor = new AiStepExecutor(logger);
-
-            var services = new ServiceCollection();
-
-            services.AddAiStepsFromAssemblies(
-                typeof(AiRuntimeAssemblyMarker).Assembly,
-                typeof(AiDagExecutionEngineRedisRetryIntegrationTests).Assembly);
-
-            var provider = services.BuildServiceProvider();
-            var registry = provider.GetRequiredService<IAiStepRegistry>();
-            var resolver = new AiPipelineResolver(registry);
-            var sourceSelector = CreateJsonSourceSelector(fileName);
-
-            var pipelineExecutor = new AiSequentialPipelineExecutor(
-                sourceSelector,
-                resolver,
-                stepExecutor);
-
-            var cleanupService = new NoOpAiExecutionCleanupService();
-            var metrics = ObservabilityFactory.Create();
-
-            var aiOptions = new AiEngineOptions
-            {
                 Cleanup = new AiExecutionCleanupOptions
                 {
                     AutoCleanupOnCompleted = false,
@@ -527,164 +449,70 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var payloadOptions = Options.Create(new AiPayloadStoreOptions
-            {
-                Enabled = true,
-                Provider = "mongo",
-                RequireReplaySafePayloads = true,
-                MaxInlineSizeBytes = 2048,
-                Mongo = new MongoAiPayloadStoreOptions
+            var host = await AiDagExecutionEngineFixture.CreateAsync(
+                options,
+                services =>
                 {
-                    Enabled = true,
-                    ConnectionString = "mongodb://localhost:27017",
-                    DatabaseName = "multiplexed_ai_tests",
-                    CollectionName = $"payloads_retry_{Guid.NewGuid():N}"
-                }
-            });
-
-            var payloadStore = new MongoAiPayloadStore(payloadOptions);
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
-            var dataPolicy = new SmartInlineAiExecutionDataPolicy(
-                payloadStoreResolver,
-                payloadOptions);
-
-            var metricsPayload = new InMemoryAiPayloadMetrics();
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
-
-            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
-            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadOptions);
-
-            var stepResolver = new DefaultAiExecutionStepResolver(
-                stepPayloadIndexStore,
-                stepPayloadStore);
-
-            var payloadResolver = new DefaultAiExecutionPayloadResolver(payloadStoreResolver);
-
-            IAiExecutionStateWriter stateWriter = new DefaultAiExecutionStateWriter();
-            IAiExecutionStateReader stateReader = new DefaultAiExecutionStateReader(payloadResolver);
-
-            var retentionPolicy = CreateDisabledRetentionPolicy();
-
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    MaxCompletedStepsInState = 20,
-                    Mode = AiExecutionRetentionMode.Evict
-                }
-            });
-
-            var policies = new IAiExecutionRetentionPolicy[]
-             {
-                new NoopAiExecutionRetentionPolicy(),
-                new CompactAiExecutionRetentionPolicy(),
-                new EvictAiExecutionRetentionPolicy(options),
-                new HybridAiExecutionRetentionPolicy(options)
-             };
-
-            var policyResolver = new DefaultAiExecutionRetentionPolicyResolver(policies);
-            var retentionMetrics = new InMemoryAiExecutionRetentionServiceMetrics();
-            var retentionTrigger = new DefaultAiExecutionRetentionTrigger(options.Value.RetentionTrigger);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(retentionTrigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var retentionService = Fixtures.AiDagExecutionEngineTestHost.CreateRetentionService(
-                policyResolver,
-                stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                retentionMetrics, decisionService);
-
-            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
-
-            var engineServices = new AiDagExecutionEngineServices(
-                executionStore,
-                contextStore,
-                accessor,
-                contextFactory,
-                CreateServiceProvider(
-                    accessor,
-                    executionStore,
-                    dagStore,
-                    retentionPolicy,
-                    stateReader,
-                    stateWriter,
-                    stepResolver),
-                pipelineExecutor,
-                logger,
-                cleanupService,
-                Options.Create(aiOptions),
-                metrics,
-                payloadCompactor,
-                stateReader,
-                stateWriter,
-                stepResolver,
-                retentionService,
-                policyEngineFactory,
-                dagStore);
-
-            return new AiDagExecutionEngine(engineServices);
-        }
-
-
-        private IAiExecutionStore GetExecutionStore()
-        {
-            var keyBuilder = new AiExecutionKeyBuilder();
-            var redis = new RedisAiExecutionStore(_connection, keyBuilder);
-            var memory = new MemoryAiExecutionStore();
-            return new AiExecutionStore(redis, memory);
-        }
-
-        private IAiDagExecutionStore CreateDagStore()
-        {
-            var logger = new NoopLogger();
-            var keyBuilder = new AiExecutionKeyBuilder();
-            var metrics = MetricsFactory.Create();
-            var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
-            return new RedisAiDagExecutionStore(_connection, keyBuilder, logger, metrics, normalizers);
-        }
-
-        private static IAiExecutionStateRetentionPolicy CreateDisabledRetentionPolicy()
-        {
-            return new DefaultAiExecutionStateRetentionPolicy(
-                new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(AiDagExecutionEngineRedisRetryIntegrationTests).Assembly);
                 },
-                new InMemoryAiExecutionRetentionMetrics());
+                mongoConnectionString: "mongodb://localhost:27017",
+                mongoDatabaseName: "multiplexed_ai_tests",
+                redisConnectionString: "localhost:6379");
+
+            host.RegisterDisposableFile(jsonPath);
+
+            return host;
         }
 
-        private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(string fileName)
-        {
-            var services = new ServiceCollection();
-
-            services.AddOptions();
-
-            services.Configure<AiEngineOptions>(options =>
-            {
-                options.DefaultPipelineDefinitionSource = "Json";
-            });
-
-            services.AddSingleton<JsonAiPipelineDefinitionProvider>(_ =>
-                new JsonAiPipelineDefinitionProvider("config/" + fileName));
-
-            services.AddSingleton<InMemoryAiPipelineDefinitionProvider>();
-
-            var provider = services.BuildServiceProvider();
-
-            return new DefaultAiPipelineDefinitionSourceSelector(
-                provider.GetRequiredService<IOptions<AiEngineOptions>>(),
-                provider);
-        }
-
-        private static string WritePipelineDefinitionToConfig(AiPipelineDefinition definition)
+        /// <summary>
+        /// Writes a retry pipeline definition using step-level config.retry.
+        /// </summary>
+        private static string WriteRetryPipelineDefinitionToConfig(
+            string jsonFileName,
+            string pipelineName,
+            string stepKey,
+            int maxRetries,
+            int baseDelayMs,
+            int maxDelayMs)
         {
             var root = new
             {
-                pipelines = new[] { definition }
+                pipelines = new[]
+                {
+                    new
+                    {
+                        name = pipelineName,
+                        version = "1",
+                        executionMode = "Dag",
+                        steps = new[]
+                        {
+                            new
+                            {
+                                name = "retry-step",
+                                stepKey,
+                                order = 1,
+                                dependsOn = Array.Empty<string>(),
+                                config = new
+                                {
+                                    retry = new
+                                    {
+                                        policies = new[]
+                                        {
+                                            "retry.transient.default"
+                                        },
+                                        maxRetries,
+                                        strategy = "Fixed",
+                                        baseDelayMs,
+                                        maxDelayMs,
+                                        jitter = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             };
 
             var json = JsonSerializer.Serialize(
@@ -697,89 +525,40 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var baseDir = AppContext.BaseDirectory;
             var configDir = Path.Combine(baseDir, "config");
 
-            if (!Directory.Exists(configDir))
-            {
-                Directory.CreateDirectory(configDir);
-            }
+            Directory.CreateDirectory(configDir);
 
-            var filePath = Path.Combine(configDir, $"{definition.Name}.json");
+            var filePath = Path.Combine(configDir, jsonFileName);
 
             File.WriteAllText(filePath, json);
 
             return filePath;
         }
 
-        private static IServiceProvider CreateServiceProvider(
-    ExecutionContextAccessor accessor,
-    IAiExecutionStore store,
-    IAiDagExecutionStore dagStore,
-    IAiExecutionStateRetentionPolicy retentionPolicy,
-    IAiExecutionStateReader stateReader,
-    IAiExecutionStateWriter stateWriter,
-    IAiExecutionStepResolver stepResolver)
+        /// <summary>
+        /// Creates a distributed DAG store for Redis/Lua recovery validation.
+        /// </summary>
+        private IAiDagExecutionStore CreateDagStore()
         {
-            ArgumentNullException.ThrowIfNull(accessor);
-            ArgumentNullException.ThrowIfNull(store);
-            ArgumentNullException.ThrowIfNull(dagStore);
-            ArgumentNullException.ThrowIfNull(retentionPolicy);
-            ArgumentNullException.ThrowIfNull(stateReader);
-            ArgumentNullException.ThrowIfNull(stateWriter);
-            ArgumentNullException.ThrowIfNull(stepResolver);
+            var logger = new NoopLogger();
+            var keyBuilder = new AiExecutionKeyBuilder();
+            var metrics = MetricsFactory.Create();
 
-            return new TestServiceProvider(new Dictionary<Type, object>
-            {
-                [typeof(ExecutionContextAccessor)] = accessor,
-                [typeof(IAiExecutionStore)] = store,
-                [typeof(IAiDagExecutionStore)] = dagStore,
+            var normalizers = new DefaultAiStepResultNormalizerPipeline(
+                [new RagStepResultNormalizer()]);
 
-                // Legacy retention policy (still used in tests / compatibility)
-                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy,
-
-                [typeof(IAiExecutionStateReader)] = stateReader,
-                [typeof(IAiExecutionStateWriter)] = stateWriter,
-
-                // required for selector + convergence with eviction
-                [typeof(IAiExecutionStepResolver)] = stepResolver
-            });
+            return new RedisAiDagExecutionStore(
+                _connection,
+                keyBuilder,
+                logger,
+                metrics,
+                normalizers);
         }
 
-        private static ExecutionContext CreateRuntimeContext()
-        {
-            return new ExecutionContext
-            {
-                ContextKey = string.Empty,
-                Project = "Project",
-                TenantId = "tenant-id-xxxx",
-                TenantGroupId = "tenant-group-id-xxx",
-                CurrentNamespace = "Namespace",
-                UserId = "userId",
-                Namespaces = new List<NamespaceEntry>
-                {
-                    new NamespaceEntry
-                    {
-                        Name = "Namespace",
-                        Trns = new HashSet<string>
-                        {
-                            "trn:Project:crm:billing:invoice:read",
-                            "trn:Project:crm:billing:invoice:refund"
-                        }
-                    }
-                },
-                TtlSeconds = 300
-            };
-        }
-
-        private static T GetRequiredService<T>(AiDagExecutionEngine engine)
-        {
-            var property = typeof(AiExecutionEngine)
-                .GetProperty("Services", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            var provider = (IServiceProvider)property!.GetValue(engine)!;
-
-            return (T)provider.GetService(typeof(T))!;
-        }
-
-        private async Task CleanupDagExecutionAsync(string executionId)
+        /// <summary>
+        /// Best-effort cleanup of Redis DAG execution keys.
+        /// </summary>
+        private async Task CleanupDagExecutionAsync(
+            string executionId)
         {
             var db = _connection.GetDatabase();
 
@@ -792,7 +571,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             foreach (var stepName in stepNames)
             {
                 if (stepName.IsNullOrEmpty)
+                {
                     continue;
+                }
 
                 await db.KeyDeleteAsync($"ai:execution:step:{executionId}:{stepName}");
             }
@@ -801,21 +582,50 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             await db.KeyDeleteAsync(stateKey);
             await db.KeyDeleteAsync(stepsIndexKey);
         }
+    }
 
-        private sealed class TestServiceProvider : IServiceProvider
+    /// <summary>
+    /// Test-host extension methods.
+    /// </summary>
+    internal static class AiDagExecutionEngineTestHostFileCleanupExtensions
+    {
+        private static readonly ConditionalWeakTable<AiDagExecutionEngineTestHost, List<string>> Files = new();
+
+        /// <summary>
+        /// Registers a temporary file for cleanup when the test completes.
+        /// </summary>
+        public static void RegisterDisposableFile(
+            this AiDagExecutionEngineTestHost host,
+            string filePath)
         {
-            private readonly Dictionary<Type, object> _services;
+            var files = Files.GetOrCreateValue(host);
+            files.Add(filePath);
+        }
 
-            public TestServiceProvider(Dictionary<Type, object> services)
+        /// <summary>
+        /// Deletes temporary files registered for a host.
+        /// </summary>
+        public static void CleanupRegisteredFiles(
+            this AiDagExecutionEngineTestHost host)
+        {
+            if (!Files.TryGetValue(host, out var files))
             {
-                _services = services;
+                return;
             }
 
-            public object? GetService(Type serviceType)
+            foreach (var file in files)
             {
-                return _services.TryGetValue(serviceType, out var service)
-                    ? service
-                    : null;
+                try
+                {
+                    if (File.Exists(file))
+                    {
+                        File.Delete(file);
+                    }
+                }
+                catch
+                {
+                    // Best-effort cleanup only.
+                }
             }
         }
     }

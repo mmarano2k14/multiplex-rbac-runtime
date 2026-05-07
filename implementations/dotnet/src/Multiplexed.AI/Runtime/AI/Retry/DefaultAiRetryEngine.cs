@@ -39,7 +39,7 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         /// </summary>
         private static readonly AiRetryPolicyDefinition DefaultRetryDefinition = new()
         {
-            Policies = new[] { "retry.transient.default" },
+            Policies = new List<string> { "retry.transient.default" },
             MaxRetries = 3,
             Strategy = AiRetryBackoffStrategy.Fixed,
             BaseDelayMs = 500,
@@ -160,7 +160,7 @@ namespace Multiplexed.AI.Runtime.AI.Retry
         {
             return new AiRetryPolicyDefinition
             {
-                Policies = new[] { "retry.transient.default" },
+                Policies = new List<string> { "retry.transient.default" },
                 MaxRetries = 3,
                 Strategy = AiRetryBackoffStrategy.Fixed,
                 BaseDelayMs = 500,

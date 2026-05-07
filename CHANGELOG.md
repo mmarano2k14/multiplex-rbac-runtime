@@ -6,7 +6,85 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## Unreleased
+## [1.0.4.2] - 2026-07-04 - Config-Driven and Policy-Driven Retention Engine
+
+## Major Refactor
+
+Completed migration from the legacy retention system to the new policy-driven retention architecture.
+
+### Retention Engine
+
+- migrated retention execution to the new policy-driven engine
+- removed legacy retention services/options/resolvers
+- retention is now fully config-driven through pipeline configuration
+- retention policies are now decision-only
+- retention mutations remain isolated in runtime services
+
+### DAG-Aware Eviction
+
+- added DAG-aware eviction protection
+- terminal steps still referenced by active dependencies are no longer evicted
+- prevents convergence instability and execution deadlocks
+- enables bounded hot-state execution safely during active DAG processing
+
+### Retention Policies
+
+- stabilized:
+  - retention.compact.terminal
+  - retention.evict.terminal
+
+- hybrid retention behavior now supported through ordered policy composition
+
+Example:
+
+```json
+"policies": [
+  "retention.compact.terminal",
+  "retention.evict.terminal"
+]
+```
+## Runtime Stability
+
+- fixed retention timing inconsistencies
+- fixed retry and pipeline configuration serialization compatibility
+- fixed Redis deserialization compatibility for retry policy collections
+- added JSON repair compatibility for legacy retry policy payloads
+- stabilized distributed execution retention flow
+- stabilized retention, metrics, and tracing integration
+
+## Metrics & Tracing
+
+Validated runtime metrics integration across:
+
+- execution
+- retention
+- hot-state
+- storage
+- resolver
+- tracing
+
+## Testing
+
+- migrated integration tests to the new policy-driven retention architecture
+- updated retention tests to support bounded hot-state execution
+- validated DAG-aware eviction behavior during active execution
+- all integration tests passing
+
+## Result
+
+The runtime now supports:
+
+- policy-driven retention
+- deterministic bounded hot-state execution
+- DAG-safe distributed eviction
+- distributed retry orchestration
+- payload externalization
+- runtime observability
+- scalable execution-state lifecycle management
+
+---
+
+## [1.0.4.1] - 2026-07-04 - Config-Driven and Policy-Driven Retention Engine
 
 ### Changed
 - Replaced the legacy execution state retention flow with the new policy-driven retention engine.

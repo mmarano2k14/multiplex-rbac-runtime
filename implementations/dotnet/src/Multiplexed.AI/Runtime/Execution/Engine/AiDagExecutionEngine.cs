@@ -4,9 +4,6 @@ using MongoDB.Driver.Linq;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
@@ -1701,59 +1698,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             record.RenewExecutionStepKey();
 
             await _engineServices.DagStore.SaveRecordAsync(record, cancellationToken);
-        }
-
-        /// <summary>
-        /// Attempts to apply execution state retention using the configured retention policy.
-        /// 
-        /// PURPOSE:
-        /// - Limits the number of completed steps retained in <see cref="AiExecutionState"/>.
-        /// - Prevents unbounded growth of execution state for long-running pipelines.
-        /// - Ensures terminal snapshots remain compact and efficient.
-        /// 
-        /// DESIGN:
-        /// - Uses the pre-resolved <see cref="IAiExecutionStateRetentionPolicy"/> if available.
-        /// - Operates as a best-effort, non-blocking optimization step.
-        /// 
-        /// IMPORTANT:
-        /// - This method is intentionally optional: if no policy is configured, no retention is applied.
-        /// - Must be invoked only when execution is in a terminal state (Completed/Failed).
-        /// - Does not remove non-terminal steps (Running, Ready, WaitingForRetry, Failed).
-        /// - Externalized payloads remain accessible via the payload store.
-        /// 
-        /// SAFETY:
-        /// - This method must never throw or interrupt execution finalization.
-        /// </summary>
-        /// <param name="state">The execution state to apply retention to.</param>
-        private async Task<AiExecutionRetentionApplyResult> TryApplyStateRetentionAsync(
-            AiExecutionState state,
-            CancellationToken cancellationToken = default)
-        {
-            if (state is null)
-            {
-                return AiExecutionRetentionApplyResult.Empty;
-            }
-
-            if (_engineServices.RetentionService is null)
-            {
-                return AiExecutionRetentionApplyResult.Empty;
-            }
-
-            try
-            {
-                return await _engineServices.RetentionService.ApplyAsync(
-                    state,
-                    _engineServices.AiOptions.Value.StateRetention.Mode,
-                    cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _engineServices.ObservabilityService.Metrics.Retention.Execution.RecordRetentionFailed(
-                    state.ExecutionId,
-                    ex);
-
-                return AiExecutionRetentionApplyResult.Empty;
-            }
         }
 
         /// <summary>

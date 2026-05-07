@@ -20,7 +20,7 @@ namespace Multiplexed.AI.Abstractions.AI.Retry
         /// The runtime evaluates these policies in order. Each key should correspond
         /// to a registered policy decorated with an AI policy attribute.
         /// </remarks>
-        public IReadOnlyList<string> Policies { get; init; } = Array.Empty<string>();
+        public List<string> Policies { get; init; } = [];
 
         /// <summary>
         /// Gets the maximum number of retry attempts allowed for the step.

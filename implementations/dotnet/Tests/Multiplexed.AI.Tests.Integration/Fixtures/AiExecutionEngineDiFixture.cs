@@ -1,20 +1,12 @@
-﻿using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using MongoDB.Driver;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention.Decisions;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
-using Multiplexed.Abstractions.AI.Execution.Retention.Triggers;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI;
@@ -24,13 +16,11 @@ using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Providers.Llm.OpenAI.DI;
+using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.DependencyInjection;
 using Multiplexed.AI.Runtime.Execution.Engine;
-using Multiplexed.AI.Runtime.Execution.Payloads;
-using Multiplexed.AI.Runtime.Execution.Retention;
+using Multiplexed.AI.Runtime.Execution.Retention.Policies;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Prompt;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -45,11 +35,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
     /// <summary>
     /// Creates fully wired DAG execution engines using the production dependency injection graph.
     /// </summary>
+    /// <remarks>
+    /// PURPOSE:
+    /// - Build production-like runtime hosts for DAG execution integration tests.
+    /// - Keep test wiring aligned with the real runtime dependency graph.
+    /// - Provide optional test-specific service overrides without weakening the default graph.
+    ///
+    /// RETENTION:
+    /// - Retention is now policy-driven and config-driven.
+    /// - Legacy options-driven retention policies and services are no longer registered here.
+    /// - Retention policies are discovered through the shared AI policy registration path.
+    /// - Pipeline-level retention configuration is expected to be provided through pipeline config.
+    /// </remarks>
     public static class AiDagExecutionEngineFixture
     {
         /// <summary>
         /// Creates a fully wired DAG execution engine integration test host.
         /// </summary>
+        /// <param name="options">The AI engine options.</param>
+        /// <param name="mongoConnectionString">Optional MongoDB connection string override.</param>
+        /// <param name="mongoDatabaseName">Optional MongoDB database name override.</param>
+        /// <param name="redisConnectionString">Optional Redis connection string override.</param>
+        /// <returns>The created DAG execution engine test host.</returns>
         public static async Task<AiDagExecutionEngineTestHost> CreateAsync(
             AiEngineOptions options,
             string? mongoConnectionString = null,
@@ -67,7 +74,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         /// <summary>
         /// Creates a fully wired DAG execution engine integration test host and allows
         /// additional service registrations for specialized test scenarios.
-        ///
+        /// </summary>
+        /// <remarks>
         /// PURPOSE:
         /// - Preserves the existing fixture entry point without breaking callers.
         /// - Enables targeted test-only registrations such as RAG providers,
@@ -78,7 +86,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         /// - The base production graph is always registered first.
         /// - The caller hook runs after production registration and before the
         ///   service provider is built.
-        /// </summary>
+        /// </remarks>
+        /// <param name="options">The AI engine options.</param>
+        /// <param name="configureServices">Additional test-specific service registrations.</param>
+        /// <param name="mongoConnectionString">Optional MongoDB connection string override.</param>
+        /// <param name="mongoDatabaseName">Optional MongoDB database name override.</param>
+        /// <param name="redisConnectionString">Optional Redis connection string override.</param>
+        /// <returns>The created DAG execution engine test host.</returns>
         public static async Task<AiDagExecutionEngineTestHost> CreateAsync(
             AiEngineOptions options,
             Action<IServiceCollection> configureServices,
@@ -96,6 +110,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 redisConnectionString);
         }
 
+        /// <summary>
+        /// Dumps the current execution record and state for diagnostics.
+        /// </summary>
+        /// <param name="record">The execution record.</param>
+        /// <param name="state">The execution state.</param>
+        /// <returns>A human-readable diagnostic string.</returns>
         public static string DumpState(AiExecutionRecord? record, AiExecutionState? state)
         {
             if (record is null && state is null)
@@ -133,6 +153,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         /// <summary>
         /// Creates a runtime RBAC context suitable for integration tests.
         /// </summary>
+        /// <returns>The created RBAC execution context.</returns>
         private static ExecutionContext CreateRuntimeContext()
         {
             return new ExecutionContext
@@ -161,12 +182,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
 
         /// <summary>
         /// Shared fixture creation pipeline used by all public overloads.
-        ///
+        /// </summary>
+        /// <remarks>
         /// PURPOSE:
-        /// - Avoids duplication between the legacy and extended CreateAsync overloads.
+        /// - Avoids duplication between the standard and extended <c>CreateAsync</c> overloads.
         /// - Preserves the existing host construction behavior.
         /// - Adds an optional post-registration hook for test-specific services.
-        /// </summary>
+        /// </remarks>
+        /// <param name="options">The AI engine options.</param>
+        /// <param name="configureServices">Optional additional service registration hook.</param>
+        /// <param name="mongoConnectionString">Optional MongoDB connection string override.</param>
+        /// <param name="mongoDatabaseName">Optional MongoDB database name override.</param>
+        /// <param name="redisConnectionString">Optional Redis connection string override.</param>
+        /// <returns>The created test host.</returns>
         private static async Task<AiDagExecutionEngineTestHost> CreateInternalAsync(
             AiEngineOptions options,
             Action<IServiceCollection>? configureServices,
@@ -185,9 +213,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 mongoDatabaseName,
                 redisConnectionString);
 
-            // Optional additive test registrations.
-            // This runs after the standard production graph is registered,
-            // allowing specialized tests to add or replace services safely.
             configureServices?.Invoke(services);
 
             var rootProvider = services.BuildServiceProvider();
@@ -221,6 +246,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         /// <summary>
         /// Registers the production runtime services required by the DAG execution engine.
         /// </summary>
+        /// <remarks>
+        /// IMPORTANT:
+        /// - This fixture now registers retention through the policy engine path.
+        /// - Legacy retention services, mode-based policies, triggers, and decision services are not registered here.
+        /// - Tests that require retention must provide retention configuration through pipeline config.
+        /// </remarks>
+        /// <param name="services">The service collection to configure.</param>
+        /// <param name="options">The AI engine options.</param>
+        /// <param name="mongoConnectionString">Optional MongoDB connection string override.</param>
+        /// <param name="mongoDatabaseName">Optional MongoDB database name override.</param>
+        /// <param name="redisConnectionString">Optional Redis connection string override.</param>
         private static void RegisterProductionServices(
             IServiceCollection services,
             AiEngineOptions options,
@@ -258,14 +294,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
 
             services.AddMultiplexAI(options);
 
-            services.TryAddEnumerable(
-                 ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, CompactAiExecutionRetentionPolicy>());
-
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, EvictAiExecutionRetentionPolicy>());
-
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IAiExecutionRetentionPolicy, HybridAiExecutionRetentionPolicy>());
+            services.AddAiPoliciesFromAssemblies(
+                typeof(AiRuntimeAssemblyMarker).Assembly,
+                typeof(CompactAiRetentionPolicy).Assembly);
 
             services.AddAiExecutionCleanup(cleanup =>
             {
@@ -294,13 +325,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 .AddMultiplexedRbacHttp()
                 .AddMultiplexedRbacNServiceBus()
                 .AddAiPromptRuntime(typeof(AiRuntimeAssemblyMarker).Assembly)
-                .AddOpenAiPromptProvider(options =>
-                 {
-                     options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-                         ?? throw new InvalidOperationException("OPENAI_API_KEY is required.");
-                 });
+                .AddOpenAiPromptProvider(openAiOptions =>
+                {
+                    openAiOptions.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+                        ?? throw new InvalidOperationException("OPENAI_API_KEY is required.");
+                });
 
-            // Use the same fake accessor strategy already used by other engine tests.
             services.Replace(ServiceDescriptor.Singleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>());
 
             if (options.Snapshots.Enabled && options.Snapshots.Mongo.Enabled)
@@ -326,6 +356,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             }
         }
 
+        /// <summary>
+        /// Ensures deterministic payload store defaults for integration tests.
+        /// </summary>
+        /// <param name="options">The AI engine options to update.</param>
+        /// <param name="mongoConnectionString">Optional MongoDB connection string override.</param>
+        /// <param name="mongoDatabaseName">Optional MongoDB database name override.</param>
         private static void EnsureDefaultPayloadStoreOptions(
             AiEngineOptions options,
             string? mongoConnectionString,
@@ -334,10 +370,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             options.PayloadStore ??= new AiPayloadStoreOptions();
 
             options.PayloadStore.Enabled = true;
-            if (string.IsNullOrWhiteSpace(options.PayloadStore.Provider) || string.Equals(options.PayloadStore.Provider, "inmemory", StringComparison.OrdinalIgnoreCase))
+
+            if (string.IsNullOrWhiteSpace(options.PayloadStore.Provider) ||
+                string.Equals(options.PayloadStore.Provider, "inmemory", StringComparison.OrdinalIgnoreCase))
             {
                 options.PayloadStore.Provider = "mongo-redis";
             }
+
             options.PayloadStore.RequireReplaySafePayloads = true;
 
             if (options.PayloadStore.MaxInlineSizeBytes <= 0)
@@ -383,8 +422,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
         }
     }
 
+    /// <summary>
+    /// Represents a fully wired DAG execution engine test host.
+    /// </summary>
     public sealed class AiDagExecutionEngineTestHost : IAsyncDisposable, IDisposable
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiDagExecutionEngineTestHost"/> class.
+        /// </summary>
+        /// <param name="rootProvider">The root service provider.</param>
+        /// <param name="scope">The active service scope.</param>
+        /// <param name="engine">The DAG execution engine.</param>
         public AiDagExecutionEngineTestHost(
             ServiceProvider rootProvider,
             IServiceScope scope,
@@ -395,14 +443,27 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             Engine = engine ?? throw new ArgumentNullException(nameof(engine));
         }
 
+        /// <summary>
+        /// Gets the root service provider.
+        /// </summary>
         public ServiceProvider RootProvider { get; }
 
+        /// <summary>
+        /// Gets the active service scope.
+        /// </summary>
         public IServiceScope Scope { get; }
 
+        /// <summary>
+        /// Gets the scoped service provider.
+        /// </summary>
         public IServiceProvider ServiceProvider => Scope.ServiceProvider;
 
+        /// <summary>
+        /// Gets the DAG execution engine.
+        /// </summary>
         public AiDagExecutionEngine Engine { get; }
 
+        /// <inheritdoc />
         public void Dispose()
         {
             if (RootProvider.GetService<IConnectionMultiplexer>() is IDisposable multiplexer)
@@ -414,6 +475,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             RootProvider.Dispose();
         }
 
+        /// <inheritdoc />
         public async ValueTask DisposeAsync()
         {
             if (RootProvider.GetService<IConnectionMultiplexer>() is IAsyncDisposable asyncMultiplexer)
@@ -436,8 +498,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
             RootProvider.Dispose();
         }
 
+        /// <summary>
+        /// Payload resolver used by tests where payload resolution is not expected.
+        /// </summary>
         public sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
         {
+            /// <inheritdoc />
             public Task<object?> ResolveAsync(
                 AiStoredPayload payload,
                 CancellationToken cancellationToken = default)
@@ -445,29 +511,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 throw new InvalidOperationException(
                     "Payload resolution is not expected in this test.");
             }
-        }
-
-        public static IAiExecutionRetentionService CreateRetentionService(
-            IAiExecutionRetentionPolicyResolver policyResolver,
-            IAiStepPayloadStore stepPayloadStore,
-            IAiStepPayloadIndexStore stepPayloadIndexStore,
-            IAiStepResultPayloadCompactor payloadCompactor,
-            IAiExecutionRetentionServiceMetrics metrics,
-            IAiExecutionRetentionDecisionService decisionService)
-        {
-            ArgumentNullException.ThrowIfNull(policyResolver);
-            ArgumentNullException.ThrowIfNull(stepPayloadStore);
-            ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
-            ArgumentNullException.ThrowIfNull(payloadCompactor);
-            ArgumentNullException.ThrowIfNull(metrics);
-            ArgumentNullException.ThrowIfNull(decisionService);
-
-            return new AiExecutionRetentionService(
-                policyResolver,
-                stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                metrics, decisionService);
         }
     }
 }

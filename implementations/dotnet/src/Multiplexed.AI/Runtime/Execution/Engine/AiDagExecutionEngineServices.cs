@@ -4,7 +4,6 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -54,7 +53,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             IAiExecutionStateReader stateReader,
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
-            IAiExecutionRetentionService retentionService,
             IAiPolicyEngineFactory policyEngineFactory,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
@@ -72,7 +70,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
             StateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
             StateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
-            RetentionService = retentionService ?? throw new ArgumentNullException(nameof(retentionService));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
             PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
 
@@ -124,9 +121,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine
 
         /// <inheritdoc />
         public IAiExecutionSnapshotService<ExecutionContextSnapshot>? SnapshotService { get; }
-
-        /// <inheritdoc />
-        public IAiExecutionRetentionService RetentionService { get; }
 
         /// <inheritdoc />
         public IAiRuntimeObservability ObservabilityService { get; }

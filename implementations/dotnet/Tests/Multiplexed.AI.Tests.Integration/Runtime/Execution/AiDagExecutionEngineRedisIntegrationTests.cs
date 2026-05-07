@@ -2,43 +2,20 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
-using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
-using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Execution.Retention;
-using Multiplexed.Abstractions.AI.Execution.Retention.Models;
-using Multiplexed.Abstractions.AI.Execution.Retention.Policies;
-using Multiplexed.Abstractions.AI.Execution.Retention.Services;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
-using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
-using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
-using Multiplexed.AI.Runtime.Execution.Metrics;
 using Multiplexed.AI.Runtime.Execution.Normalization;
-using Multiplexed.AI.Runtime.Execution.Payloads;
-using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
-using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
-using Multiplexed.AI.Runtime.Execution.Retention;
-using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Pipeline;
-using Multiplexed.AI.Runtime.Pipeline.Definition;
-using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
-using Multiplexed.AI.Runtime.Retention;
-using Multiplexed.AI.Runtime.Retention.Decisions;
-using Multiplexed.AI.Runtime.Retention.Policies;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
 using Multiplexed.AI.Stores.Memory;
@@ -46,7 +23,7 @@ using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.AI.Tests.Integration.Models;
-using Multiplexed.AI.Tests.Models;
+using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores;
@@ -56,8 +33,6 @@ using StackExchange.Redis;
 using System.Text.Json;
 using Xunit;
 using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
-using static Multiplexed.AI.Tests.Integration.Runtime.Execution.AiDagExecutionEngineTests;
-using static Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures.AiDagExecutionEngineTestHost;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
@@ -65,7 +40,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
     /// <summary>
     /// End-to-end Redis integration tests for <see cref="AiDagExecutionEngine"/>
     /// using the distributed DAG Redis/Lua store.
-    ///
+    /// </summary>
+    /// <remarks>
     /// PURPOSE:
     /// - Validate DAG execution creation.
     /// - Validate step-by-step distributed progression.
@@ -74,16 +50,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
     /// - Validate claim ownership safety.
     /// - Validate timeout recovery.
     ///
-    /// ARCHITECTURE:
-    /// - <see cref="AiExecutionState"/> is treated as a persistence model.
-    /// - Step state mutation is routed through <see cref="IAiExecutionStateWriter"/>.
-    /// - State reading is routed through <see cref="IAiExecutionStateReader"/>.
-    /// </summary>
+    /// RETENTION MIGRATION:
+    /// - These tests no longer wire legacy options-driven retention services.
+    /// - Engine creation uses the production-like fixture, which is aligned with the
+    ///   policy-driven retention engine.
+    /// - Pipelines without retention config run with retention as a no-op.
+    /// </remarks>
     [Collection("redis")]
     public sealed class AiDagExecutionEngineRedisIntegrationTests
     {
         private readonly IConnectionMultiplexer _connection;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiDagExecutionEngineRedisIntegrationTests"/> class.
+        /// </summary>
+        /// <param name="fixture">The Redis fixture.</param>
         public AiDagExecutionEngineRedisIntegrationTests(RedisFixture fixture)
         {
             ArgumentNullException.ThrowIfNull(fixture);
@@ -91,19 +72,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             _connection = fixture.Connection;
         }
 
+        /// <summary>
+        /// Verifies that ExecuteAll completes a basic DAG pipeline using the production fixture.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteAllAsync_Should_Complete_Basic_Dag_Pipeline()
         {
-            var engine = CreateEngine();
+            await using var host = await CreateHostAsync("dag-parallel-basic.json");
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
+            var created = await host.Engine.CreateAsync("dag-parallel-basic", "Marco");
 
             try
             {
-                var finalRecord = await engine.ExecuteAllAsync(created.ExecutionId);
+                var finalRecord = await host.Engine.ExecuteAllAsync(created.ExecutionId);
 
                 Assert.NotNull(finalRecord);
                 Assert.Equal(AiExecutionMode.Dag, finalRecord.ExecutionMode);
@@ -115,8 +96,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Contains("a2", finalRecord.CompletedSteps);
                 Assert.Contains("merge", finalRecord.CompletedSteps);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
-                var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
                 var state = await dagStore.GetStateAsync(finalRecord.ExecutionId);
 
@@ -132,24 +113,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that ExecuteNext executes the root step first.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Execute_Root_First()
         {
-            var engine = CreateEngine();
+            await using var host = await CreateHostAsync("dag-parallel-basic.json");
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
+            var created = await host.Engine.CreateAsync("dag-parallel-basic", "Marco");
 
             try
             {
-                var record = await engine.ExecuteNextAsync(created.ExecutionId);
+                var record = await host.Engine.ExecuteNextAsync(created.ExecutionId);
 
                 Assert.Contains("start", record.CompletedSteps);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
-                var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
                 var state = await dagStore.GetStateAsync(created.ExecutionId);
 
@@ -162,22 +143,23 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that repeated ExecuteNext calls complete all steps.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Complete_All_Steps_In_Order()
         {
-            var engine = CreateEngine();
+            await using var host = await CreateHostAsync("dag-parallel-basic.json");
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
+            var created = await host.Engine.CreateAsync("dag-parallel-basic", "Marco");
 
             try
             {
-                _ = await engine.ExecuteNextAsync(created.ExecutionId);
-                _ = await engine.ExecuteNextAsync(created.ExecutionId);
-                _ = await engine.ExecuteNextAsync(created.ExecutionId);
-                var r4 = await engine.ExecuteNextAsync(created.ExecutionId);
+                _ = await host.Engine.ExecuteNextAsync(created.ExecutionId);
+                _ = await host.Engine.ExecuteNextAsync(created.ExecutionId);
+                _ = await host.Engine.ExecuteNextAsync(created.ExecutionId);
+
+                var r4 = await host.Engine.ExecuteNextAsync(created.ExecutionId);
 
                 Assert.Equal(AiExecutionStatus.Completed, r4.Status);
                 Assert.Equal(4, r4.CompletedSteps.Count);
@@ -189,24 +171,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that distributed DAG state survives Redis reloads.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Persist_Dag_State_Across_Redis_Reload()
         {
-            var engine = CreateEngine();
+            await using var host = await CreateHostAsync("dag-parallel-basic.json");
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync("dag-parallel-basic", "Marco");
+            var created = await host.Engine.CreateAsync("dag-parallel-basic", "Marco");
 
             try
             {
-                var afterFirst = await engine.ExecuteNextAsync(created.ExecutionId);
+                var afterFirst = await host.Engine.ExecuteNextAsync(created.ExecutionId);
 
                 Assert.Contains("start", afterFirst.CompletedSteps);
 
-                var dagStore = GetRequiredService<IAiDagExecutionStore>(engine);
-                var stateWriter = GetRequiredService<IAiExecutionStateWriter>(engine);
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var stateWriter = host.ServiceProvider.GetRequiredService<IAiExecutionStateWriter>();
 
                 var persistedRecord = await dagStore.GetRecordAsync(created.ExecutionId);
                 var persistedState = await dagStore.GetStateAsync(created.ExecutionId);
@@ -218,7 +200,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Contains("start", afterFirst.CompletedSteps);
                 Assert.Equal(AiStepExecutionStatus.Completed, stateWriter.GetOrCreateStep(persistedState!, "start").Status);
 
-                var finalRecord = await engine.ExecuteAllAsync(created.ExecutionId);
+                var finalRecord = await host.Engine.ExecuteAllAsync(created.ExecutionId);
 
                 Assert.Equal(AiExecutionStatus.Completed, finalRecord.Status);
                 Assert.Equal(4, finalRecord.CompletedSteps.Count);
@@ -229,15 +211,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that the DAG engine rejects non-DAG executions.
+        /// </summary>
         [RedisFact]
         public async Task ExecuteNextAsync_Should_Throw_When_Not_Dag_Mode()
         {
-            var engine = CreateEngine();
+            await using var host = await CreateHostAsync("dag-parallel-basic.json");
 
-            var accessor = GetRequiredService<ExecutionContextAccessor>(engine);
-            accessor.Set(CreateRuntimeContext());
-
-            var store = GetRequiredService<IAiExecutionStore>(engine);
+            var store = host.ServiceProvider.GetRequiredService<IAiExecutionStore>();
 
             var record = new AiExecutionRecord
             {
@@ -259,7 +241,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             try
             {
                 await Assert.ThrowsAsync<InvalidOperationException>(
-                    () => engine.ExecuteNextAsync(record.ExecutionId));
+                    () => host.Engine.ExecuteNextAsync(record.ExecutionId));
             }
             finally
             {
@@ -267,6 +249,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that only one worker can claim a root step.
+        /// </summary>
         [RedisFact]
         public async Task TryClaimNextReadyStepAsync_Should_Allow_Only_One_Worker_To_Claim_Root_Step()
         {
@@ -312,6 +297,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that dependent steps cannot be claimed before dependencies complete.
+        /// </summary>
         [RedisFact]
         public async Task TryClaimNextReadyStepAsync_Should_Not_Claim_Dependent_Step_Before_Dependency_Is_Completed()
         {
@@ -376,6 +364,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that expired running steps are recovered.
+        /// </summary>
         [RedisFact]
         public async Task RecoverTimedOutStepsAsync_Should_Requeue_Expired_Running_Step()
         {
@@ -433,6 +424,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies that completion rejects an invalid claim token.
+        /// </summary>
         [RedisFact]
         public async Task TryCompleteStepAsync_Should_Reject_Wrong_ClaimToken()
         {
@@ -480,6 +474,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             }
         }
 
+        /// <summary>
+        /// Verifies completion of a generated random 100-step DAG.
+        /// </summary>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_Random_100_Step_Dag()
         {
@@ -490,6 +487,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 mode: GeneratedDagMode.Random);
         }
 
+        /// <summary>
+        /// Verifies completion of a generated parallel-heavy 100-step DAG.
+        /// </summary>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_Parallel_Heavy_100_Step_Dag()
         {
@@ -500,6 +500,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 mode: GeneratedDagMode.ParallelHeavy);
         }
 
+        /// <summary>
+        /// Verifies completion of a generated linear 100-step DAG.
+        /// </summary>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_Linear_100_Step_Dag()
         {
@@ -510,6 +513,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 mode: GeneratedDagMode.Linear);
         }
 
+        /// <summary>
+        /// Verifies completion of a generated fan-in 100-step DAG.
+        /// </summary>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_FanIn_100_Step_Dag()
         {
@@ -520,11 +526,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 mode: GeneratedDagMode.FanIn);
         }
 
+        /// <summary>
+        /// Runs a generated DAG scenario using the production-like fixture.
+        /// </summary>
         private async Task RunGeneratedDagScenarioAsync(
-     string pipelineName,
-     int stepCount,
-     int seed,
-     GeneratedDagMode mode)
+            string pipelineName,
+            int stepCount,
+            int seed,
+            GeneratedDagMode mode)
         {
             var definition = CreateGeneratedDagPipeline(
                 pipelineName,
@@ -534,49 +543,58 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             var filePath = WritePipelineDefinitionToConfig(definition);
 
-            var executionStore = GetExecutionStore();
-            var dagStore = CreateDagStore();
-
-            var contextOptions = Options.Create(new ContextRuntimeOptions
+            try
             {
-                UseRedisLuaScriptShaCaching = true
-            });
+                await using var host = await CreateHostAsync(pipelineName + ".json");
 
-            var redisContextStore = new RedisContextStore(_connection, contextOptions);
-            var memoryContextStore = new MemoryContextStore(
-                new MemoryCache(new MemoryCacheOptions()),
-                TimeSpan.FromMinutes(5));
+                var created = await host.Engine.CreateAsync(pipelineName, "Marco");
 
-            var contextStore = new CompositeContextStore(redisContextStore, memoryContextStore);
+                try
+                {
+                    var finalRecord = await host.Engine.ExecuteAllAsync(created.ExecutionId);
 
-            var accessor = new ExecutionContextAccessor();
-            var contextFactory = new ExecutionContextFactory();
-            var logger = new NoopLogger();
+                    Assert.NotNull(finalRecord);
+                    Assert.Equal(AiExecutionMode.Dag, finalRecord.ExecutionMode);
+                    Assert.Equal(AiExecutionStatus.Completed, finalRecord.Status);
+                    Assert.Equal(stepCount, finalRecord.CompletedSteps.Count);
 
+                    var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                    var state = await dagStore.GetStateAsync(finalRecord.ExecutionId);
 
-            var dataPolicy = new InlineAiExecutionDataPolicy();
-            var stepExecutor = new AiStepExecutor(logger);
+                    Assert.NotNull(state);
+                    Assert.Equal(stepCount, state!.Steps.Count);
 
-            var services = new ServiceCollection();
-
-            services.AddAiStepsFromAssemblies(
-                typeof(AiRuntimeAssemblyMarker).Assembly,
-                typeof(AiDagExecutionEngineRedisIntegrationTests).Assembly);
-
-            var provider = services.BuildServiceProvider();
-            var registry = provider.GetRequiredService<IAiStepRegistry>();
-            var resolver = new AiPipelineResolver(registry);
-            var sourceSelector = CreateJsonSourceSelector(pipelineName + ".json");
-
-            var pipelineExecutor = new AiSequentialPipelineExecutor(
-                sourceSelector,
-                resolver,
-                stepExecutor);
-
-            var cleanupService = new NoOpAiExecutionCleanupService();
-
-            var aiOptions = new AiEngineOptions
+                    Assert.All(
+                        state.Steps.Values,
+                        step => Assert.Equal(AiStepExecutionStatus.Completed, step.Status));
+                }
+                finally
+                {
+                    await CleanupDagExecutionAsync(created.ExecutionId);
+                }
+            }
+            finally
             {
+                TryDeleteFile(filePath);
+            }
+        }
+
+        /// <summary>
+        /// Creates a production-like host using JSON pipeline configuration.
+        /// </summary>
+        private async Task<AiDagExecutionEngineTestHost> CreateHostAsync(
+            string jsonFileName)
+        {
+            var options = new AiEngineOptions
+            {
+                DefaultPipelineDefinitionSource = "Json",
+                JsonPipelineDefinitionFilePath = "config/" + jsonFileName,
+
+                Snapshots = new AiExecutionSnapshotOptions
+                {
+                    Enabled = false
+                },
+
                 Cleanup = new AiExecutionCleanupOptions
                 {
                     AutoCleanupOnCompleted = false,
@@ -585,117 +603,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 }
             };
 
-            var metrics = ObservabilityFactory.Create();
-
-            var payloadStoreOptions = Options.Create(new AiPayloadStoreOptions
-            {
-                Enabled = true,
-                Provider = "mongo",
-                RequireReplaySafePayloads = true,
-                MaxInlineSizeBytes = 1024,
-                Mongo = new MongoAiPayloadStoreOptions
-                {
-                    Enabled = true,
-                    ConnectionString = "mongodb://localhost:27017",
-                    DatabaseName = "multiplexed_ai_tests",
-                    CollectionName = $"payloads_generated_dag_{Guid.NewGuid():N}"
-                }
-            });
-
-            var metricsPayload = new InMemoryAiPayloadMetrics();
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(
-                dataPolicy,
-                metricsPayload);
-
-            var payloadStore = new MongoAiPayloadStore(payloadStoreOptions);
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
-            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
-            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadStoreOptions);
-
-            var stepResolver = new DefaultAiExecutionStepResolver(
-                stepPayloadIndexStore,
-                stepPayloadStore);
-
-            var stateWriter = new DefaultAiExecutionStateWriter();
-            var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
-
-            var retentionPolicy = CreateDisabledRetentionPolicy();
-            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
-
-            var retentionService = CreateRetentionService(
-                payloadCompactor,
-                payloadStoreResolver,
-                stepPayloadIndexStore);
-
-            var engineServices = new AiDagExecutionEngineServices(
-                executionStore,
-                contextStore,
-                accessor,
-                contextFactory,
-                CreateServiceProvider(
-                    accessor,
-                    executionStore,
-                    dagStore,
-                    retentionPolicy,
-                    stateReader,
-                    stateWriter),
-                pipelineExecutor,
-                logger,
-                cleanupService,
-                Options.Create(aiOptions),
-                metrics,
-                payloadCompactor,
-                stateReader,
-                stateWriter,
-                stepResolver,
-                retentionService,
-                policyEngineFactory,
-                dagStore);
-
-            var engine = new AiDagExecutionEngine(engineServices);
-
-            accessor.Set(CreateRuntimeContext());
-
-            var created = await engine.CreateAsync(pipelineName, "Marco");
-
-            try
-            {
-                var finalRecord = await engine.ExecuteAllAsync(created.ExecutionId);
-
-                Assert.NotNull(finalRecord);
-                Assert.Equal(AiExecutionMode.Dag, finalRecord.ExecutionMode);
-                Assert.Equal(AiExecutionStatus.Completed, finalRecord.Status);
-                Assert.Equal(stepCount, finalRecord.CompletedSteps.Count);
-
-                var dagStore2 = GetRequiredService<IAiDagExecutionStore>(engine);
-                var state = await dagStore2.GetStateAsync(finalRecord.ExecutionId);
-
-                Assert.NotNull(state);
-                Assert.Equal(stepCount, state!.Steps.Count);
-
-                Assert.All(
-                    state.Steps.Values,
-                    step => Assert.Equal(AiStepExecutionStatus.Completed, step.Status));
-            }
-            finally
-            {
-                await CleanupDagExecutionAsync(created.ExecutionId);
-
-                try
-                {
-                    if (File.Exists(filePath))
-                    {
-                        File.Delete(filePath);
-                    }
-                }
-                catch
-                {
-                    // Best-effort cleanup only.
-                }
-            }
+            return await AiDagExecutionEngineFixture.CreateAsync(
+                options,
+                mongoConnectionString: "mongodb://localhost:27017",
+                mongoDatabaseName: "multiplexed_ai_tests",
+                redisConnectionString: "localhost:6379");
         }
 
+        /// <summary>
+        /// Creates a generated DAG pipeline definition.
+        /// </summary>
         private static AiPipelineDefinition CreateGeneratedDagPipeline(
             string pipelineName,
             int stepCount,
@@ -727,40 +644,30 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                             }
                             else
                             {
-                                var depCountFanIn = random.Next(0, Math.Min(3, previous.Count) + 1);
-
                                 dependsOn = previous
                                     .OrderBy(_ => random.Next())
-                                    .Take(depCountFanIn)
+                                    .Take(random.Next(0, Math.Min(3, previous.Count) + 1))
                                     .ToList();
                             }
 
                             break;
 
                         case GeneratedDagMode.ParallelHeavy:
-                            {
-                                var depCountParallel = random.Next(0, Math.Min(1, previous.Count) + 1);
+                            dependsOn = previous
+                                .OrderBy(_ => random.Next())
+                                .Take(random.Next(0, Math.Min(1, previous.Count) + 1))
+                                .ToList();
 
-                                dependsOn = previous
-                                    .OrderBy(_ => random.Next())
-                                    .Take(depCountParallel)
-                                    .ToList();
-
-                                break;
-                            }
+                            break;
 
                         case GeneratedDagMode.Random:
                         default:
-                            {
-                                var depCountRandom = random.Next(0, Math.Min(3, previous.Count) + 1);
+                            dependsOn = previous
+                                .OrderBy(_ => random.Next())
+                                .Take(random.Next(0, Math.Min(3, previous.Count) + 1))
+                                .ToList();
 
-                                dependsOn = previous
-                                    .OrderBy(_ => random.Next())
-                                    .Take(depCountRandom)
-                                    .ToList();
-
-                                break;
-                            }
+                            break;
                     }
                 }
 
@@ -786,7 +693,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             };
         }
 
-        private static string WritePipelineDefinitionToConfig(AiPipelineDefinition definition)
+        /// <summary>
+        /// Writes a pipeline definition into the config directory.
+        /// </summary>
+        private static string WritePipelineDefinitionToConfig(
+            AiPipelineDefinition definition)
         {
             var root = new
             {
@@ -803,10 +714,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var baseDir = AppContext.BaseDirectory;
             var configDir = Path.Combine(baseDir, "config");
 
-            if (!Directory.Exists(configDir))
-            {
-                Directory.CreateDirectory(configDir);
-            }
+            Directory.CreateDirectory(configDir);
 
             var filePath = Path.Combine(configDir, $"{definition.Name}.json");
 
@@ -815,155 +723,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             return filePath;
         }
 
-        private enum GeneratedDagMode
-        {
-            Random,
-            ParallelHeavy,
-            Linear,
-            FanIn
-        }
-
-        private AiDagExecutionEngine CreateEngine()
-        {
-            var executionStore = GetExecutionStore();
-            var dagStore = CreateDagStore();
-
-            var contextOptions = Options.Create(new ContextRuntimeOptions
-            {
-                UseRedisLuaScriptShaCaching = true
-            });
-
-            var redisContextStore = new RedisContextStore(_connection, contextOptions);
-            var memoryContextStore = new MemoryContextStore(
-                new MemoryCache(new MemoryCacheOptions()),
-                TimeSpan.FromMinutes(5));
-
-            var contextStore = new CompositeContextStore(redisContextStore, memoryContextStore);
-
-            var accessor = new ExecutionContextAccessor();
-            var contextFactory = new ExecutionContextFactory();
-            var logger = new NoopLogger();
-
-            var stepExecutor = new AiStepExecutor(logger);
-
-            var services = new ServiceCollection();
-
-            services.AddAiStepsFromAssemblies(
-                typeof(AiRuntimeAssemblyMarker).Assembly,
-                typeof(AiDagExecutionEngineRedisIntegrationTests).Assembly);
-
-            var provider = services.BuildServiceProvider();
-            var registry = provider.GetRequiredService<IAiStepRegistry>();
-            var resolver = new AiPipelineResolver(registry);
-            var sourceSelector = CreateJsonSourceSelector();
-
-            var pipelineExecutor = new AiSequentialPipelineExecutor(
-                sourceSelector,
-                resolver,
-                stepExecutor);
-
-            var cleanupService = new NoOpAiExecutionCleanupService();
-
-            var aiOptions = new AiEngineOptions
-            {
-                Cleanup = new AiExecutionCleanupOptions
-                {
-                    AutoCleanupOnCompleted = false,
-                    AutoCleanupOnFailed = false,
-                    SuppressCleanupExceptions = true
-                }
-            };
-
-            var metrics = ObservabilityFactory.Create();
-
-            var payloadOptions = Options.Create(new AiPayloadStoreOptions
-            {
-                Enabled = true,
-                Provider = "mongo",
-                RequireReplaySafePayloads = true,
-                MaxInlineSizeBytes = 2048,
-                Mongo = new MongoAiPayloadStoreOptions
-                {
-                    Enabled = true,
-                    ConnectionString = "mongodb://localhost:27017",
-                    DatabaseName = "multiplexed_ai_tests",
-                    CollectionName = $"payloads_dag_{Guid.NewGuid():N}"
-                }
-            });
-
-            var payloadStore = new MongoAiPayloadStore(payloadOptions);
-            var payloadStoreResolver = new FixedAiPayloadStoreResolver(payloadStore);
-
-            var dataPolicy = new SmartInlineAiExecutionDataPolicy(
-                payloadStoreResolver,
-                payloadOptions);
-
-            var metricsPayload = new InMemoryAiPayloadMetrics();
-            var payloadCompactor = new DefaultAiStepResultPayloadCompactor(dataPolicy, metricsPayload);
-
-            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
-            var stepPayloadIndexStore = new MongoAiStepPayloadIndexStore(payloadOptions);
-
-            var stepResolver = new DefaultAiExecutionStepResolver(
-                stepPayloadIndexStore,
-                stepPayloadStore);
-
-            var stateWriter = new DefaultAiExecutionStateWriter();
-            var stateReader = new DefaultAiExecutionStateReader(new NoopPayloadResolver());
-
-            var retentionPolicy = CreateDisabledRetentionPolicy();
-
-            var retentionService = CreateRetentionService(
-                payloadCompactor,
-                payloadStoreResolver,
-                stepPayloadIndexStore);
-
-            var policyEngineFactory = AiPolicyEnginFactoryTests.CreatePolicyEngineFactory();
-
-            var engineServices = new AiDagExecutionEngineServices(
-                executionStore,
-                contextStore,
-                accessor,
-                contextFactory,
-                CreateServiceProvider(
-                    accessor,
-                    executionStore,
-                    dagStore,
-                    retentionPolicy,
-                    stateReader,
-                    stateWriter),
-                pipelineExecutor,
-                logger,
-                cleanupService,
-                Options.Create(aiOptions),
-                metrics,
-                payloadCompactor,
-                stateReader,
-                stateWriter,
-                stepResolver,
-                retentionService,
-                policyEngineFactory,   
-                dagStore);
-
-            return new AiDagExecutionEngine(engineServices);
-        }
-
-        private IAiExecutionStore GetExecutionStore()
-        {
-            var keyBuilder = new AiExecutionKeyBuilder();
-            var redis = new RedisAiExecutionStore(_connection, keyBuilder);
-            var memory = new MemoryAiExecutionStore();
-
-            return new AiExecutionStore(redis, memory);
-        }
-
+        /// <summary>
+        /// Creates a distributed DAG store for Redis/Lua store-level tests.
+        /// </summary>
         private IAiDagExecutionStore CreateDagStore()
         {
             var logger = new NoopLogger();
             var metrics = MetricsFactory.Create();
             var keyBuilder = new AiExecutionKeyBuilder();
 
-            var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
+            var normalizers = new DefaultAiStepResultNormalizerPipeline(
+                [new RagStepResultNormalizer()]);
 
             return new RedisAiDagExecutionStore(
                 _connection,
@@ -973,149 +743,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 normalizers);
         }
 
-        private static IAiExecutionRetentionService CreateRetentionService(
-            IAiStepResultPayloadCompactor payloadCompactor,
-            IAiPayloadStoreResolver payloadStoreResolver,
-            IAiStepPayloadIndexStore stepPayloadIndexStore)
-        {
-            ArgumentNullException.ThrowIfNull(payloadCompactor);
-            ArgumentNullException.ThrowIfNull(payloadStoreResolver);
-            ArgumentNullException.ThrowIfNull(stepPayloadIndexStore);
-
-            var options = Options.Create(new AiEngineOptions
-            {
-                StateRetention = new AiExecutionStateRetentionOptions
-                {
-                    Enabled = true,
-                    MaxCompletedStepsInState = 20,
-                    Mode = AiExecutionRetentionMode.Evict
-                }
-            });
-
-            var policies = new IAiExecutionRetentionPolicy[]
-            {
-                new NoopAiExecutionRetentionPolicy(),
-                new CompactAiExecutionRetentionPolicy(),
-                new EvictAiExecutionRetentionPolicy(options),
-                new HybridAiExecutionRetentionPolicy(options)
-            };
-
-            var policyResolver = new DefaultAiExecutionRetentionPolicyResolver(policies);
-
-            var stepPayloadStore = new DefaultAiStepPayloadStore(payloadStoreResolver);
-
-            var metrics = new InMemoryAiExecutionRetentionServiceMetrics();
-
-            var trigger = new TestExecutionRetentionTrigger(true);
-            var decisionService = new DefaultAiExecutionRetentionDecisionService(trigger,
-                new CompositeAiExecutionRetentionDecisionEvaluator(
-                    Array.Empty<IAiExecutionRetentionDecisionPolicy>()));
-
-            var service = new AiExecutionRetentionService(
-                policyResolver,
-                stepPayloadStore,
-                stepPayloadIndexStore,
-                payloadCompactor,
-                metrics, decisionService);
-
-            return service;
-        }
-
-        private static IAiExecutionStateRetentionPolicy CreateDisabledRetentionPolicy()
-        {
-            return new DefaultAiExecutionStateRetentionPolicy(
-                new AiExecutionStateRetentionOptions
-                {
-                    Enabled = false
-                },
-                new InMemoryAiExecutionRetentionMetrics());
-        }
-
-        private static IAiPipelineDefinitionSourceSelector CreateJsonSourceSelector(
-            string fileName = "dag-parallel-basic.json")
-        {
-            var services = new ServiceCollection();
-
-            services.AddOptions();
-
-            services.Configure<AiEngineOptions>(options =>
-            {
-                options.DefaultPipelineDefinitionSource = "Json";
-            });
-
-            services.AddSingleton<JsonAiPipelineDefinitionProvider>(_ =>
-                new JsonAiPipelineDefinitionProvider("config/" + fileName));
-
-            services.AddSingleton<InMemoryAiPipelineDefinitionProvider>();
-
-            var provider = services.BuildServiceProvider();
-
-            return new DefaultAiPipelineDefinitionSourceSelector(
-                provider.GetRequiredService<IOptions<AiEngineOptions>>(),
-                provider);
-        }
-
-        private static IServiceProvider CreateServiceProvider(
-            ExecutionContextAccessor accessor,
-            IAiExecutionStore store,
-            IAiDagExecutionStore dagStore,
-            IAiExecutionStateRetentionPolicy retentionPolicy,
-            IAiExecutionStateReader stateReader,
-            IAiExecutionStateWriter stateWriter)
-        {
-            return new TestServiceProvider(new Dictionary<Type, object>
-            {
-                [typeof(ExecutionContextAccessor)] = accessor,
-                [typeof(IAiExecutionStore)] = store,
-                [typeof(IAiDagExecutionStore)] = dagStore,
-                [typeof(IAiExecutionStateRetentionPolicy)] = retentionPolicy,
-                [typeof(IAiExecutionStateReader)] = stateReader,
-                [typeof(IAiExecutionStateWriter)] = stateWriter
-            });
-        }
-
-        private static ExecutionContext CreateRuntimeContext()
-        {
-            return new ExecutionContext
-            {
-                ContextKey = string.Empty,
-                Project = "Project",
-                TenantId = "tenant-id-xxxx",
-                TenantGroupId = "tenant-group-id-xxx",
-                CurrentNamespace = "Namespace",
-                UserId = "userId",
-                Namespaces = new List<NamespaceEntry>
-                {
-                    new NamespaceEntry
-                    {
-                        Name = "Namespace",
-                        Trns = new HashSet<string>
-                        {
-                            "trn:Project:crm:billing:invoice:read",
-                            "trn:Project:crm:billing:invoice:refund"
-                        }
-                    }
-                },
-                TtlSeconds = 300
-            };
-        }
-
-        private static T GetRequiredService<T>(AiDagExecutionEngine engine)
-        {
-            var property = typeof(AiExecutionEngine)
-                .GetProperty(
-                    "Services",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance);
-
-            var provider = (IServiceProvider)property!.GetValue(engine)!;
-
-            return (T)(provider.GetService(typeof(T))
-                ?? throw new InvalidOperationException(
-                    $"Required service '{typeof(T).FullName}' is not registered."));
-        }
-
-        private async Task CleanupDagExecutionAsync(string executionId)
+        /// <summary>
+        /// Best-effort cleanup of Redis DAG execution keys.
+        /// </summary>
+        private async Task CleanupDagExecutionAsync(
+            string executionId)
         {
             var db = _connection.GetDatabase();
 
@@ -1140,31 +772,48 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             await db.KeyDeleteAsync(stepsIndexKey);
         }
 
+        /// <summary>
+        /// Deletes a file when it exists.
+        /// </summary>
+        private static void TryDeleteFile(
+            string filePath)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
+        }
+
+        /// <summary>
+        /// Generated DAG shape.
+        /// </summary>
+        private enum GeneratedDagMode
+        {
+            Random,
+            ParallelHeavy,
+            Linear,
+            FanIn
+        }
+
+        /// <summary>
+        /// Payload resolver used by store-level tests where payload resolution is not expected.
+        /// </summary>
         private sealed class NoopPayloadResolver : IAiExecutionPayloadResolver
         {
+            /// <inheritdoc />
             public Task<object?> ResolveAsync(
                 AiStoredPayload payload,
                 CancellationToken cancellationToken = default)
             {
                 throw new InvalidOperationException(
                     "Payload resolution is not expected in this Redis DAG integration test.");
-            }
-        }
-
-        private sealed class TestServiceProvider : IServiceProvider
-        {
-            private readonly Dictionary<Type, object> _services;
-
-            public TestServiceProvider(Dictionary<Type, object> services)
-            {
-                _services = services;
-            }
-
-            public object? GetService(Type serviceType)
-            {
-                return _services.TryGetValue(serviceType, out var service)
-                    ? service
-                    : null;
             }
         }
     }
