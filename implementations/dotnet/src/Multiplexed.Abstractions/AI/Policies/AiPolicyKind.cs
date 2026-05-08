@@ -43,6 +43,12 @@
         /// Defines retention behavior for execution state, including compaction,
         /// payload externalization, and hot-state eviction.
         /// </summary>
-        Retention = 6
+        Retention = 6,
+
+        /// <summary>
+        /// Defines concurrency behavior for distributed step admission,
+        /// throttling, and execution capacity decisions.
+        /// </summary>
+        Concurrency = 7
     }
 }

@@ -125,5 +125,15 @@ namespace Multiplexed.AI.Tests.Fakes
         {
             return Task.FromResult<IReadOnlyList<AiClaimedStep>>(Array.Empty<AiClaimedStep>());
         }
+
+        public Task<IReadOnlyList<AiClaimedStep>> GetReadyStepsAsync(string executionId, int maxSteps, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AiClaimedStep>>(Array.Empty<AiClaimedStep>());
+        }
+
+        public Task<AiClaimedStep?> TryClaimStepAsync(string executionId, string stepName, string workerId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<AiClaimedStep?>(null);
+        }
     }
 }

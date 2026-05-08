@@ -5,6 +5,167 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+## [1.0.4.4] - 2026-08-04 - Concurrency Engine V1 — Distributed Admission & Claim Refactor
+
+## Added
+
+### Distributed Concurrency Gate
+- introduced `IAiConcurrencyGate`
+- added `RedisAiConcurrencyGate`
+- added lease-based distributed concurrency acquisition
+- added lease TTL / crash recovery support
+- added distributed concurrency release flow
+- added deterministic lease ownership model
+
+### Concurrency Definitions
+- introduced `AiConcurrencyDefinition`
+- added support for:
+  - `MaxGlobalConcurrency`
+  - `MaxPipelineConcurrency`
+  - `MaxStepConcurrency`
+  - `MaxExecutionConcurrency`
+  - `MaxInstanceConcurrency`
+  - `LeaseSeconds`
+  - `DefaultRetryAfterMs`
+- added future support for `MaxDegreeOfParallelism`
+
+### Concurrency Context
+- introduced `AiConcurrencyContext`
+- added deterministic lease identifiers
+- aligned concurrency identity with DAG claim ownership
+
+### Concurrency Resolution
+- introduced `IAiConcurrencyDefinitionResolver`
+- added `DefaultAiConcurrencyDefinitionResolver`
+- supports:
+  - pipeline-level config resolution
+  - step-level config override
+  - persisted step-state resolution
+- enables pre-claim config-driven orchestration without requiring `AiStepExecutionContext`
+
+---
+
+# Distributed Claim Flow Refactor
+
+## New Claim Architecture
+
+Previous flow:
+
+    Runner
+    ↓
+    TryClaimNextReadyStepAsync
+    ↓
+    Lua script handled orchestration
+
+New flow:
+
+    GetReadyStepsAsync
+    ↓
+    Resolve concurrency config
+    ↓
+    ConcurrencyGate.TryAcquireAsync
+    ↓
+    TryClaimStepAsync
+    ↓
+    Execute
+    ↓
+    Release concurrency slot
+
+## Added
+
+### AiDagStepClaimService
+- added concurrency-aware distributed admission control
+- added pre-claim concurrency evaluation
+- added release-on-failed-claim safety
+- added retry-window-aware candidate selection
+
+### AiDagClaimedStepExecutor
+- added deterministic concurrency slot release
+- added execution-finally release safety
+- prevents distributed concurrency slot leaks
+
+---
+
+# Retry Compatibility
+
+## Fixed
+
+### Retry Window Compatibility
+- fixed `GetReadyStepsAsync` to support:
+  - `Ready`
+  - `None`
+  - `WaitingForRetry` when retry window opens
+- restored compatibility with distributed retry reclaim tests
+
+### Multi-Worker Retry Safety
+- preserved atomic retry reclaim semantics
+- preserved retry window race protection
+- preserved retry count consistency
+
+---
+
+# Architecture Improvements
+
+## Separation of Responsibilities
+
+### RedisAiDagExecutionStore
+Now responsible only for:
+- atomic storage operations
+- atomic distributed claims
+- timeout recovery
+- persistence primitives
+
+### AiDagStepClaimService
+Now responsible for:
+- orchestration
+- distributed admission control
+- concurrency evaluation
+- claim coordination
+
+### DefaultAiDagStepExecutionOrchestrator
+Now responsible only for:
+- local bounded parallel execution
+- already-claimed step execution coordination
+
+---
+
+# Notes
+
+## Current Runtime State
+
+Distributed concurrency system is now ACTIVE:
+
+- config-driven concurrency
+- distributed concurrency gate
+- lease-based throttling
+- distributed-safe admission
+- claim/release lifecycle
+
+Policy-driven concurrency engine is NOT yet active:
+
+- `DefaultAiConcurrencyEngine`
+- `IAiConcurrencyEngine`
+- `AiPolicyKind.Concurrency`
+
+These remain reserved for future step-scoped policy evaluation once full pre-claim policy orchestration is introduced.
+
+---
+
+# Next Planned Step
+
+## Concurrency Config Migration
+
+Planned migration:
+
+    AiParallelExecutionDefinition
+    → deprecated
+
+    AiConcurrencyDefinition.MaxDegreeOfParallelism
+    → unified concurrency configuration
+
+This will fully replace the old parallel execution configuration model with the new concurrency architecture.
+
+---
 
 ## [1.0.4.4] - 2026-08-04 - DAG Execution Engine Refactor
 

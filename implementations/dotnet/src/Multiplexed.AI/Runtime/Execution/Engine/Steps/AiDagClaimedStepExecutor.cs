@@ -1,8 +1,10 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Concurrency;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 
@@ -11,7 +13,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// <summary>
     /// Executes already-claimed DAG steps.
     /// </summary>
-    ///
     /// <remarks>
     /// PURPOSE:
     /// - Centralizes physical DAG step execution.
@@ -21,15 +22,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// IMPORTANT:
     /// - This class does not claim steps.
     /// - This class does not finalize steps.
-    /// - This class does not evaluate convergence.
-    /// - This class only executes an already-owned claimed step.
+    /// - This class releases distributed concurrency capacity after execution.
     ///
     /// DISTRIBUTED OWNERSHIP:
-    /// - Ownership is represented by the claim token.
+    /// - Step ownership is represented by the claim token.
+    /// - Concurrency ownership is represented by a deterministic lease id.
     /// - Claim validation remains enforced by the DAG store.
     /// </remarks>
     public sealed class AiDagClaimedStepExecutor
     {
+        private static readonly IAiConcurrencyDefinitionResolver ConcurrencyDefinitionResolver =
+            new DefaultAiConcurrencyDefinitionResolver();
+
         private readonly IAiDagExecutionEngineServices _services;
 
         /// <summary>
@@ -44,29 +48,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         }
 
         /// <summary>
-        /// Executes an already-claimed DAG step.
+        /// Executes an already-claimed DAG step and releases its concurrency slot afterwards.
         /// </summary>
-        /// <param name="record">
-        /// The execution record.
-        /// </param>
-        /// <param name="state">
-        /// The execution state.
-        /// </param>
-        /// <param name="resolvedPipeline">
-        /// The resolved pipeline definition.
-        /// </param>
-        /// <param name="claimedStep">
-        /// The claimed step to execute.
-        /// </param>
-        /// <param name="buildExecutionContext">
-        /// Factory used to build execution contexts.
-        /// </param>
-        /// <param name="cancellationToken">
-        /// The cancellation token.
-        /// </param>
-        /// <returns>
-        /// The step execution result.
-        /// </returns>
+        /// <param name="record">The execution record.</param>
+        /// <param name="state">The execution state.</param>
+        /// <param name="resolvedPipeline">The resolved pipeline definition.</param>
+        /// <param name="claimedStep">The claimed step to execute.</param>
+        /// <param name="buildExecutionContext">Factory used to build execution contexts.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The step execution result.</returns>
         public async Task<AiStepResult> ExecuteAsync(
             AiExecutionRecord record,
             AiExecutionState state,
@@ -105,30 +95,57 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 ? existingStepState
                 : null;
 
-            return await _services.ObservabilityService.Tracer.TraceStepAsync(
-                new AiStepTraceContext
+            var concurrencyDefinition = stepState is not null
+                ? ConcurrencyDefinitionResolver.Resolve(stepState)
+                : new AiConcurrencyDefinition
                 {
-                    ExecutionId = record.ExecutionId,
-                    StepId = claimedStep.StepName,
-                    StepType = resolvedStep.Step.GetType().Name,
-                    Status = "Running",
-                    RetryCount = stepState?.RetryState?.RetryCount ?? 0,
-                    RecoveryCount = stepState?.RecoveryCount ?? 0,
-                    WorkerId = Environment.MachineName,
-                    ClaimToken = claimedStep.ClaimToken
-                },
-                async () =>
-                {
-                    var result = await resolvedStep.Step.ExecuteAsync(
-                        stepContext,
-                        cancellationToken);
+                    Enabled = false
+                };
 
-                    await _services.PayloadCompactor.CompactAsync(
-                        result,
-                        cancellationToken);
+            var concurrencyContext = new AiConcurrencyContext
+            {
+                ExecutionId = record.ExecutionId,
+                PipelineKey = resolvedPipeline.Name,
+                StepId = claimedStep.StepName,
+                StepKey = resolvedStep.StepKey,
+                RuntimeInstanceId = Environment.MachineName,
+                LeaseId = $"{record.ExecutionId}:{claimedStep.StepName}:{Environment.MachineName}"
+            };
 
-                    return result;
-                });
+            try
+            {
+                return await _services.ObservabilityService.Tracer.TraceStepAsync(
+                    new AiStepTraceContext
+                    {
+                        ExecutionId = record.ExecutionId,
+                        StepId = claimedStep.StepName,
+                        StepType = resolvedStep.Step.GetType().Name,
+                        Status = "Running",
+                        RetryCount = stepState?.RetryState?.RetryCount ?? 0,
+                        RecoveryCount = stepState?.RecoveryCount ?? 0,
+                        WorkerId = Environment.MachineName,
+                        ClaimToken = claimedStep.ClaimToken
+                    },
+                    async () =>
+                    {
+                        var result = await resolvedStep.Step.ExecuteAsync(
+                            stepContext,
+                            cancellationToken);
+
+                        await _services.PayloadCompactor.CompactAsync(
+                            result,
+                            cancellationToken).ConfigureAwait(false);
+
+                        return result;
+                    }).ConfigureAwait(false);
+            }
+            finally
+            {
+                await _services.ConcurrencyGate.ReleaseAsync(
+                    concurrencyContext,
+                    concurrencyDefinition,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 }

@@ -1,15 +1,19 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
 {
     /// <summary>
-    /// Coordinates distributed DAG step recovery and claim acquisition.
+    /// Coordinates distributed DAG step recovery and concurrency-aware claim acquisition.
     /// </summary>
     public sealed class AiDagStepClaimService
     {
+        private static readonly IAiConcurrencyDefinitionResolver ConcurrencyDefinitionResolver =
+            new DefaultAiConcurrencyDefinitionResolver();
+
         private readonly IAiDagExecutionEngineServices _services;
 
         /// <summary>
@@ -44,7 +48,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
             var recoveredCount = await RecoverTimedOutStepsAsync(
                 executionId,
                 workerId,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             if (recoveredCount > 0)
             {
@@ -54,42 +58,96 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                     $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
             }
 
-            var claimed = await _services.ObservabilityService.Tracer.TraceStorageAsync(
-                new AiStorageTraceContext
+            var state = await _services.DagStore.GetStateAsync(
+                executionId,
+                cancellationToken).ConfigureAwait(false);
+
+            if (state is null || state.Steps.Count == 0)
+            {
+                return null;
+            }
+
+            var readySteps = await _services.DagStore.GetReadyStepsAsync(
+                executionId,
+                maxSteps: 16,
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var readyStep in readySteps)
+            {
+                if (!state.Steps.TryGetValue(readyStep.StepName, out var stepState))
+                {
+                    continue;
+                }
+
+                var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+
+                var concurrencyContext = new AiConcurrencyContext
                 {
                     ExecutionId = executionId,
-                    Backend = "Redis",
-                    Operation = "TryClaimNextReadyStep"
-                },
-                async trace =>
+                    PipelineKey = executionId,
+                    StepId = readyStep.StepName,
+                    StepKey = readyStep.StepName,
+                    RuntimeInstanceId = workerId,
+                    LeaseId = $"{executionId}:{readyStep.StepName}:{workerId}"
+                };
+
+                var gateDecision = await _services.ConcurrencyGate.TryAcquireAsync(
+                    concurrencyContext,
+                    concurrencyDefinition,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!gateDecision.Allowed)
                 {
-                    var result = await _services.DagStore.TryClaimNextReadyStepAsync(
-                        executionId,
-                        workerId,
-                        cancellationToken);
+                    continue;
+                }
 
-                    trace.SetTag("claimAcquired", result is not null);
-                    trace.SetTag("workerId", workerId);
-
-                    if (result is not null)
+                var claimed = await _services.ObservabilityService.Tracer.TraceStorageAsync(
+                    new AiStorageTraceContext
                     {
-                        trace.SetTag("stepId", result.StepName);
-                        trace.SetTag("claimToken", result.ClaimToken);
-                    }
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "TryClaimStep"
+                    },
+                    async trace =>
+                    {
+                        var result = await _services.DagStore.TryClaimStepAsync(
+                            executionId,
+                            readyStep.StepName,
+                            workerId,
+                            cancellationToken).ConfigureAwait(false);
 
-                    return result;
-                });
+                        trace.SetTag("claimAcquired", result is not null);
+                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("stepId", readyStep.StepName);
 
-            if (claimed is not null)
-            {
+                        if (result is not null)
+                        {
+                            trace.SetTag("claimToken", result.ClaimToken);
+                        }
+
+                        return result;
+                    }).ConfigureAwait(false);
+
+                if (claimed is null)
+                {
+                    await _services.ConcurrencyGate.ReleaseAsync(
+                        concurrencyContext,
+                        concurrencyDefinition,
+                        cancellationToken).ConfigureAwait(false);
+
+                    continue;
+                }
+
                 _services.Logger.Engine.StepClaimed(
                     executionId,
                     claimed.StepName,
                     workerId,
                     claimed.ClaimToken);
+
+                return claimed;
             }
 
-            return claimed;
+            return null;
         }
 
         /// <summary>
@@ -118,13 +176,110 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
             await RecoverTimedOutStepsAsync(
                 executionId,
                 workerId,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
-            return await _services.DagStore.TryClaimReadyStepsAsync(
+            var state = await _services.DagStore.GetStateAsync(
                 executionId,
-                workerId,
+                cancellationToken).ConfigureAwait(false);
+
+            if (state is null || state.Steps.Count == 0)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            var readySteps = await _services.DagStore.GetReadyStepsAsync(
+                executionId,
                 maxSteps,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
+
+            if (readySteps.Count == 0)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            var claimedSteps = new List<AiClaimedStep>(maxSteps);
+
+            foreach (var readyStep in readySteps)
+            {
+                if (claimedSteps.Count >= maxSteps)
+                {
+                    break;
+                }
+
+                if (!state.Steps.TryGetValue(readyStep.StepName, out var stepState))
+                {
+                    continue;
+                }
+
+                var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+
+                var concurrencyContext = new AiConcurrencyContext
+                {
+                    ExecutionId = executionId,
+                    PipelineKey = executionId,
+                    StepId = readyStep.StepName,
+                    StepKey = readyStep.StepName,
+                    RuntimeInstanceId = workerId,
+                    LeaseId = $"{executionId}:{readyStep.StepName}:{workerId}"
+                };
+
+                var gateDecision = await _services.ConcurrencyGate.TryAcquireAsync(
+                    concurrencyContext,
+                    concurrencyDefinition,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!gateDecision.Allowed)
+                {
+                    continue;
+                }
+
+                var claimed = await _services.ObservabilityService.Tracer.TraceStorageAsync(
+                    new AiStorageTraceContext
+                    {
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "TryClaimStep"
+                    },
+                    async trace =>
+                    {
+                        var result = await _services.DagStore.TryClaimStepAsync(
+                            executionId,
+                            readyStep.StepName,
+                            workerId,
+                            cancellationToken).ConfigureAwait(false);
+
+                        trace.SetTag("claimAcquired", result is not null);
+                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("stepId", readyStep.StepName);
+
+                        if (result is not null)
+                        {
+                            trace.SetTag("claimToken", result.ClaimToken);
+                        }
+
+                        return result;
+                    }).ConfigureAwait(false);
+
+                if (claimed is null)
+                {
+                    await _services.ConcurrencyGate.ReleaseAsync(
+                        concurrencyContext,
+                        concurrencyDefinition,
+                        cancellationToken).ConfigureAwait(false);
+
+                    continue;
+                }
+
+                _services.Logger.Engine.StepClaimed(
+                    executionId,
+                    claimed.StepName,
+                    workerId,
+                    claimed.ClaimToken);
+
+                claimedSteps.Add(claimed);
+            }
+
+            return claimedSteps;
         }
 
         /// <summary>
@@ -150,14 +305,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                 {
                     var result = await _services.DagStore!.RecoverTimedOutStepsAsync(
                         executionId,
-                        cancellationToken);
+                        cancellationToken).ConfigureAwait(false);
 
                     trace.SetTag("recoveredCount", result);
                     trace.SetTag("workerId", workerId);
                     trace.SetTag("recovered", result > 0);
 
                     return result;
-                });
+                }).ConfigureAwait(false);
         }
     }
 }

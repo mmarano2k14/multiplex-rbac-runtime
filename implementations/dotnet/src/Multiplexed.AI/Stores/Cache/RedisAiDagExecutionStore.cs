@@ -666,6 +666,129 @@ namespace Multiplexed.AI.Stores.Cache
             return cjson.encode(claimed)
             """);
 
+
+        /// <summary>
+        /// Claims a specific eligible DAG step atomically.
+        ///
+        /// ELIGIBILITY RULES:
+        /// - selected step must exist
+        /// - selected step must be in Ready or None state
+        /// - OR selected step must be in WaitingForRetry and its retry window must be open
+        /// - all dependencies must already be Completed
+        ///
+        /// IMPORTANT:
+        /// - This script does not scan or choose a step.
+        /// - It only validates and claims the provided step name.
+        /// - nowUnix is expressed in milliseconds.
+        /// - LeaseExpiresAtUtc is computed once at claim time.
+        /// </summary>
+        private static readonly LuaScript ClaimSpecificPreparedScript = LuaScript.Prepare(
+            """
+            local function normalize_array(value)
+                if value == nil or value == cjson.null then
+                    return cjson.decode('[]')
+                end
+
+                local count = 0
+                for _, _ in ipairs(value) do
+                    count = count + 1
+                end
+
+                if count == 0 then
+                    return cjson.decode('[]')
+                end
+
+                return value
+            end
+
+            local stepKey = @stepKey
+            local stepKeyPrefix = @stepKeyPrefix
+            local workerId = @workerId
+            local nowUnix = tonumber(@nowUnix)
+            local claimToken = @claimToken
+
+            local raw = redis.call('GET', stepKey)
+            if not raw then
+                return 0
+            end
+
+            local step = cjson.decode(raw)
+            if not step then
+                return 0
+            end
+
+            local canRun = false
+
+            if step.Status == "Ready" or step.Status == "None" then
+                canRun = true
+            end
+
+            if step.Status == "WaitingForRetry" then
+                local retryState = step.RetryState
+
+                if retryState == nil or retryState == cjson.null then
+                    canRun = false
+                elseif retryState.NextRetryAtUtc == nil or retryState.NextRetryAtUtc == cjson.null then
+                    canRun = true
+                else
+                    local nextRetryAtUtc = tonumber(retryState.NextRetryAtUtc)
+
+                    if nextRetryAtUtc ~= nil and nextRetryAtUtc <= nowUnix then
+                        canRun = true
+                    end
+                end
+            end
+
+            if not canRun then
+                return 0
+            end
+
+            local deps = normalize_array(step.DependsOn)
+
+            for _, depName in ipairs(deps) do
+                local depKey = stepKeyPrefix .. depName
+                local depRaw = redis.call('GET', depKey)
+
+                if not depRaw then
+                    return 0
+                end
+
+                local depStep = cjson.decode(depRaw)
+
+                if depStep.Status ~= "Completed" then
+                    return 0
+                end
+            end
+
+            step.Status = "Running"
+            step.ClaimedBy = workerId
+            step.ClaimToken = claimToken
+            step.ClaimedAtUtc = nowUnix
+
+            if step.RetryState ~= nil and step.RetryState ~= cjson.null then
+                step.RetryState.NextRetryAtUtc = cjson.null
+            end
+
+            local timeoutSeconds = tonumber(step.ClaimTimeoutSeconds)
+            if timeoutSeconds ~= nil and timeoutSeconds > 0 then
+                step.LeaseExpiresAtUtc = nowUnix + (timeoutSeconds * 1000)
+            else
+                step.LeaseExpiresAtUtc = cjson.null
+            end
+
+            if step.StartedAtUtc == nil or step.StartedAtUtc == cjson.null then
+                step.StartedAtUtc = nowUnix
+            end
+
+            step.UpdatedAtUtc = nowUnix
+            step.Version = (step.Version or 0) + 1
+            step.DependsOn = normalize_array(step.DependsOn)
+
+            redis.call('SET', stepKey, cjson.encode(step))
+
+            return 1
+            """);
+
         // ---------------------------------------------------------------------
         // LOADED SCRIPTS (SHA CACHED)
         // ---------------------------------------------------------------------
@@ -676,6 +799,7 @@ namespace Multiplexed.AI.Stores.Cache
         private LoadedLuaScript _recoverLoadedScript;
         private LoadedLuaScript _finalizeLoadedScript;
         private LoadedLuaScript _claimBatchLoadedScript;
+        private LoadedLuaScript _claimSpecificLoadedScript;
 
         /// <summary>
         /// Initializes a new instance of the DAG Redis store.
@@ -716,6 +840,7 @@ namespace Multiplexed.AI.Stores.Cache
             _recoverLoadedScript = LoadScript(RecoverPreparedScript);
             _finalizeLoadedScript = LoadScript(FinalizeScript);
             _claimBatchLoadedScript = LoadScript(ClaimBatchPreparedScript);
+            _claimSpecificLoadedScript = LoadScript(ClaimSpecificPreparedScript);
         }
 
         /// <summary>
@@ -1597,6 +1722,154 @@ namespace Multiplexed.AI.Stores.Cache
             }
         }
 
+        /// <inheritdoc />
+        /// <inheritdoc />
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<AiClaimedStep>> GetReadyStepsAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+
+            var state = await GetStateAsync(executionId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (state is null || state.Steps.Count == 0)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            var nowUtc = DateTime.UtcNow;
+
+            var completedSteps = state.Steps
+                .Where(step => step.Value.Status == AiStepExecutionStatus.Completed)
+                .Select(step => step.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            return state.Steps
+                .Where(step => IsClaimCandidate(step.Value, nowUtc))
+                .Where(step =>
+                    step.Value.DependsOn is null ||
+                    step.Value.DependsOn.Count == 0 ||
+                    step.Value.DependsOn.All(completedSteps.Contains))
+                .OrderBy(step => step.Key, StringComparer.OrdinalIgnoreCase)
+                .Take(maxSteps)
+                .Select(step => new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = step.Key,
+                    ClaimToken = string.Empty
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// Determines whether a DAG step is eligible for pre-claim concurrency evaluation.
+        /// </summary>
+        /// <param name="step">The step state.</param>
+        /// <param name="nowUtc">The current UTC timestamp.</param>
+        /// <returns><c>true</c> when the step may be considered for claim; otherwise <c>false</c>.</returns>
+        private static bool IsClaimCandidate(
+            AiStepState step,
+            DateTime nowUtc)
+        {
+            if (step.Status is AiStepExecutionStatus.Ready or AiStepExecutionStatus.None)
+            {
+                return true;
+            }
+
+            if (step.Status != AiStepExecutionStatus.WaitingForRetry)
+            {
+                return false;
+            }
+
+            var retryState = step.RetryState;
+
+            if (retryState is null)
+            {
+                return false;
+            }
+
+            if (!retryState.NextRetryAtUtc.HasValue)
+            {
+                return true;
+            }
+
+            return retryState.NextRetryAtUtc.Value <= nowUtc;
+        }
+
+        /// <inheritdoc />
+        /// <inheritdoc />
+        public async Task<AiClaimedStep?> TryClaimStepAsync(
+            string executionId,
+            string stepName,
+            string workerId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+
+            var claimToken = Guid.NewGuid().ToString("N");
+
+            try
+            {
+                var claimed = await ExecuteTryClaimStepScriptAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    claimToken).ConfigureAwait(false);
+
+                if (!claimed)
+                {
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
+                    return null;
+                }
+
+                _metrics.Execution.RecordStepClaimed(executionId, stepName);
+
+                _logger.Engine.LogInformation(
+                    $"[AI DAG STORE] Specific step claimed. ExecutionId='{executionId}', StepName='{stepName}', WorkerId='{workerId}', ClaimToken='{claimToken}'.");
+
+                return new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = claimToken
+                };
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _claimSpecificLoadedScript = LoadScript(ClaimSpecificPreparedScript);
+
+                var claimed = await ExecuteTryClaimStepScriptAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    claimToken).ConfigureAwait(false);
+
+                if (!claimed)
+                {
+                    _metrics.Execution.RecordStepClaimMiss(executionId);
+                    return null;
+                }
+
+                _metrics.Execution.RecordStepClaimed(executionId, stepName);
+
+                _logger.Engine.LogInformation(
+                    $"[AI DAG STORE] Specific step claimed after NOSCRIPT reload. ExecutionId='{executionId}', StepName='{stepName}', WorkerId='{workerId}', ClaimToken='{claimToken}'.");
+
+                return new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = claimToken
+                };
+            }
+        }
+
         // ---------------------------------------------------------------------
         // SCRIPT EXECUTION HELPERS
         // ---------------------------------------------------------------------
@@ -1734,6 +2007,40 @@ namespace Multiplexed.AI.Stores.Cache
             return claimed is not null
                 ? claimed
                 : Array.Empty<AiClaimedStep>();
+        }
+
+        /// <summary>
+        /// Executes the prepared specific-step claim Lua script.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="stepName">The specific step name to claim.</param>
+        /// <param name="workerId">The worker identifier requesting the claim.</param>
+        /// <param name="claimToken">The generated claim token.</param>
+        /// <returns>
+        /// <c>true</c> when the specific step was claimed; otherwise <c>false</c>.
+        /// </returns>
+        private async Task<bool> ExecuteTryClaimStepScriptAsync(
+            string executionId,
+            string stepName,
+            string workerId,
+            string claimToken)
+        {
+            var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
+            var stepKeyPrefix = GetStepKeyPrefix(executionId);
+            var nowUnix = NowMs();
+
+            var result = await _claimSpecificLoadedScript.EvaluateAsync(
+                _database,
+                new
+                {
+                    stepKey = (RedisKey)stepKey,
+                    stepKeyPrefix = (RedisValue)stepKeyPrefix,
+                    workerId = (RedisValue)workerId,
+                    nowUnix = (RedisValue)nowUnix,
+                    claimToken = (RedisValue)claimToken
+                });
+
+            return (int)result! == 1;
         }
 
         // ---------------------------------------------------------------------

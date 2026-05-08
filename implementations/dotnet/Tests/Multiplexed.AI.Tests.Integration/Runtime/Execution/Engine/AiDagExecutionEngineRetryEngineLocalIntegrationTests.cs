@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
@@ -14,6 +15,7 @@ using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry.Policies;
@@ -36,6 +38,7 @@ using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
+using StackExchange.Redis;
 using Xunit;
 using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
@@ -243,6 +246,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
 
             var stepExecutionOrchestrator = new DefaultAiDagStepExecutionOrchestrator();
 
+            var concurrencyGate = new NoOpAiConcurrencyGate();
+
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
@@ -252,7 +257,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiExecutionStateWriter)] = stateWriter,
                 [typeof(IAiExecutionStepResolver)] = stepResolver,
                 [typeof(IAiPolicyEngineFactory)] = policyFactory,
-                [typeof(IAiDagStepExecutionOrchestrator)] = stepExecutionOrchestrator
+                [typeof(IAiDagStepExecutionOrchestrator)] = stepExecutionOrchestrator,
+                [typeof(IAiConcurrencyGate)] = concurrencyGate,
             });
 
             
@@ -273,6 +279,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stateWriter,
                 stepResolver,
                 policyFactory,
+                concurrencyGate,
                 stepExecutionOrchestrator,
                 null);
 

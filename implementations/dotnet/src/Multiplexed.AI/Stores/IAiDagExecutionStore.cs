@@ -204,5 +204,33 @@ namespace Multiplexed.AI.Stores
             string workerId,
             int maxSteps,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Gets ready DAG steps that may be evaluated for distributed claim acquisition.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="maxSteps">The maximum number of ready steps to return.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The ready DAG steps.</returns>
+        Task<IReadOnlyList<AiClaimedStep>> GetReadyStepsAsync(
+            string executionId,
+            int maxSteps,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to atomically claim a specific ready DAG step.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="stepName">The step name to claim.</param>
+        /// <param name="workerId">The worker identifier.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>
+        /// The claimed step when successful; otherwise <c>null</c>.
+        /// </returns>
+        Task<AiClaimedStep?> TryClaimStepAsync(
+            string executionId,
+            string stepName,
+            string workerId,
+            CancellationToken cancellationToken = default);
     }
 }

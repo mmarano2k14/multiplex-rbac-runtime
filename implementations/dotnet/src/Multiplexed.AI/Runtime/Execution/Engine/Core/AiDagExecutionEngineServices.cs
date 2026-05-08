@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
@@ -12,7 +13,6 @@ using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.AI.Policies;
-using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Logging;
@@ -23,16 +23,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 {
     /// <summary>
     /// Default implementation of <see cref="IAiDagExecutionEngineServices"/>.
-    ///
-    /// PURPOSE:
-    /// - Provides a concrete dependency bundle for <see cref="AiDagExecutionEngine"/>.
-    /// - Centralizes dependency injection for the engine.
-    /// - Reduces constructor complexity and churn.
-    ///
-    /// IMPORTANT:
-    /// - This class must remain a pure container.
-    /// - It must not contain business logic.
-    /// - It must not resolve services dynamically.
     /// </summary>
     public sealed class AiDagExecutionEngineServices : IAiDagExecutionEngineServices
     {
@@ -55,6 +45,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
             IAiPolicyEngineFactory policyEngineFactory,
+            IAiConcurrencyGate concurrencyGate,
             IAiDagStepExecutionOrchestrator stepExecutionOrchestrator,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
@@ -74,6 +65,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
             PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
+            ConcurrencyGate = concurrencyGate ?? throw new ArgumentNullException(nameof(concurrencyGate));
 
             StepExecutionOrchestrator = stepExecutionOrchestrator
                 ?? throw new ArgumentNullException(nameof(stepExecutionOrchestrator));
@@ -132,6 +124,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 
         /// <inheritdoc />
         public IAiPolicyEngineFactory PolicyEngineFactory { get; }
+
+        /// <inheritdoc />
+        public IAiConcurrencyGate ConcurrencyGate { get; }
 
         /// <inheritdoc />
         public IAiDagStepExecutionOrchestrator StepExecutionOrchestrator { get; }

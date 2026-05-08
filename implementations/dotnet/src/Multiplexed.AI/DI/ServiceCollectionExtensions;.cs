@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
@@ -31,6 +32,7 @@ using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.AI.Retry;
@@ -475,10 +477,13 @@ namespace Multiplexed.AI.DI
 
 
             // ------------------------------------------------------------
-            // ExecutionOrchestrator Scheduler
+            // ExecutionOrchestrator Scheduler / Concurrency engine
             // ------------------------------------------------------------
 
             services.AddScoped<IAiDagStepExecutionOrchestrator,DefaultAiDagStepExecutionOrchestrator>();
+            services.AddSingleton<IAiConcurrencyGate, RedisAiConcurrencyGate>();
+            services.TryAddSingleton<IAiConcurrencyEngine, DefaultAiConcurrencyEngine>();
+
 
 
 

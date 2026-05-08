@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
@@ -147,5 +148,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// - The orchestrator is responsible for how claimed steps are executed.
         /// </summary>
         IAiDagStepExecutionOrchestrator StepExecutionOrchestrator { get; }
+
+        /// <summary>
+        /// Gets the distributed concurrency gate used to acquire and release
+        /// runtime execution capacity before a DAG step is claimed.
+        /// </summary>
+        IAiConcurrencyGate ConcurrencyGate { get; }
     }
 }
