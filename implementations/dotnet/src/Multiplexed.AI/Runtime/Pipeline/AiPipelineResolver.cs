@@ -110,8 +110,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
                 Version = definition.Version,
                 ExecutionMode = definition.ExecutionMode,
                 Config = definition.Config,
-                Steps = resolvedSteps.OrderBy(x => x.Order).ToArray(),
-                ParallelExecution = definition.ParallelExecution
+                Steps = resolvedSteps.OrderBy(x => x.Order).ToArray()
             });
         }
 

@@ -144,9 +144,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
                   "name": "{{pipelineName}}",
                   "version": "1",
                   "executionMode": "Dag",
-                  "parallelExecution": {
-                    "enabled": true,
-                    "maxDegreeOfParallelism": 2
+                  "config": {
+                      "concurrency": {
+                        "enabled": true,
+                        "maxDegreeOfParallelism": 2,
+                        "jitter": false
+                      }
                   },
                   "steps": [
                     {

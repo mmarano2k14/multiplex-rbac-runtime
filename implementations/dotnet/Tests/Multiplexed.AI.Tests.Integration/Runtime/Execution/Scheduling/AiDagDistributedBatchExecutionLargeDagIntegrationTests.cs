@@ -167,23 +167,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
             var stepsJson = GenerateStepsJson(stepCount);
 
             var json = $$"""
-            {
-              "pipelines": [
-                {
-                  "name": "{{pipelineName}}",
-                  "version": "1",
-                  "executionMode": "Dag",
-                  "parallelExecution": {
-                    "enabled": true,
-                    "maxDegreeOfParallelism": 8
-                  },
-                  "steps": [
-            {{stepsJson}}
-                  ]
-                }
-              ]
-            }
-            """;
+                    {
+                      "pipelines": [
+                        {
+                          "name": "{{pipelineName}}",
+                          "version": "1",
+                          "executionMode": "Dag",
+                          "config": {
+                            "concurrency": {
+                              "enabled": true,
+                              "maxDegreeOfParallelism": 8,
+                              "jitter": false
+                            }
+                          },
+                          "steps": [
+                    {{stepsJson}}
+                          ]
+                        }
+                      ]
+                    }
+                    """;
 
             await File.WriteAllTextAsync(fullPath, json);
 

@@ -54,5 +54,31 @@
         /// Gets or sets the concurrency lease duration in seconds.
         /// </summary>
         public int LeaseSeconds { get; set; } = 300;
+
+
+        /// <summary>
+        /// Gets or sets the maximum local degree of parallelism used for
+        /// already-claimed DAG step execution inside the current runtime instance.
+        /// </summary>
+        /// <remarks>
+        /// This setting controls local bounded parallel execution only.
+        /// It does not control distributed admission or global throttling.
+        /// </remarks>
+        public int? MaxDegreeOfParallelism { get; init; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether retry-after jitter should be applied
+        /// when concurrency acquisition is denied.
+        /// </summary>
+        /// <remarks>
+        /// This helps avoid multiple runtime instances retrying admission at exactly
+        /// the same time after being throttled.
+        /// </remarks>
+        public bool Jitter { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the maximum retry-after jitter in milliseconds.
+        /// </summary>
+        public int MaxJitterMs { get; set; } = 100;
     }
 }

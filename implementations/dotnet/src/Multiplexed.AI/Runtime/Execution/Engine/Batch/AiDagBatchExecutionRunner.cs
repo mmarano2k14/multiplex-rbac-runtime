@@ -1,6 +1,8 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Concurrency;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Distributed;
@@ -15,6 +17,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
     /// </summary>
     public sealed class AiDagBatchExecutionRunner
     {
+        private static readonly IAiConcurrencyDefinitionResolver ConcurrencyDefinitionResolver =
+            new DefaultAiConcurrencyDefinitionResolver();
+
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagStepClaimService _claimService;
         private readonly AiDagClaimedStepExecutor _claimedStepExecutor;
@@ -168,7 +173,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
             }
 
             var maxDegreeOfParallelism = ResolveMaxDegreeOfParallelism(
-                resolvedPipeline,
+                state,
+                claimedSteps,
                 maxSteps);
 
             var batchResult =
@@ -292,29 +298,38 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         }
 
         /// <summary>
-        /// Resolves the effective maximum degree of parallelism.
+        /// Resolves the effective local maximum degree of parallelism from concurrency configuration.
         /// </summary>
+        /// <param name="state">The current execution state.</param>
+        /// <param name="claimedSteps">The claimed steps in the current batch.</param>
+        /// <param name="requestedMaxSteps">The requested maximum number of steps.</param>
+        /// <returns>The effective local maximum degree of parallelism.</returns>
         private static int ResolveMaxDegreeOfParallelism(
-            ResolvedAiPipeline resolvedPipeline,
+            AiExecutionState state,
+            IReadOnlyCollection<AiClaimedStep> claimedSteps,
             int requestedMaxSteps)
         {
-            ArgumentNullException.ThrowIfNull(resolvedPipeline);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(claimedSteps);
 
-            var definition = resolvedPipeline.ParallelExecution;
+            var firstClaimedStep = claimedSteps.FirstOrDefault();
 
-            if (definition?.Enabled != true)
+            if (firstClaimedStep is null ||
+                !state.Steps.TryGetValue(firstClaimedStep.StepName, out var stepState))
             {
                 return 1;
             }
 
-            var configuredMaxDegreeOfParallelism =
-                definition.MaxDegreeOfParallelism <= 0
-                    ? 1
-                    : definition.MaxDegreeOfParallelism;
+            var definition = ConcurrencyDefinitionResolver.Resolve(stepState);
+
+            if (definition.MaxDegreeOfParallelism is not > 0)
+            {
+                return 1;
+            }
 
             return Math.Min(
                 requestedMaxSteps,
-                configuredMaxDegreeOfParallelism);
+                definition.MaxDegreeOfParallelism.Value);
         }
     }
 }

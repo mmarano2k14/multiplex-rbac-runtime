@@ -215,11 +215,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
                 Name = $"batch-retention-{Guid.NewGuid():N}",
                 Version = "1",
                 ExecutionMode = AiExecutionMode.Dag,
-                ParallelExecution = new AiParallelExecutionDefinition
-                {
-                    Enabled = true,
-                    MaxDegreeOfParallelism = 8
-                },
                 Config = CreateRetentionConfig(),
                 Steps = steps
             };
