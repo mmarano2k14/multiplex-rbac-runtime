@@ -1334,53 +1334,289 @@ The flow is:
 
 The runtime supports bounded distributed parallel DAG execution.
 
-Instead of claiming and executing a single step at a time, workers can atomically claim multiple eligible DAG steps and execute them concurrently.
+Instead of executing one step at a time, workers can evaluate eligible DAG steps, acquire execution capacity, claim ownership atomically, and execute multiple steps concurrently.
 
 This enables:
 
-- bounded parallel execution
+- bounded local parallel execution
 - dependency-aware scheduling
 - distributed-safe multi-worker orchestration
 - deterministic batch convergence
+- concurrency-aware admission before execution
 
 Execution remains fully state-driven.
 
 Workers:
 
 1. evaluate eligible steps
-2. atomically claim batches through Redis Lua scripts
-3. execute steps concurrently
-4. persist completion/failure transitions safely
+2. resolve `config.concurrency`
+3. acquire distributed concurrency capacity
+4. atomically claim steps through Redis Lua scripts
+5. execute claimed steps concurrently
+6. release concurrency capacity after execution
+7. persist completion/failure transitions safely
 
 Eligibility rules ensure that a step can only execute when:
 
 - all dependencies are completed
-- the step is Ready or retry-eligible
+- the step is `Ready` or retry-eligible
 - no other worker currently owns the step
+- concurrency capacity is available
 
 The execution scheduler supports:
 
-- configurable parallelism
+- local bounded parallelism
 - deterministic convergence semantics
 - distributed-safe ownership
-- future execution admission policies
+- lease-based concurrency slots
+- retry-after behavior when capacity is denied
+- future policy-driven admission rules
+
+Concurrency is configured through `config.concurrency`.
+
+`maxDegreeOfParallelism` controls local parallel execution inside one runtime instance.
+
+The distributed concurrency limits control admission across workers and runtime instances.
 
 Example:
 
 ```json
 {
-  "parallelExecution": {
-    "enabled": true,
-    "maxDegreeOfParallelism": 8
+  "config": {
+    "concurrency": {
+      "enabled": true,
+      "maxDegreeOfParallelism": 8,
+      "maxGlobalConcurrency": 100,
+      "maxPipelineConcurrency": 20,
+      "maxStepConcurrency": 5,
+      "maxExecutionConcurrency": 10,
+      "maxInstanceConcurrency": 8,
+      "leaseSeconds": 300,
+      "defaultRetryAfterMs": 250,
+      "jitter": false,
+      "policies": [
+        {
+          "name": "concurrency.scope.default",
+          "type": "scope",
+          "config": {
+            "kind": "provider",
+            "value": "openai",
+            "limit": 5
+          }
+        }
+      ]
+    }
   }
 }
 ```
+
 This allows the runtime to scale execution throughput while preserving:
 
 - deterministic convergence
 - retry safety
 - recovery correctness
 - retention compatibility
+- distributed throttling readiness
+- future provider/model/tenant-aware admission control
+
+---
+
+### Concurrency Engine
+
+The Concurrency Engine is responsible for execution admission before a DAG step is claimed.
+
+It does not execute steps.  
+It decides whether the runtime has enough available capacity to attempt execution.
+
+This separates two important responsibilities:
+
+- **Concurrency admission** → handled by the Concurrency Engine / Gate
+- **Step ownership** → handled by the Redis DAG claim system
+
+The runtime first acquires concurrency capacity, then attempts to claim the step atomically.
+
+This prevents the system from claiming work that it should not execute yet.
+
+---
+
+#### Why Admission Control Matters
+
+In distributed AI systems, many workers may try to execute steps at the same time.
+
+Without admission control, the runtime may overload:
+
+- AI providers
+- model endpoints
+- vector databases
+- tool APIs
+- tenant-specific resources
+- runtime instances
+- infrastructure capacity
+
+The Concurrency Engine prevents this by applying execution limits before work begins.
+
+---
+
+#### Concurrency Configuration
+
+Concurrency is configured through `config.concurrency`.
+
+This configuration unifies:
+
+- local bounded parallelism
+- distributed concurrency limits
+- lease-based slot ownership
+- retry-after behavior
+- future policy-driven throttling
+
+Example:
+
+```json
+{
+  "config": {
+    "concurrency": {
+      "enabled": true,
+      "maxDegreeOfParallelism": 8,
+      "maxGlobalConcurrency": 100,
+      "maxPipelineConcurrency": 20,
+      "maxStepConcurrency": 5,
+      "maxExecutionConcurrency": 10,
+      "maxInstanceConcurrency": 8,
+      "leaseSeconds": 300,
+      "defaultRetryAfterMs": 250,
+      "jitter": false
+    }
+  }
+}
+```
+
+---
+
+#### Local vs Distributed Concurrency
+
+`maxDegreeOfParallelism` controls local execution parallelism inside one runtime instance.
+
+Distributed limits control admission across the runtime:
+
+- `maxGlobalConcurrency`  
+  limits total concurrent execution across the whole runtime
+
+- `maxPipelineConcurrency`  
+  limits concurrent execution for the same pipeline
+
+- `maxStepConcurrency`  
+  limits concurrent execution for the same step key
+
+- `maxExecutionConcurrency`  
+  limits concurrent execution inside one execution
+
+- `maxInstanceConcurrency`  
+  limits concurrent execution inside one runtime instance
+
+This allows the runtime to scale horizontally while keeping execution bounded.
+
+---
+
+#### Redis Concurrency Gate
+
+Distributed enforcement is handled by the Redis concurrency gate.
+
+The gate uses Redis to acquire and release concurrency slots atomically.
+
+A successful gate acquisition means:
+
+- capacity is available
+- a lease is created
+- the runtime may attempt to claim the step
+
+If the claim fails, the slot is released immediately.
+
+If the step executes, the slot is released after execution completes or fails.
+
+This avoids leaked concurrency capacity during normal execution.
+
+---
+
+#### Lease-Based Safety
+
+Concurrency slots are lease-based.
+
+Each acquired slot has a TTL so that if a worker crashes, the slot eventually expires.
+
+This provides crash recovery for concurrency control.
+
+The runtime does not rely only on in-memory counters.
+
+It uses distributed lease state so multiple workers can coordinate safely.
+
+---
+
+#### Claim Flow with Concurrency
+
+The claim flow is:
+
+```text
+GetReadyStepsAsync
+→ Resolve config.concurrency
+→ ConcurrencyGate.TryAcquireAsync
+→ TryClaimStepAsync
+→ Execute step
+→ Release concurrency slot
+```
+
+If the gate denies capacity, the runtime does not claim the step.
+
+If the gate allows capacity but the claim fails, the runtime releases the slot.
+
+If the claim succeeds, the slot remains owned until step execution finishes.
+
+---
+
+#### Future Policy-Driven Throttling
+
+The Concurrency Engine is prepared for policy-driven throttling.
+
+Structured policies can define custom scopes such as:
+
+```json
+{
+  "name": "concurrency.scope.default",
+  "type": "scope",
+  "config": {
+    "kind": "provider",
+    "value": "openai",
+    "limit": 5
+  }
+}
+```
+
+This will allow future throttling by:
+
+- provider
+- model
+- tenant
+- tool
+- operation
+- external dependency
+
+The policy defines the admission rule.
+
+The Redis concurrency gate enforces it atomically.
+
+---
+
+#### Summary
+
+The Concurrency Engine provides:
+
+- admission control before execution
+- local bounded parallelism
+- distributed concurrency limits
+- Redis-backed slot ownership
+- lease-based crash safety
+- future provider/model/tenant-aware throttling
+
+It is the runtime layer responsible for preventing overload while preserving deterministic distributed execution.
 
 ---
 
@@ -1523,37 +1759,145 @@ These mechanisms ensure that the runtime behaves correctly even with multiple wo
 
 ---
 
-## Config-Driven and Policy-Driven Retry Engine
+## Policy Engine V2
 
-![AI Step Retry Engine Architecture](docs/images/ai-runtime/ai-runtime-retry-engine.png)
+The runtime uses a shared policy model across retry, retention, and concurrency.
 
-The retry system is now **config-driven and policy-driven**, moving away from traditional local retry loops.
+Policy Engine V2 introduces structured policy definitions while remaining backward compatible with the original string-based policy format.
 
-Retry behavior is defined at the step level through `config.retry`.  
-At runtime, the Retry Engine resolves this configuration, extracts the configured policy keys, and delegates decision-making to the Policy Engine.
-
-The Policy Engine executes the policies for the `Retry` kind and returns structured outcomes.  
-The Retry Engine then interprets these results and applies the appropriate state transition.
-
-This introduces a strict separation between **decision logic** and **execution logic**.
-
-### Architecture Responsibilities
-
-- **Policy Registry**  
-  Stores all available policies and maps them by key and kind.
-
-- **Policy Engine**  
-  Resolves and executes policies based on the current execution context and policy kind (`Retry` in this case).
-
-- **Retry Engine**  
-  Interprets policy results and applies retry decisions (retry, delay, fail) to the step state.
-
-- **Redis (Lua scripts)**  
-  Ensures all state transitions are applied atomically across distributed workers.
+This allows existing pipelines to keep working while enabling future policy-specific configuration.
 
 ---
 
-### Example Configuration
+### Why Policy Engine V2 Exists
+
+The original policy model used simple policy keys:
+
+```json
+{
+  "policies": [
+    "retry.transient.default"
+  ]
+}
+```
+
+This is easy to use, but limited.
+
+It does not allow policies to carry their own metadata or configuration.
+
+For advanced runtime behavior, policies need to support structured configuration.
+
+Examples include:
+
+- provider-aware throttling
+- tenant-specific concurrency limits
+- model-level admission rules
+- adaptive retry behavior
+- dynamic retention strategies
+- routing and validation policies
+
+Policy Engine V2 adds this capability without breaking the old format.
+
+---
+
+### Structured Policy Definitions
+
+A policy can now be declared as an object:
+
+```json
+{
+  "policies": [
+    {
+      "name": "retry.timeout.default",
+      "type": "retry",
+      "config": {
+        "code": "timeout"
+      }
+    }
+  ]
+}
+```
+
+A configured policy contains:
+
+- `name`  
+  The registered policy key used by the runtime for lookup.
+
+- `type`  
+  Optional metadata describing the policy category or behavior.
+
+- `config`  
+  Optional policy-specific configuration.
+
+Current runtime policy resolution uses:
+
+```text
+policy.Name
+```
+
+The `type` and `config` fields are forward-compatible extension points.
+
+They allow future policies to carry structured configuration without changing the runtime policy model.
+
+---
+
+### Backward Compatibility
+
+Both formats are supported.
+
+Legacy format:
+
+```json
+{
+  "policies": [
+    "retry.transient.default"
+  ]
+}
+```
+
+Structured format:
+
+```json
+{
+  "policies": [
+    {
+      "name": "retry.transient.default",
+      "type": "retry",
+      "config": {
+        "maxRetries": 5
+      }
+    }
+  ]
+}
+```
+
+The runtime automatically converts legacy string policies into structured policy definitions internally.
+
+This means existing JSON pipeline definitions remain valid.
+
+---
+
+### Used By
+
+Policy Engine V2 is used by:
+
+- Retry Engine
+- Retention Engine
+- Concurrency Engine
+
+This creates one unified policy model across the runtime.
+
+Each engine resolves its own configuration section:
+
+- `config.retry`
+- `config.retention`
+- `config.concurrency`
+
+Each section may use legacy string policies or structured policy objects.
+
+---
+
+### Example: Retry Policy
 
 ```json
 {
@@ -1561,15 +1905,152 @@ This introduces a strict separation between **decision logic** and **execution l
     "retry": {
       "policies": [
         "retry.transient.default",
-        "retry.timeout.default",
-        "retry.rate-limit.default"
+        {
+          "name": "retry.timeout.default",
+          "type": "retry",
+          "config": {
+            "code": "timeout"
+          }
+        }
       ],
       "maxRetries": 2,
-      "baseDelayMs": 500
+      "baseDelayMs": 500,
+      "jitter": false
     }
   }
 }
 ```
+
+---
+
+### Example: Concurrency Policy
+
+```json
+{
+  "config": {
+    "concurrency": {
+      "enabled": true,
+      "maxDegreeOfParallelism": 8,
+      "policies": [
+        {
+          "name": "concurrency.scope.default",
+          "type": "scope",
+          "config": {
+            "kind": "provider",
+            "value": "openai",
+            "limit": 5
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
+### Future Use Cases
+
+Structured policy configuration enables future runtime capabilities such as:
+
+- provider-aware throttling
+- model-level concurrency limits
+- tenant-aware admission control
+- adaptive retry behavior
+- dynamic retention strategies
+- routing policies
+- cost-aware execution
+- rate limiting
+
+This gives the runtime a path toward more advanced policy-driven orchestration without changing the pipeline model again.
+
+---
+
+### Summary
+
+Policy Engine V2 provides:
+
+- backward-compatible policy configuration
+- structured policy metadata
+- policy-specific configuration
+- one unified policy model across retry, retention, and concurrency
+- a foundation for future throttling, routing, retry, and retention policies
+
+---
+
+## Config-Driven and Policy-Driven Retry Engine
+
+![AI Step Retry Engine Architecture](docs/images/ai-runtime/ai-runtime-retry-engine.png)
+
+The retry system is config-driven and policy-driven.
+
+Retry behavior is defined at the step level through `config.retry`.
+
+At runtime, the Retry Engine resolves this configuration, extracts configured policy definitions, and delegates decision-making to the Policy Engine.
+
+The Policy Engine executes policies for the `Retry` kind and returns structured outcomes.
+
+The Retry Engine then interprets those outcomes and applies the appropriate retry decision.
+
+This introduces a strict separation between:
+
+- retry configuration
+- retry policy evaluation
+- retry decision aggregation
+- retry state mutation
+- distributed state persistence
+
+Retry is no longer handled through hidden local retry loops.
+
+It is handled through explicit runtime state.
+
+---
+
+### Architecture Responsibilities
+
+- **Policy Registry**  
+  Stores all available policies and maps them by key and kind.
+
+- **Policy Engine**  
+  Resolves and executes policies based on the current execution context and policy kind.
+
+- **Retry Engine**  
+  Resolves `config.retry`, executes retry policies, computes retry decisions, and applies retry state changes.
+
+- **Redis DAG Store**  
+  Applies distributed retry transitions atomically through Lua scripts.
+
+---
+
+### Example Configuration
+
+The runtime supports both legacy string policies and structured policy objects.
+
+```json
+{
+  "config": {
+    "retry": {
+      "policies": [
+        "retry.transient.default",
+        {
+          "name": "retry.timeout.default",
+          "type": "retry",
+          "config": {
+            "code": "timeout"
+          }
+        }
+      ],
+      "maxRetries": 2,
+      "strategy": "Fixed",
+      "baseDelayMs": 500,
+      "maxDelayMs": 5000,
+      "jitter": false
+    }
+  }
+}
+```
+
+---
 
 ### Execution Flow
 
@@ -1577,15 +2058,61 @@ This introduces a strict separation between **decision logic** and **execution l
 Step failure
 → Retry Engine
 → Resolve config.retry
-→ Resolve policy keys from Policy Registry
-→ Execute policies via Policy Engine
+→ Resolve configured policy definitions
+→ Execute retry policies
 → Aggregate policy results
 → Produce retry decision
 → Apply decision to RetryState
-→ Persist via Redis Lua (atomic)
+→ Persist state transition through Redis Lua
 ```
 
-Eligible steps may be claimed individually or in bounded parallel batches depending on scheduler configuration.
+---
+
+### Retry State Model
+
+Retry configuration is stored separately from retry runtime state.
+
+- `Retry`  
+  Defines retry configuration such as policies, max retries, delay strategy, and jitter.
+
+- `RetryState`  
+  Stores mutable runtime retry state such as retry count, last retry time, next retry time, and retry reason.
+
+This separation keeps retry behavior deterministic and replayable.
+
+---
+
+### WaitingForRetry
+
+When a step fails but retry is still allowed, the runtime moves the step to `WaitingForRetry`.
+
+The step remains paused until its retry window opens.
+
+A step in `WaitingForRetry` can only be claimed again when:
+
+```text
+UtcNow >= NextRetryAtUtc
+```
+
+This prevents retry storms and keeps retry timing explicit.
+
+---
+
+### Distributed Retry Safety
+
+In distributed DAG execution, retry state transitions must be atomic.
+
+The Redis DAG store ensures that:
+
+- only the current claim owner can fail or complete a step
+- retry count is updated consistently
+- retry windows are respected
+- only one worker can reclaim a retry-ready step
+- stale workers cannot overwrite retry state
+
+This keeps retry behavior safe across multiple workers.
+
+---
 
 ### Why This Matters
 
@@ -1595,50 +2122,34 @@ Retry is no longer:
 
 It becomes:
 
-> “evaluate the system state and decide what is allowed”
+> “evaluate runtime state and decide what is allowed”
 
 This brings:
 
-- **Deterministic behavior**  
-  Same input state → same retry decision  
-
-- **Explicit logic**  
-  No hidden retry loops inside executors  
-
-- **Extensibility**  
-  New retry strategies can be added without modifying execution code  
-
-- **Distributed safety**  
-  All retry decisions are enforced through atomic state transitions  
+- deterministic retry behavior
+- explicit failure handling
+- no hidden local retry loops
+- policy-based retry classification
+- distributed-safe retry scheduling
+- observable retry decisions
+- future adaptive retry behavior
 
 ---
 
-### Core Design Principles (addition)
+### Observability
 
-Under **6. Failure is a First-Class Concern**:
-
-> Retry is no longer handled through local retry loops.  
-> It is driven by step configuration, evaluated through policies, and applied through distributed state transitions.
-
----
-
-### Observability, Metrics, and Future Tracing (addition)
-
-Policy execution is fully observable.
+Retry execution is observable.
 
 The runtime tracks:
 
-- policy execution count per step  
-- policy evaluation latency  
-- retry decision outcomes (**retry / delay / fail**)  
-- retry attempt count and distribution  
-- correlation between failures and policy decisions  
+- retry policy execution
+- retry decision outcomes
+- retry attempt counts
+- retry exhaustion
+- retry delay behavior
+- failure correlation by step and execution
 
-This enables:
-
-- deep debugging of retry behavior  
-- understanding *why* a retry happened (not just that it happened)  
-- future integration with tracing systems (**OpenTelemetry, Grafana, runtime console**)  
+This makes retry behavior debuggable instead of implicit.
 
 ---
 
@@ -3862,6 +4373,63 @@ Advanced extensions can include:
 - step-level execution customization
 
 This is especially relevant as the retry engine evolves.
+
+---
+
+### Policy Extensions
+
+The runtime supports policy-based extension through structured policy definitions.
+
+Policies can be attached to runtime configuration sections such as:
+
+- `config.retry`
+- `config.retention`
+- `config.concurrency`
+
+A policy can be declared using the legacy string format:
+
+```json
+{
+  "policies": [
+    "retry.transient.default"
+  ]
+}
+```
+
+Or using the structured format:
+
+```json
+{
+  "policies": [
+    {
+      "name": "concurrency.scope.default",
+      "type": "scope",
+      "config": {
+        "kind": "provider",
+        "value": "openai",
+        "limit": 5
+      }
+    }
+  ]
+}
+```
+
+The `name` field is used for policy registry lookup.
+
+The `type` and `config` fields allow policies to carry structured metadata and policy-specific configuration.
+
+This prepares the runtime for advanced policy-driven orchestration such as:
+
+- provider throttling
+- model-level concurrency limits
+- tenant-aware admission control
+- tool-specific execution limits
+- adaptive retry
+- dynamic retention
+- routing policies
+- validation policies
+
+This allows the runtime to evolve by adding new policies rather than changing the execution engine.
 
 ---
 
