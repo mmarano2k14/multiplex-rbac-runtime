@@ -5,11 +5,44 @@ using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 
-namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
+namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 {
     /// <summary>
     /// Coordinates distributed DAG step recovery and concurrency-aware claim acquisition.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This service is responsible for selecting ready DAG step candidates, applying distributed
+    /// concurrency admission, and then atomically claiming the admitted step through the distributed
+    /// DAG store.
+    /// </para>
+    ///
+    /// <para>
+    /// The service intentionally separates three concerns:
+    /// </para>
+    ///
+    /// <list type="bullet">
+    /// <item>
+    /// <description>Recover timed-out distributed steps.</description>
+    /// </item>
+    /// <item>
+    /// <description>Acquire distributed concurrency capacity through the concurrency gate.</description>
+    /// </item>
+    /// <item>
+    /// <description>Claim step ownership through the DAG store.</description>
+    /// </item>
+    /// </list>
+    ///
+    /// <para>
+    /// If concurrency capacity is acquired but the DAG claim fails, the lease is released immediately.
+    /// This prevents a losing worker from holding distributed capacity for a step it did not actually own.
+    /// </para>
+    ///
+    /// <para>
+    /// Throttled steps are traced and logged with the diagnostic reason returned by the concurrency gate.
+    /// This makes distributed admission decisions observable in production.
+    /// </para>
+    /// </remarks>
     public sealed class AiDagStepClaimService
     {
         private static readonly IAiConcurrencyDefinitionResolver ConcurrencyDefinitionResolver =
@@ -20,7 +53,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagStepClaimService"/> class.
         /// </summary>
-        /// <param name="services">The DAG execution engine services.</param>
+        /// <param name="services">
+        /// The composed DAG execution engine services.
+        /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="services"/> is <see langword="null"/>.
+        /// </exception>
         public AiDagStepClaimService(IAiDagExecutionEngineServices services)
         {
             _services = services ?? throw new ArgumentNullException(nameof(services));
@@ -29,15 +67,35 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// <summary>
         /// Recovers timed-out steps and attempts to claim one ready DAG step.
         /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
         /// This value must be stable across multiple executions of the same pipeline.
         /// A recommended format is <c>{PipelineName}:{PipelineVersion}</c>.
         /// </param>
-        /// <param name="workerId">The worker identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The claimed step, or <c>null</c> when no step is ready or admitted.</returns>
+        /// <param name="workerId">
+        /// The worker or runtime instance identifier.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The claimed step, or <c>null</c> when no step is ready, no step can be admitted,
+        /// or all admitted candidates lose the distributed claim race.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method evaluates ready candidates one by one. Each candidate must first pass
+        /// distributed concurrency admission before the service attempts to claim the step.
+        /// </para>
+        ///
+        /// <para>
+        /// If a step is throttled, the denial is traced and logged, then the service continues
+        /// evaluating the next ready candidate.
+        /// </para>
+        /// </remarks>
         public async Task<AiClaimedStep?> ClaimNextAsync(
             string executionId,
             string pipelineKey,
@@ -95,13 +153,21 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                     readyStep.StepName,
                     workerId);
 
-                var gateDecision = await _services.ConcurrencyGate.TryAcquireAsync(
+                var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                     concurrencyContext,
                     concurrencyDefinition,
+                    readyStep.StepName,
                     cancellationToken).ConfigureAwait(false);
 
                 if (!gateDecision.Allowed)
                 {
+                    LogThrottledStep(
+                        executionId,
+                        pipelineKey,
+                        readyStep.StepName,
+                        workerId,
+                        gateDecision);
+
                     continue;
                 }
 
@@ -117,6 +183,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         concurrencyContext,
                         concurrencyDefinition,
                         cancellationToken).ConfigureAwait(false);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
 
                     continue;
                 }
@@ -136,16 +205,38 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// <summary>
         /// Recovers timed-out steps and attempts to claim a bounded number of ready DAG steps.
         /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
         /// This value must be stable across multiple executions of the same pipeline.
         /// A recommended format is <c>{PipelineName}:{PipelineVersion}</c>.
         /// </param>
-        /// <param name="workerId">The worker identifier.</param>
-        /// <param name="maxSteps">The maximum number of steps to claim.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The claimed steps.</returns>
+        /// <param name="workerId">
+        /// The worker or runtime instance identifier.
+        /// </param>
+        /// <param name="maxSteps">
+        /// The maximum number of steps to claim.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The claimed steps.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Each ready candidate is independently admitted, claimed, and returned.
+        /// A batch therefore owns one concurrency lease per claimed step, not one lease for the
+        /// whole batch.
+        /// </para>
+        ///
+        /// <para>
+        /// If a candidate is admitted but the actual DAG claim fails, the corresponding lease is
+        /// released immediately and the service continues with the next candidate.
+        /// </para>
+        /// </remarks>
         public async Task<IReadOnlyList<AiClaimedStep>> ClaimBatchAsync(
             string executionId,
             string pipelineKey,
@@ -209,13 +300,21 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                     readyStep.StepName,
                     workerId);
 
-                var gateDecision = await _services.ConcurrencyGate.TryAcquireAsync(
+                var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                     concurrencyContext,
                     concurrencyDefinition,
+                    readyStep.StepName,
                     cancellationToken).ConfigureAwait(false);
 
                 if (!gateDecision.Allowed)
                 {
+                    LogThrottledStep(
+                        executionId,
+                        pipelineKey,
+                        readyStep.StepName,
+                        workerId,
+                        gateDecision);
+
                     continue;
                 }
 
@@ -231,6 +330,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         concurrencyContext,
                         concurrencyDefinition,
                         cancellationToken).ConfigureAwait(false);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
 
                     continue;
                 }
@@ -250,11 +352,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// <summary>
         /// Creates the concurrency context used by the distributed concurrency gate.
         /// </summary>
-        /// <param name="executionId">The current DAG execution identifier.</param>
-        /// <param name="pipelineKey">The stable logical pipeline key.</param>
-        /// <param name="stepName">The ready step name.</param>
-        /// <param name="workerId">The worker or runtime instance identifier.</param>
-        /// <returns>The concurrency context for the ready step candidate.</returns>
+        /// <param name="executionId">
+        /// The current DAG execution identifier.
+        /// </param>
+        /// <param name="pipelineKey">
+        /// The stable logical pipeline key.
+        /// </param>
+        /// <param name="stepName">
+        /// The ready step name.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker or runtime instance identifier.
+        /// </param>
+        /// <returns>
+        /// The concurrency context for the ready step candidate.
+        /// </returns>
+        /// <remarks>
+        /// The lease id format must remain aligned with the distributed runners that release the
+        /// concurrency lease after execution.
+        /// </remarks>
         private static AiConcurrencyContext CreateConcurrencyContext(
             string executionId,
             string pipelineKey,
@@ -273,13 +389,83 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         }
 
         /// <summary>
+        /// Attempts to acquire distributed concurrency capacity for a ready step candidate.
+        /// </summary>
+        /// <param name="context">
+        /// The concurrency context for the ready step.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition.
+        /// </param>
+        /// <param name="stepName">
+        /// The ready step name.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The concurrency decision returned by the configured concurrency gate.
+        /// </returns>
+        /// <remarks>
+        /// The acquisition is traced as a storage operation because the default distributed gate is
+        /// Redis-backed. The trace includes the step, pipeline, worker, lease id, admission result,
+        /// and denial reason when throttled.
+        /// </remarks>
+        private async Task<AiConcurrencyDecision> TryAcquireConcurrencyLeaseAsync(
+            AiConcurrencyContext context,
+            AiConcurrencyDefinition definition,
+            string stepName,
+            CancellationToken cancellationToken)
+        {
+            return await _services.ObservabilityService.Tracer.TraceStorageAsync(
+                new AiStorageTraceContext
+                {
+                    ExecutionId = context.ExecutionId,
+                    StepId = stepName,
+                    Backend = "Redis",
+                    Operation = "TryAcquireConcurrencyLease"
+                },
+                async trace =>
+                {
+                    var decision = await _services.ConcurrencyGate.TryAcquireAsync(
+                        context,
+                        definition,
+                        cancellationToken).ConfigureAwait(false);
+
+                    trace.SetTag("concurrency.allowed", decision.Allowed);
+                    trace.SetTag("concurrency.pipelineKey", context.PipelineKey);
+                    trace.SetTag("concurrency.stepKey", context.StepKey);
+                    trace.SetTag("concurrency.leaseId", context.LeaseId);
+                    trace.SetTag("workerId", context.RuntimeInstanceId);
+
+                    if (!decision.Allowed)
+                    {
+                        trace.SetTag("concurrency.denied", true);
+                        trace.SetTag("concurrency.reason", decision.Reason ?? "Concurrency limit reached.");
+                    }
+
+                    return decision;
+                }).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Attempts to atomically claim a specific ready step through the distributed DAG store.
         /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
-        /// <param name="stepName">The step name to claim.</param>
-        /// <param name="workerId">The worker identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The claimed step when claim acquisition succeeds; otherwise, <c>null</c>.</returns>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="stepName">
+        /// The step name to claim.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker identifier.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The claimed step when claim acquisition succeeds; otherwise, <c>null</c>.
+        /// </returns>
         private async Task<AiClaimedStep?> TryClaimStepAsync(
             string executionId,
             string stepName,
@@ -315,12 +501,49 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         }
 
         /// <summary>
+        /// Logs a throttled ready step candidate.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key.
+        /// </param>
+        /// <param name="stepName">
+        /// The throttled step name.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker identifier.
+        /// </param>
+        /// <param name="decision">
+        /// The denied concurrency decision.
+        /// </param>
+        private void LogThrottledStep(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            AiConcurrencyDecision decision)
+        {
+            _services.Logger.Engine.LogInformation(
+                $"[AI DAG] Step throttled. ExecutionId='{executionId}', PipelineKey='{pipelineKey}', StepName='{stepName}', Worker='{workerId}', Reason='{decision.Reason ?? "Concurrency limit reached."}'.");
+        }
+
+        /// <summary>
         /// Recovers timed-out running DAG steps through the distributed store.
         /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
-        /// <param name="workerId">The worker identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The number of recovered steps.</returns>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker identifier.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The number of recovered steps.
+        /// </returns>
         private async Task<int> RecoverTimedOutStepsAsync(
             string executionId,
             string workerId,

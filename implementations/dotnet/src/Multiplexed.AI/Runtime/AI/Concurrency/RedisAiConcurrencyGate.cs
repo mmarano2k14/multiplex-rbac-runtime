@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using Multiplexed.Abstractions.AI.Concurrency;
 using StackExchange.Redis;
 
@@ -56,6 +57,12 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     /// </para>
     ///
     /// <para>
+    /// When capacity cannot be acquired, Redis returns a detailed denial payload containing the
+    /// blocking scope key, the current active lease count, and the configured limit. This makes
+    /// throttling decisions observable and easier to diagnose in distributed environments.
+    /// </para>
+    ///
+    /// <para>
     /// Supported distributed scopes include:
     /// </para>
     ///
@@ -84,6 +91,11 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     /// </remarks>
     public sealed class RedisAiConcurrencyGate : IAiConcurrencyGate
     {
+        private static readonly JsonSerializerOptions GateResultJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
         private static readonly LuaScript AcquirePreparedScript = LuaScript.Prepare(
             """
             local scopes = cjson.decode(@scopesJson)
@@ -106,7 +118,12 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                         local current = redis.call('ZCARD', key)
 
                         if current >= limit then
-                            return 0
+                            return cjson.encode({
+                                allowed = false,
+                                blockedKey = key,
+                                current = current,
+                                limit = limit
+                            })
                         end
                     end
                 end
@@ -124,7 +141,9 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 end
             end
 
-            return 1
+            return cjson.encode({
+                allowed = true
+            })
             """);
 
         private static readonly LuaScript ReleasePreparedScript = LuaScript.Prepare(
@@ -185,7 +204,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// </param>
         /// <returns>
         /// An <see cref="AiConcurrencyDecision"/> allowing execution when all configured scope limits
-        /// have available capacity; otherwise, a denied decision with retry-after metadata.
+        /// have available capacity; otherwise, a denied decision with retry-after metadata and a
+        /// diagnostic reason describing the blocking scope.
         /// </returns>
         /// <remarks>
         /// <para>
@@ -343,7 +363,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// The concurrency definition used to create the deny decision when capacity is unavailable.
         /// </param>
         /// <returns>
-        /// An allowed decision when capacity was acquired; otherwise, a denied decision.
+        /// An allowed decision when capacity was acquired; otherwise, a denied decision containing
+        /// diagnostic information about the blocking scope.
         /// </returns>
         private async Task<AiConcurrencyDecision> TryAcquireAsync(
             string scopesJson,
@@ -362,13 +383,16 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                     expiresAtMs = (RedisValue)expiresAtMs
                 }).ConfigureAwait(false);
 
-            var allowed = (int)result! == 1;
+            var gateResult = DeserializeGateResult(result);
 
-            return allowed
-                ? AiConcurrencyDecision.Allow()
-                : AiConcurrencyDecision.Deny(
-                    "Concurrency limit reached.",
-                    TimeSpan.FromMilliseconds(definition.DefaultRetryAfterMs));
+            if (gateResult.Allowed)
+            {
+                return AiConcurrencyDecision.Allow();
+            }
+
+            return AiConcurrencyDecision.Deny(
+                CreateDeniedReason(gateResult),
+                TimeSpan.FromMilliseconds(definition.DefaultRetryAfterMs));
         }
 
         /// <summary>
@@ -512,6 +536,62 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
+        /// Deserializes the JSON response returned by the Redis Lua acquisition script.
+        /// </summary>
+        /// <param name="result">
+        /// The Redis script result.
+        /// </param>
+        /// <returns>
+        /// The deserialized gate result.
+        /// </returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the Redis Lua script returns an empty or invalid response.
+        /// </exception>
+        private static RedisConcurrencyGateResult DeserializeGateResult(RedisResult result)
+        {
+            var json = result.ToString();
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                throw new InvalidOperationException(
+                    "Redis concurrency gate returned an empty acquisition result.");
+            }
+
+            var gateResult = JsonSerializer.Deserialize<RedisConcurrencyGateResult>(
+                json,
+                GateResultJsonOptions);
+
+            if (gateResult is null)
+            {
+                throw new InvalidOperationException(
+                    $"Redis concurrency gate returned an invalid acquisition result: {json}");
+            }
+
+            return gateResult;
+        }
+
+        /// <summary>
+        /// Creates a human-readable denial reason from a Redis concurrency gate result.
+        /// </summary>
+        /// <param name="gateResult">
+        /// The denied gate result returned by Redis.
+        /// </param>
+        /// <returns>
+        /// A diagnostic reason describing which scope blocked the acquisition.
+        /// </returns>
+        private static string CreateDeniedReason(RedisConcurrencyGateResult gateResult)
+        {
+            if (string.IsNullOrWhiteSpace(gateResult.BlockedKey))
+            {
+                return "Concurrency limit reached.";
+            }
+
+            return
+                $"Concurrency limit reached for scope '{gateResult.BlockedKey}'. " +
+                $"Current='{gateResult.Current}', Limit='{gateResult.Limit}'.";
+        }
+
+        /// <summary>
         /// Gets a connected Redis server endpoint used for Lua script loading.
         /// </summary>
         /// <returns>
@@ -564,6 +644,42 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             {
                 return [Key, Limit];
             }
+        }
+
+        /// <summary>
+        /// Represents the structured result returned by the Redis Lua acquisition script.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The Lua script returns JSON instead of a simple integer so the runtime can expose
+        /// useful diagnostic information when admission is denied.
+        /// </para>
+        /// </remarks>
+        private sealed class RedisConcurrencyGateResult
+        {
+            /// <summary>
+            /// Gets or sets a value indicating whether distributed capacity was acquired.
+            /// </summary>
+            [JsonPropertyName("allowed")]
+            public bool Allowed { get; set; }
+
+            /// <summary>
+            /// Gets or sets the Redis scope key that blocked acquisition.
+            /// </summary>
+            [JsonPropertyName("blockedKey")]
+            public string? BlockedKey { get; set; }
+
+            /// <summary>
+            /// Gets or sets the current number of active leases in the blocking scope.
+            /// </summary>
+            [JsonPropertyName("current")]
+            public long? Current { get; set; }
+
+            /// <summary>
+            /// Gets or sets the configured concurrency limit for the blocking scope.
+            /// </summary>
+            [JsonPropertyName("limit")]
+            public long? Limit { get; set; }
         }
     }
 }

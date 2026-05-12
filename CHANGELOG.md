@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+## ## [1.0.4.5] - 2026-012-04 - Distributed Concurrency / Throttling
+
+- Added Redis-backed distributed concurrency gate using ZSET-based leases.
+- Replaced counter-style concurrency tracking with crash-safe lease expiration.
+- Added distributed concurrency scopes for:
+  - global runtime capacity
+  - pipeline-level throttling
+  - pipeline-step throttling
+  - execution-level bounded parallelism
+  - runtime-instance-level throttling
+- Added stable pipeline key propagation into distributed claim acquisition.
+- Ensured pipeline-step throttling is scoped by both pipeline key and step key to avoid cross-pipeline collisions.
+- Added diagnostic denial reasons when a concurrency scope blocks admission.
+- Added tracing and logging around concurrency admission decisions.
+- Ensured concurrency leases are released when:
+  - a DAG claim fails after concurrency admission
+  - a claimed step completes
+  - a claimed step fails
+- Added integration coverage for:
+  - global concurrency limits
+  - pipeline concurrency limits
+  - pipeline-step concurrency limits
+  - execution concurrency limits
+  - idempotent lease acquisition
+  - explicit lease release
+  - TTL-based crash recovery
+  - diagnostic throttling reasons
+- Added claim-service tests for:
+  - denied admission without DAG claim
+  - release after failed distributed claim race
+  - batch denied admission
+  - batch release after failed distributed claim race
+---
+
 ## [1.0.4.5] - 2026-012-04 - Runtime Concurrency / Distributed Throttling
 
 - Added Redis-backed distributed concurrency gate using ZSET-based leases.
