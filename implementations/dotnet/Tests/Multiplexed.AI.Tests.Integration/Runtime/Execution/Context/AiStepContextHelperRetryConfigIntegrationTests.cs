@@ -54,8 +54,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Context
 
             Assert.NotNull(result);
             Assert.Equal(
-                new[] { "retry.transient.redis", "retry.transient.llm" },
-                result!.Policies);
+                new[]
+                {
+                    "retry.transient.redis",
+                    "retry.transient.llm"
+                },
+                result!.Policies
+                    .Select(x => x.Name)
+                    .ToArray());
             Assert.Equal(5, result.MaxRetries);
             Assert.Equal(AiRetryBackoffStrategy.Exponential, result.Strategy);
             Assert.Equal(200, result.BaseDelayMs);
@@ -80,7 +86,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Context
                 .GetConfigAsync<AiRetryPolicyDefinition>("retry");
 
             Assert.NotNull(result);
-            Assert.Equal(new[] { "retry.transient.default" }, result!.Policies);
+            Assert.Equal(new[] { "retry.transient.default" }, result!.Policies.Select(x => x.Name).ToArray());
             Assert.Equal(3, result.MaxRetries);
             Assert.Equal(AiRetryBackoffStrategy.Fixed, result.Strategy);
             Assert.Equal(500, result.BaseDelayMs);

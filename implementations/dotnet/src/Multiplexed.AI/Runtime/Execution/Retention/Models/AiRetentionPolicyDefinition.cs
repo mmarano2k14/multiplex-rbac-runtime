@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.AI.Runtime.Execution.Retention.Models
+﻿using Multiplexed.Abstractions.AI.Policies;
+
+namespace Multiplexed.AI.Runtime.Execution.Retention.Models
 {
     /// <summary>
     /// Defines config-driven retention settings resolved by the retention engine.
@@ -17,11 +19,14 @@
         public bool Enabled { get; init; } = false;
 
         /// <summary>
-        /// Gets the ordered retention policy keys to evaluate.
+        /// Gets the ordered retention policies evaluated by the runtime.
         /// </summary>
-        public IReadOnlyCollection<string> Policies { get; init; } =
+        public List<AiConfiguredPolicyDefinition> Policies { get; init; } =
         [
-            "retention.compact.terminal"
+            new AiConfiguredPolicyDefinition
+            {
+                Name = "retention.compact.terminal"
+            }
         ];
 
         /// <summary>

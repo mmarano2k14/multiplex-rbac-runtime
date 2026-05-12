@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Rag.Normalization;
@@ -766,7 +767,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new List<string> { "retry.transient.default" },
+                        Policies =
+                        [
+                            new AiConfiguredPolicyDefinition
+                            {
+                                Name = "retry.transient.default"
+                            }
+                        ],
                         MaxRetries = 2,
                         MaxDelayMs = 5
                     }
@@ -915,7 +922,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new List<string> { "retry.transient.default" },
+                        Policies =
+                        [
+                            new AiConfiguredPolicyDefinition
+                            {
+                                Name = "retry.transient.default"
+                            }
+                        ],
                         MaxRetries = 1,
                         MaxDelayMs = 5
                     }
@@ -1194,7 +1207,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                     RecoveryCount = 0,
                     Retry = new AiRetryPolicyDefinition
                     {
-                        Policies = new List<string> { "retry.transient.default" },
+                        Policies = [new AiConfiguredPolicyDefinition { Name = "retry.transient.default" }],
                         MaxRetries = 2,
                         MaxDelayMs = 5
                     }

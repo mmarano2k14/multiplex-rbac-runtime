@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
@@ -18,19 +19,6 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
     /// - Execute retention policies.
     /// - Aggregate deterministic policy decisions.
     /// - Apply physical compaction and eviction through dedicated services.
-    ///
-    /// DESIGN:
-    /// - Fully config-driven.
-    /// - Safe by default.
-    /// - Policy execution is decision-only.
-    /// - Physical mutations are delegated to compaction and eviction services.
-    ///
-    /// IMPORTANT:
-    /// - Missing retention configuration results in no-op behavior.
-    /// - Disabled retention results in no-op behavior.
-    /// - Missing or unresolved policies result in no-op behavior.
-    /// - If a step is selected for both compaction and eviction, compaction is applied first,
-    ///   then eviction is applied. This ensures all policy decisions are respected.
     /// </remarks>
     [AiPolicyEngine(AiPolicyKind.Retention)]
     public sealed class DefaultAiRetentionEngine : AiPolicyEngine, IAiRetentionEngine
@@ -44,8 +32,6 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <param name="policyRegistry">The policy registry used to resolve retention policies.</param>
         /// <param name="stepContext">The current step execution context.</param>
         /// <param name="observability">The runtime observability facade.</param>
-        /// <param name="compactionService">The service used to apply retention compaction.</param>
-        /// <param name="evictionService">The service used to apply safe retention eviction.</param>
         public DefaultAiRetentionEngine(
              IAiPolicyRegistry policyRegistry,
              AiStepExecutionContext stepContext,
@@ -54,6 +40,7 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         {
             _compactionService = new DefaultAiRetentionCompactionService(
                 stepContext.Services.GetRequiredService<IAiStepResultPayloadCompactor>());
+
             _evictionService = new DefaultAiRetentionEvictionService(
                 stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
                 stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
@@ -89,13 +76,15 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                 return AiRetentionDecision.None("Retention trigger thresholds were not reached.");
             }
 
-            if (definition.Policies.Count == 0)
+            var policyNames = definition.Policies.GetPolicyNames();
+
+            if (policyNames.Count == 0)
             {
                 return AiRetentionDecision.None("No retention policies were configured.");
             }
 
             var policies = ResolvePolicies(
-                definition.Policies,
+                policyNames,
                 AiPolicyKind.Retention);
 
             if (policies.Count == 0)
@@ -217,11 +206,6 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <summary>
         /// Determines whether retention should run based on configured trigger thresholds.
         /// </summary>
-        /// <remarks>
-        /// Global thresholds such as total step count and completed step count are evaluated here.
-        /// Per-step inline payload pressure is also checked by looking at
-        /// <see cref="AiStepState.InlinePayloadSizeBytes"/>.
-        /// </remarks>
         /// <param name="state">The execution state to inspect.</param>
         /// <param name="trigger">The trigger definition containing threshold values.</param>
         /// <returns><c>true</c> when retention should run; otherwise, <c>false</c>.</returns>
@@ -275,11 +259,6 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <summary>
         /// Aggregates policy results into a single deterministic retention decision.
         /// </summary>
-        /// <remarks>
-        /// The aggregation preserves all policy decisions.
-        /// A step may appear in both the compaction and eviction sets.
-        /// In that case, the engine will compact it first and evict it afterwards.
-        /// </remarks>
         /// <param name="results">The policy results produced by the policy engine.</param>
         /// <returns>The aggregated retention decision.</returns>
         private static AiRetentionDecision AggregateDecisions(

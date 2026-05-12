@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Stores;
@@ -69,7 +70,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                         },
                         Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
                         {
-                            Policies = new List<string> { "retry.transient.default" },
+                            Policies = [new AiConfiguredPolicyDefinition { Name = "retry.transient.default" }],
                             MaxRetries = 3,
                         },
                         RecoveryCount = 0,
@@ -182,7 +183,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                         },
                         Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
                         {
-                            Policies = new List<string>  { "retry.transient.default" },
+                            Policies = [new AiConfiguredPolicyDefinition { Name = "retry.transient.default" }],
                             MaxRetries = 3,
                         },
                         RecoveryCount = 0,
@@ -385,7 +386,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Store
                         },
                         Retry = new Abstractions.AI.Retry.AiRetryPolicyDefinition
                         {
-                            Policies = new List<string> { "retry.transient.default" },
+                            Policies = [new AiConfiguredPolicyDefinition { Name = "retry.transient.default" }],
                             MaxRetries = 3,
                         },
                         RecoveryCount = 0,

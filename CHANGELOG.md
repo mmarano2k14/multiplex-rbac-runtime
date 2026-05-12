@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
+
+## [1.0.4.5] - 2026-012-04 - Policy Engine V2 - Structured Policy Definitions
+
+### Added
+
+- introduced `AiConfiguredPolicyDefinition`
+- introduced `AiConfiguredPolicyDefinitionJsonConverter`
+- added backward-compatible policy deserialization
+- added structured policy configuration support
+- added support for mixed legacy and structured policy formats
+- added policy metadata support (`Type`, `Config`)
+- added `GetPolicyNames()` extension helper
+- added integration tests for:
+  - Retry engine
+  - Retention engine
+  - Concurrency engine
+  - mixed policy formats
+  - structured policy execution
+
+### Changed
+
+- migrated retry policies from `List<string>` to `List<AiConfiguredPolicyDefinition>`
+- migrated retention policies from `List<string>` to `List<AiConfiguredPolicyDefinition>`
+- migrated concurrency policies from `List<string>` to `List<AiConfiguredPolicyDefinition>`
+- updated retry engine policy resolution
+- updated retention engine policy resolution
+- updated concurrency engine policy resolution
+- updated DAG execution integration tests
+- updated runtime policy compatibility tests
+- updated JSON pipeline compatibility behavior
+
+### Compatibility
+
+The runtime now supports both formats simultaneously.
+
+Legacy format:
+
+```json
+"policies": [
+  "retry.transient.default"
+]
+```
+
+Structured format:
+
+```json
+"policies": [
+  {
+    "name": "retry.transient.default",
+    "type": "retry",
+    "config": {
+      "maxRetries": 5
+    }
+  }
+]
+```
+
+### Notes
+
+Current runtime behavior resolves policies using:
+
+```txt
+policy.Name
+```
+
+The following fields are now available for future policy-driven orchestration features:
+
+- `Type`
+- `Config`
+
+This prepares the runtime for future capabilities such as:
+
+- distributed throttling
+- provider-based concurrency
+- tenant-aware orchestration
+- adaptive retry strategies
+- cost-aware execution
+- dynamic retention policies
+- advanced admission control
+- rate limiting
+- routing policies
+
+### Result
+
+The runtime now supports:
+
+- backward-compatible policy configuration
+- structured policy metadata
+- future extensible policy configuration
+- unified policy modeling across retry, retention, and concurrency engines
+- enterprise-ready policy extensibility
+
 ## [1.0.4.4] - 2026-08-04 - Concurrency Engine V1 — Distributed Admission & Claim Refactor
 
 ## Added

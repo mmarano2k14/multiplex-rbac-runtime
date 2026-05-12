@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Concurrency
+﻿using Multiplexed.Abstractions.AI.Policies;
+
+namespace Multiplexed.Abstractions.AI.Concurrency
 {
     /// <summary>
     /// Defines concurrency configuration and throttling policies for an AI step.
@@ -13,7 +15,7 @@
         /// <summary>
         /// Gets or sets the ordered concurrency policy keys evaluated by the runtime.
         /// </summary>
-        public List<string> Policies { get; set; } = [];
+        public List<AiConfiguredPolicyDefinition> Policies { get; set; } = new();
 
         /// <summary>
         /// Gets or sets the maximum number of concurrently executing steps

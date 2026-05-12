@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Multiplexed.Abstractions.AI.Policies;
+using System;
 using System.Collections.Generic;
 
 namespace Multiplexed.AI.Abstractions.AI.Retry
@@ -20,7 +21,7 @@ namespace Multiplexed.AI.Abstractions.AI.Retry
         /// The runtime evaluates these policies in order. Each key should correspond
         /// to a registered policy decorated with an AI policy attribute.
         /// </remarks>
-        public List<string> Policies { get; init; } = [];
+        public List<AiConfiguredPolicyDefinition> Policies { get; set; } = new();
 
         /// <summary>
         /// Gets the maximum number of retry attempts allowed for the step.

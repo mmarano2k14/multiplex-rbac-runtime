@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Observability;
-using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
 
@@ -21,7 +21,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         private static readonly AiConcurrencyDefinition DefaultConcurrencyDefinition = new()
         {
             Enabled = false,
-            Policies = new List<string>(),
+            Policies = [],
             DefaultRetryAfterMs = 250
         };
 
@@ -58,7 +58,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             }
 
             var policies = ResolvePolicies(
-                definition.Policies,
+                definition.Policies.GetPolicyNames(),
                 AiPolicyKind.Concurrency);
 
             var results = await ExecutePoliciesAsync(
@@ -121,7 +121,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             }
 
             var policies = ResolvePolicies(
-                definition.Policies,
+                definition.Policies.GetPolicyNames(),
                 AiPolicyKind.Concurrency);
 
             var results = await ExecutePoliciesAsync(

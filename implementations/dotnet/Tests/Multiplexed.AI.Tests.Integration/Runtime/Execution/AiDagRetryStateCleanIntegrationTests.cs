@@ -215,7 +215,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 Assert.Equal(2, step.Retry!.MaxRetries);
                 Assert.Equal(50, step.Retry.BaseDelayMs);
                 Assert.Equal(AiRetryBackoffStrategy.Fixed, step.Retry.Strategy);
-                Assert.Contains("retry.transient.default", step.Retry.Policies);
+                Assert.Contains(
+                    step.Retry.Policies,
+                    policy => policy.Name == "retry.transient.default");
                 Assert.Equal(0, step.RetryState!.RetryCount);
                 Assert.Null(step.RetryState.NextRetryAtUtc);
             }

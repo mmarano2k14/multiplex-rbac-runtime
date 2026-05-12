@@ -1,7 +1,8 @@
-﻿using Multiplexed.Abstractions.AI.Concurrency;
+﻿using System.Text.Json;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Pipeline;
-using System.Text.Json;
+using Multiplexed.Abstractions.AI.Policies;
 
 namespace Multiplexed.AI.Runtime.AI.Concurrency
 {
@@ -9,7 +10,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     /// Default implementation of <see cref="IAiConcurrencyDefinitionResolver"/>.
     /// </summary>
     /// <remarks>
-    /// Resolves <c>config.concurrency</c> from declarative pipeline metadata.
+    /// Resolves <c>config.concurrency</c> from declarative pipeline metadata
+    /// or persisted step state.
     ///
     /// Resolution order:
     /// - pipeline-level <c>Config["concurrency"]</c>
@@ -23,7 +25,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         private static readonly AiConcurrencyDefinition DisabledDefinition = new()
         {
             Enabled = false,
-            Policies = new List<string>(),
+            Policies = [],
             DefaultRetryAfterMs = 250,
             LeaseSeconds = 300
         };
@@ -119,6 +121,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                     ? step.Policies
                     : pipeline.Policies,
 
+                MaxDegreeOfParallelism = step.MaxDegreeOfParallelism ?? pipeline.MaxDegreeOfParallelism,
+
                 MaxGlobalConcurrency = step.MaxGlobalConcurrency ?? pipeline.MaxGlobalConcurrency,
                 MaxPipelineConcurrency = step.MaxPipelineConcurrency ?? pipeline.MaxPipelineConcurrency,
                 MaxStepConcurrency = step.MaxStepConcurrency ?? pipeline.MaxStepConcurrency,
@@ -131,7 +135,13 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
 
                 LeaseSeconds = step.LeaseSeconds > 0
                     ? step.LeaseSeconds
-                    : pipeline.LeaseSeconds
+                    : pipeline.LeaseSeconds,
+
+                Jitter = step.Jitter || pipeline.Jitter,
+
+                MaxJitterMs = step.MaxJitterMs > 0
+                    ? step.MaxJitterMs
+                    : pipeline.MaxJitterMs
             };
         }
 
@@ -146,7 +156,9 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             return new AiConcurrencyDefinition
             {
                 Enabled = definition.Enabled,
-                Policies = definition.Policies ?? new List<string>(),
+                Policies = definition.Policies ?? [],
+
+                MaxDegreeOfParallelism = definition.MaxDegreeOfParallelism,
 
                 MaxGlobalConcurrency = definition.MaxGlobalConcurrency,
                 MaxPipelineConcurrency = definition.MaxPipelineConcurrency,
@@ -160,7 +172,13 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
 
                 LeaseSeconds = definition.LeaseSeconds > 0
                     ? definition.LeaseSeconds
-                    : 300
+                    : 300,
+
+                Jitter = definition.Jitter,
+
+                MaxJitterMs = definition.MaxJitterMs > 0
+                    ? definition.MaxJitterMs
+                    : 100
             };
         }
     }
