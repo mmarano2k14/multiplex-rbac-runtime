@@ -6,7 +6,7 @@ Distributed • State-Driven • Fault-Tolerant • Observable
 
 This repository provides a **reference implementation of a multiplexed, deterministic AI runtime**, demonstrating how to build **distributed, observable, and fault-tolerant execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.3-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.4.5-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---
