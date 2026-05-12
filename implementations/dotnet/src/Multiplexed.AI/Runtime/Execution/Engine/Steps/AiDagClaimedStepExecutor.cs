@@ -105,7 +105,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             var concurrencyContext = new AiConcurrencyContext
             {
                 ExecutionId = record.ExecutionId,
-                PipelineKey = resolvedPipeline.Name,
+                PipelineKey = $"{resolvedPipeline.Name}:{resolvedPipeline.Version}",
                 StepId = claimedStep.StepName,
                 StepKey = resolvedStep.StepKey,
                 RuntimeInstanceId = Environment.MachineName,

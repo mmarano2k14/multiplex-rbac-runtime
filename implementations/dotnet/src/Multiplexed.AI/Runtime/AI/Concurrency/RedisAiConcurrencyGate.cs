@@ -1,90 +1,142 @@
-﻿using Multiplexed.Abstractions.AI.Concurrency;
+﻿using System.Text.Json;
+using Multiplexed.Abstractions.AI.Concurrency;
 using StackExchange.Redis;
-using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.AI.Concurrency
 {
     /// <summary>
-    /// Redis-backed distributed concurrency gate for AI runtime step execution.
+    /// Provides a Redis-backed distributed concurrency gate for AI runtime step execution.
     /// </summary>
     /// <remarks>
-    /// This gate enforces distributed concurrency limits through Redis Lua scripts.
+    /// <para>
+    /// This gate is responsible for acquiring and releasing distributed execution capacity
+    /// before a DAG step is claimed and executed.
+    /// </para>
     ///
-    /// Supported scopes:
-    /// - global runtime concurrency
-    /// - pipeline concurrency
-    /// - step concurrency
-    /// - execution concurrency
-    /// - runtime instance concurrency
+    /// <para>
+    /// The implementation is intentionally separated from the DAG claim mechanism:
+    /// </para>
     ///
-    /// The gate is responsible only for acquiring and releasing distributed execution capacity.
-    /// It does not decide policy eligibility and does not claim DAG steps.
+    /// <list type="bullet">
+    /// <item>
+    /// <description>
+    /// The concurrency engine decides whether a step is eligible from a policy/configuration perspective.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// This Redis gate acquires distributed capacity across all configured concurrency scopes.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// The DAG execution store remains responsible for atomically claiming the actual step ownership.
+    /// </description>
+    /// </item>
+    /// </list>
     ///
-    /// Crash recovery is handled through a Redis lease key with TTL.
-    /// Re-acquiring the same lease is idempotent.
+    /// <para>
+    /// The gate uses one Redis sorted set per concurrency scope. Each active lease is represented as:
+    /// </para>
+    ///
+    /// <list type="bullet">
+    /// <item>
+    /// <description><c>member</c>: the lease identifier.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>score</c>: the lease expiration timestamp in Unix milliseconds.</description>
+    /// </item>
+    /// </list>
+    ///
+    /// <para>
+    /// On every acquisition attempt, expired leases are removed before active leases are counted.
+    /// This makes the gate crash-safe: if a worker crashes before releasing its lease, the expired
+    /// lease is eventually removed by the next acquisition attempt and capacity is recovered without
+    /// relying on fragile counters.
+    /// </para>
+    ///
+    /// <para>
+    /// Supported distributed scopes include:
+    /// </para>
+    ///
+    /// <list type="bullet">
+    /// <item>
+    /// <description><c>global</c>: limits the entire runtime across all workers and instances.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>pipeline</c>: limits all executions of a specific pipeline.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>pipeline-step</c>: limits a logical step within a specific pipeline.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>execution</c>: limits parallel step execution inside a single DAG execution.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>instance</c>: limits capacity consumed by a specific runtime instance.</description>
+    /// </item>
+    /// </list>
+    ///
+    /// <para>
+    /// The <c>pipeline-step</c> scope intentionally combines the pipeline key and step key.
+    /// This avoids accidentally throttling unrelated pipelines that use the same logical step key.
+    /// </para>
     /// </remarks>
     public sealed class RedisAiConcurrencyGate : IAiConcurrencyGate
     {
         private static readonly LuaScript AcquirePreparedScript = LuaScript.Prepare(
             """
-            local keys = cjson.decode(@keysJson)
-            local limits = cjson.decode(@limitsJson)
-            local leaseKey = @leaseKey
-            local leaseTtlSeconds = tonumber(@leaseTtlSeconds)
+            local scopes = cjson.decode(@scopesJson)
+            local leaseId = @leaseId
+            local nowMs = tonumber(@nowMs)
+            local expiresAtMs = tonumber(@expiresAtMs)
 
-            if redis.call('EXISTS', leaseKey) == 1 then
-                return 1
-            end
+            -- First pass:
+            -- Remove expired leases and validate every configured scope before acquiring anything.
+            -- This preserves all-or-nothing admission semantics.
+            for i, scope in ipairs(scopes) do
+                local key = scope[1]
+                local limit = tonumber(scope[2])
 
-            local acquired = {}
+                if key ~= nil and limit ~= nil and limit > 0 then
+                    redis.call('ZREMRANGEBYSCORE', key, '-inf', nowMs)
 
-            for i, key in ipairs(keys) do
-                local limit = tonumber(limits[i])
+                    local exists = redis.call('ZSCORE', key, leaseId)
+                    if not exists then
+                        local current = redis.call('ZCARD', key)
 
-                if limit ~= nil and limit > 0 then
-                    local current = redis.call('INCR', key)
-
-                    if current > limit then
-                        redis.call('DECR', key)
-
-                        for _, acquiredKey in ipairs(acquired) do
-                            local value = redis.call('DECR', acquiredKey)
-
-                            if value < 0 then
-                                redis.call('SET', acquiredKey, 0)
-                            end
+                        if current >= limit then
+                            return 0
                         end
-
-                        return 0
                     end
-
-                    table.insert(acquired, key)
                 end
             end
 
-            redis.call('SET', leaseKey, cjson.encode(acquired), 'EX', leaseTtlSeconds)
+            -- Second pass:
+            -- Acquire or refresh the same lease id in every configured scope.
+            -- Using the same lease id makes repeated acquisition attempts idempotent.
+            for i, scope in ipairs(scopes) do
+                local key = scope[1]
+                local limit = tonumber(scope[2])
+
+                if key ~= nil and limit ~= nil and limit > 0 then
+                    redis.call('ZADD', key, expiresAtMs, leaseId)
+                end
+            end
 
             return 1
             """);
 
         private static readonly LuaScript ReleasePreparedScript = LuaScript.Prepare(
             """
-            local leaseKey = @leaseKey
+            local scopes = cjson.decode(@scopesJson)
+            local leaseId = @leaseId
 
-            local raw = redis.call('GET', leaseKey)
-            if not raw then
-                return 1
-            end
+            for i, scope in ipairs(scopes) do
+                local key = scope[1]
 
-            local keys = cjson.decode(raw)
-
-            redis.call('DEL', leaseKey)
-
-            for _, key in ipairs(keys) do
-                local current = redis.call('DECR', key)
-
-                if current < 0 then
-                    redis.call('SET', key, 0)
+                if key ~= nil then
+                    redis.call('ZREM', key, leaseId)
                 end
             end
 
@@ -100,7 +152,12 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <summary>
         /// Initializes a new instance of the <see cref="RedisAiConcurrencyGate"/> class.
         /// </summary>
-        /// <param name="multiplexer">The Redis connection multiplexer.</param>
+        /// <param name="multiplexer">
+        /// The Redis connection multiplexer used to access the Redis database and load Lua scripts.
+        /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="multiplexer"/> is <see langword="null"/>.
+        /// </exception>
         public RedisAiConcurrencyGate(IConnectionMultiplexer multiplexer)
         {
             ArgumentNullException.ThrowIfNull(multiplexer);
@@ -112,7 +169,44 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             _releaseLoadedScript = LoadScript(ReleasePreparedScript);
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Attempts to acquire distributed concurrency capacity for the supplied execution context.
+        /// </summary>
+        /// <param name="context">
+        /// The concurrency context describing the execution, pipeline, step, runtime instance,
+        /// and lease identity participating in admission control.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition containing the enabled flag, concurrency limits,
+        /// lease duration, and retry-after behavior.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A cancellation token used by the caller to cancel the admission operation.
+        /// </param>
+        /// <returns>
+        /// An <see cref="AiConcurrencyDecision"/> allowing execution when all configured scope limits
+        /// have available capacity; otherwise, a denied decision with retry-after metadata.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// The acquisition is atomic across all configured scopes. If any scope is at capacity,
+        /// no lease is acquired in any scope.
+        /// </para>
+        ///
+        /// <para>
+        /// The same lease id is added to every applicable scope. This makes release simple and keeps
+        /// the acquired capacity tied to the lifecycle of one claimed step execution.
+        /// </para>
+        ///
+        /// <para>
+        /// If a worker crashes after acquisition, the lease is not immediately removed. Instead,
+        /// it naturally expires based on its score and is removed during a future acquisition attempt.
+        /// This prevents permanent capacity leaks.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="context"/> or <paramref name="definition"/> is <see langword="null"/>.
+        /// </exception>
         public async Task<AiConcurrencyDecision> TryAcquireAsync(
             AiConcurrencyContext context,
             AiConcurrencyDefinition definition,
@@ -133,18 +227,19 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 return AiConcurrencyDecision.Allow();
             }
 
-            var keysJson = JsonSerializer.Serialize(scopes.Select(scope => scope.Key));
-            var limitsJson = JsonSerializer.Serialize(scopes.Select(scope => scope.Limit));
-            var leaseKey = GetLeaseKey(context);
-            var leaseTtlSeconds = Math.Max(1, definition.LeaseSeconds);
+            var leaseSeconds = Math.Max(1, definition.LeaseSeconds);
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var expiresAtMs = nowMs + TimeSpan.FromSeconds(leaseSeconds).TotalMilliseconds;
+
+            var scopesJson = SerializeScopes(scopes);
 
             try
             {
                 return await TryAcquireAsync(
-                        keysJson,
-                        limitsJson,
-                        leaseKey,
-                        leaseTtlSeconds,
+                        scopesJson,
+                        context.LeaseId,
+                        nowMs,
+                        (long)expiresAtMs,
                         definition)
                     .ConfigureAwait(false);
             }
@@ -153,16 +248,49 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 _acquireLoadedScript = LoadScript(AcquirePreparedScript);
 
                 return await TryAcquireAsync(
-                        keysJson,
-                        limitsJson,
-                        leaseKey,
-                        leaseTtlSeconds,
+                        scopesJson,
+                        context.LeaseId,
+                        nowMs,
+                        (long)expiresAtMs,
                         definition)
                     .ConfigureAwait(false);
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Releases previously acquired distributed concurrency capacity for the supplied context.
+        /// </summary>
+        /// <param name="context">
+        /// The concurrency context containing the lease id and the scope identity used during acquisition.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition used to rebuild the same scope keys that were used
+        /// during acquisition.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A cancellation token used by the caller to cancel the release operation.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous release operation.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Release removes the lease id from every configured scope.
+        /// </para>
+        ///
+        /// <para>
+        /// Callers should release capacity after the claimed step completes, fails, or is cancelled.
+        /// If capacity is acquired but the DAG step claim fails, callers should also release immediately
+        /// to avoid holding capacity for a step that was never executed.
+        /// </para>
+        ///
+        /// <para>
+        /// Release is idempotent. Removing a lease id that no longer exists has no effect.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="context"/> or <paramref name="definition"/> is <see langword="null"/>.
+        /// </exception>
         public async Task ReleaseAsync(
             AiConcurrencyContext context,
             AiConcurrencyDefinition definition,
@@ -183,45 +311,56 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 return;
             }
 
-            var leaseKey = GetLeaseKey(context);
+            var scopesJson = SerializeScopes(scopes);
 
             try
             {
-                await ReleaseAsync(leaseKey).ConfigureAwait(false);
+                await ReleaseAsync(scopesJson, context.LeaseId).ConfigureAwait(false);
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
                 _releaseLoadedScript = LoadScript(ReleasePreparedScript);
-
-                await ReleaseAsync(leaseKey).ConfigureAwait(false);
+                await ReleaseAsync(scopesJson, context.LeaseId).ConfigureAwait(false);
             }
         }
 
         /// <summary>
-        /// Attempts to acquire all configured concurrency scopes atomically.
+        /// Executes the loaded Redis Lua acquisition script.
         /// </summary>
-        /// <param name="keysJson">The serialized Redis counter keys.</param>
-        /// <param name="limitsJson">The serialized concurrency limits.</param>
-        /// <param name="leaseKey">The Redis lease key used for idempotency and crash recovery.</param>
-        /// <param name="leaseTtlSeconds">The lease TTL in seconds.</param>
-        /// <param name="definition">The concurrency definition.</param>
-        /// <returns>The concurrency decision.</returns>
+        /// <param name="scopesJson">
+        /// The serialized list of Redis concurrency scopes and their limits.
+        /// </param>
+        /// <param name="leaseId">
+        /// The lease identifier to acquire or refresh in every configured scope.
+        /// </param>
+        /// <param name="nowMs">
+        /// The current Unix timestamp in milliseconds.
+        /// </param>
+        /// <param name="expiresAtMs">
+        /// The Unix timestamp in milliseconds at which the lease should be considered expired.
+        /// </param>
+        /// <param name="definition">
+        /// The concurrency definition used to create the deny decision when capacity is unavailable.
+        /// </param>
+        /// <returns>
+        /// An allowed decision when capacity was acquired; otherwise, a denied decision.
+        /// </returns>
         private async Task<AiConcurrencyDecision> TryAcquireAsync(
-            string keysJson,
-            string limitsJson,
-            string leaseKey,
-            int leaseTtlSeconds,
+            string scopesJson,
+            string leaseId,
+            long nowMs,
+            long expiresAtMs,
             AiConcurrencyDefinition definition)
         {
             var result = await _acquireLoadedScript.EvaluateAsync(
                 _database,
                 new
                 {
-                    keysJson = (RedisValue)keysJson,
-                    limitsJson = (RedisValue)limitsJson,
-                    leaseKey = (RedisKey)leaseKey,
-                    leaseTtlSeconds = (RedisValue)leaseTtlSeconds
-                });
+                    scopesJson = (RedisValue)scopesJson,
+                    leaseId = (RedisValue)leaseId,
+                    nowMs = (RedisValue)nowMs,
+                    expiresAtMs = (RedisValue)expiresAtMs
+                }).ConfigureAwait(false);
 
             var allowed = (int)result! == 1;
 
@@ -233,25 +372,64 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Releases all concurrency scopes associated with the lease.
+        /// Executes the loaded Redis Lua release script.
         /// </summary>
-        /// <param name="leaseKey">The Redis lease key used to resolve acquired counters.</param>
-        private async Task ReleaseAsync(string leaseKey)
+        /// <param name="scopesJson">
+        /// The serialized list of Redis concurrency scopes from which the lease should be removed.
+        /// </param>
+        /// <param name="leaseId">
+        /// The lease identifier to remove from every configured scope.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous Redis script execution.
+        /// </returns>
+        private async Task ReleaseAsync(
+            string scopesJson,
+            string leaseId)
         {
             await _releaseLoadedScript.EvaluateAsync(
                 _database,
                 new
                 {
-                    leaseKey = (RedisKey)leaseKey
-                });
+                    scopesJson = (RedisValue)scopesJson,
+                    leaseId = (RedisValue)leaseId
+                }).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Builds the Redis concurrency scopes enabled by the concurrency definition.
+        /// Builds the Redis concurrency scopes required by the resolved concurrency definition.
         /// </summary>
-        /// <param name="context">The concurrency context.</param>
-        /// <param name="definition">The concurrency definition.</param>
-        /// <returns>The enabled concurrency scopes.</returns>
+        /// <param name="context">
+        /// The concurrency context containing the execution, pipeline, step, and runtime instance identifiers.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition containing optional limits for each supported scope.
+        /// </param>
+        /// <returns>
+        /// A list of concurrency scopes that should participate in distributed admission control.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Only scopes with a positive configured limit are included.
+        /// </para>
+        ///
+        /// <para>
+        /// <c>ExecutionId</c> is intentionally used for the execution scope. This limits how many steps
+        /// from the same DAG execution may run concurrently, which is required for bounded parallel DAG
+        /// execution.
+        /// </para>
+        ///
+        /// <para>
+        /// <c>StepKey</c> is intentionally combined with <c>PipelineKey</c> for the step scope.
+        /// This avoids a global collision where unrelated pipelines with the same step key would
+        /// throttle each other unintentionally.
+        /// </para>
+        ///
+        /// <para>
+        /// The actual single-step ownership guarantee still belongs to the DAG claim operation.
+        /// This gate only controls distributed capacity, not step ownership.
+        /// </para>
+        /// </remarks>
         private static List<ConcurrencyScope> BuildScopes(
             AiConcurrencyContext context,
             AiConcurrencyDefinition definition)
@@ -260,38 +438,44 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
 
             AddScope(
                 scopes,
-                "ai:concurrency:global",
+                "ai:concurrency:scope:global",
                 definition.MaxGlobalConcurrency);
 
             AddScope(
                 scopes,
-                $"ai:concurrency:pipeline:{context.PipelineKey}",
+                $"ai:concurrency:scope:pipeline:{context.PipelineKey}",
                 definition.MaxPipelineConcurrency);
 
             AddScope(
                 scopes,
-                $"ai:concurrency:step:{context.StepKey}",
+                $"ai:concurrency:scope:pipeline-step:{context.PipelineKey}:{context.StepKey}",
                 definition.MaxStepConcurrency);
 
             AddScope(
                 scopes,
-                $"ai:concurrency:execution:{context.ExecutionId}",
+                $"ai:concurrency:scope:execution:{context.ExecutionId}",
                 definition.MaxExecutionConcurrency);
 
             AddScope(
                 scopes,
-                $"ai:concurrency:instance:{context.RuntimeInstanceId}",
+                $"ai:concurrency:scope:instance:{context.RuntimeInstanceId}",
                 definition.MaxInstanceConcurrency);
 
             return scopes;
         }
 
         /// <summary>
-        /// Adds a concurrency scope when its limit is configured.
+        /// Adds a concurrency scope when its configured limit is positive.
         /// </summary>
-        /// <param name="scopes">The target scope collection.</param>
-        /// <param name="key">The Redis counter key.</param>
-        /// <param name="limit">The configured limit.</param>
+        /// <param name="scopes">
+        /// The collection to which the scope should be added.
+        /// </param>
+        /// <param name="key">
+        /// The Redis sorted set key representing the concurrency scope.
+        /// </param>
+        /// <param name="limit">
+        /// The maximum number of active leases allowed for the scope.
+        /// </param>
         private static void AddScope(
             ICollection<ConcurrencyScope> scopes,
             string key,
@@ -306,19 +490,37 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Builds the Redis lease key for a concurrency acquisition.
+        /// Serializes concurrency scopes as positional arrays for Lua consumption.
         /// </summary>
-        /// <param name="context">The concurrency context.</param>
-        /// <returns>The Redis lease key.</returns>
-        private static string GetLeaseKey(AiConcurrencyContext context)
+        /// <param name="scopes">
+        /// The scopes to serialize.
+        /// </param>
+        /// <returns>
+        /// A JSON payload where each scope is represented as <c>[key, limit]</c>.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This intentionally avoids object property name casing issues between C# JSON serialization
+        /// and Lua JSON decoding. Lua reads <c>scope[1]</c> as the Redis key and <c>scope[2]</c>
+        /// as the numeric limit.
+        /// </para>
+        /// </remarks>
+        private static string SerializeScopes(IEnumerable<ConcurrencyScope> scopes)
         {
-            return $"ai:concurrency:lease:{context.LeaseId}";
+            return JsonSerializer.Serialize(
+                scopes.Select(scope => scope.ToJsonArray()));
         }
 
         /// <summary>
-        /// Retrieves a connected Redis server for script loading.
+        /// Gets a connected Redis server endpoint used for Lua script loading.
         /// </summary>
-        /// <returns>The connected Redis server.</returns>
+        /// <returns>
+        /// A connected Redis server.
+        /// </returns>
+        /// <remarks>
+        /// StackExchange.Redis requires scripts to be loaded against a server endpoint before
+        /// they can be evaluated as loaded Lua scripts.
+        /// </remarks>
         private IServer GetServer()
         {
             return _multiplexer.GetEndPoints()
@@ -327,10 +529,14 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Loads a prepared Lua script onto Redis and returns its SHA-bound instance.
+        /// Loads a prepared Lua script onto a connected Redis server.
         /// </summary>
-        /// <param name="script">The prepared Lua script.</param>
-        /// <returns>The loaded Lua script.</returns>
+        /// <param name="script">
+        /// The prepared Lua script to load.
+        /// </param>
+        /// <returns>
+        /// The loaded Lua script ready for evaluation.
+        /// </returns>
         private LoadedLuaScript LoadScript(LuaScript script)
         {
             var server = GetServer();
@@ -338,10 +544,26 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Represents one configured Redis concurrency scope.
+        /// Represents a Redis concurrency scope and its maximum active lease limit.
         /// </summary>
-        /// <param name="Key">The Redis counter key.</param>
-        /// <param name="Limit">The concurrency limit.</param>
-        private sealed record ConcurrencyScope(string Key, int Limit);
+        /// <param name="Key">
+        /// The Redis sorted set key used to track active leases for this scope.
+        /// </param>
+        /// <param name="Limit">
+        /// The maximum number of active leases allowed in this scope.
+        /// </param>
+        private sealed record ConcurrencyScope(string Key, int Limit)
+        {
+            /// <summary>
+            /// Converts the scope into a positional array consumed by Redis Lua scripts.
+            /// </summary>
+            /// <returns>
+            /// An array in the form <c>[key, limit]</c>.
+            /// </returns>
+            public object[] ToJsonArray()
+            {
+                return [Key, Limit];
+            }
+        }
     }
 }
