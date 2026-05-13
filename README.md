@@ -1394,22 +1394,31 @@ Example:
     "concurrency": {
       "enabled": true,
       "maxDegreeOfParallelism": 8,
+
       "maxGlobalConcurrency": 100,
       "maxPipelineConcurrency": 20,
       "maxStepConcurrency": 5,
       "maxExecutionConcurrency": 10,
       "maxInstanceConcurrency": 8,
+
+      "maxProviderConcurrency": 25,
+      "maxModelConcurrency": 10,
+      "maxOperationConcurrency": 15,
+
       "leaseSeconds": 300,
       "defaultRetryAfterMs": 250,
       "jitter": false,
+
       "policies": [
         {
-          "name": "concurrency.scope.default",
-          "type": "scope",
+          "name": "provider.openai.standard",
+          "kind": "Concurrency",
           "config": {
-            "kind": "provider",
-            "value": "openai",
-            "limit": 5
+            "maxProviderConcurrency": 25,
+            "maxModelConcurrency": 10,
+            "maxOperationConcurrency": 15,
+            "leaseSeconds": 300,
+            "defaultRetryAfterMs": 250
           }
         }
       ]
@@ -1417,6 +1426,20 @@ Example:
   }
 }
 ```
+
+Concurrency configuration supports both direct values and policy-config defaults.
+
+Effective priority:
+
+```text
+step direct config
+    > step policy config
+    > pipeline direct config
+    > pipeline policy config
+    > runtime defaults
+```
+
+Direct `config.concurrency` values always remain authoritative. Policy config values are used only to fill missing values.
 
 ### Redis ZSET Lease Model
 
@@ -1433,14 +1456,14 @@ Before acquiring capacity, Redis Lua removes expired leases:
 ```text
 ZREMRANGEBYSCORE scopeKey -inf now
 ```
-
 Then it counts active leases:
-
+```text
 ZCARD scopeKey
-
+```
 If capacity is available, the lease is added:
-
+```text
 ZADD scopeKey expiresAt leaseId
+```
 
 This avoids counter drift.
 
@@ -1453,9 +1476,47 @@ This allows the runtime to scale execution throughput while preserving:
 - recovery correctness
 - retention compatibility
 - distributed throttling readiness
-- future provider/model/tenant-aware admission control
+- provider/model/operation distributed throttling is supported today
 
 ---
+### Supported Distributed Concurrency Scopes
+
+The runtime supports the following distributed concurrency scopes:
+
+```text
+global
+pipeline
+pipeline-step
+execution
+instance
+```
+These scopes can be combined for a single step.
+
+The Redis keys follow this structure:
+
+```text
+ai:concurrency:scope:global
+ai:concurrency:scope:pipeline:{pipelineKey}
+ai:concurrency:scope:pipeline-step:{pipelineKey}:{stepKey}
+ai:concurrency:scope:execution:{executionId}
+ai:concurrency:scope:instance:{runtimeInstanceId}
+```
+
+### 4. Ajouter un sous-bloc Diagnostic Denial Reasons
+
+Toujours dans la même zone, après les scopes :
+
+
+### Diagnostic Denial Reasons
+
+When concurrency admission is denied, the Redis gate returns a diagnostic reason that identifies the blocking scope.
+
+Example:
+
+```text
+Concurrency limit reached for scope 'ai:concurrency:scope:pipeline-step:content:v1:llm.summary'. Current='3', Limit='3'.
+```
+This makes throttling decisions visible through logs, tracing, and tests.
 
 ### Concurrency Engine
 
@@ -1503,7 +1564,7 @@ This configuration unifies:
 - distributed concurrency limits
 - lease-based slot ownership
 - retry-after behavior
-- future policy-driven throttling
+- Config-Driven and Policy-Config Throttling
 
 Example:
 
@@ -1530,26 +1591,18 @@ Example:
 
 #### Local vs Distributed Concurrency
 
-`maxDegreeOfParallelism` controls local execution parallelism inside one runtime instance.
-
 Distributed limits control admission across the runtime:
 
-- `maxGlobalConcurrency`  
-  limits total concurrent execution across the whole runtime
+- `maxGlobalConcurrency` limits total concurrent execution across the whole runtime.
+- `maxPipelineConcurrency` limits concurrent execution for the same pipeline.
+- `maxStepConcurrency` limits concurrent execution for the same step key inside the same pipeline.
+- `maxExecutionConcurrency` limits concurrent execution inside one execution.
+- `maxInstanceConcurrency` limits concurrent execution inside one runtime instance.
+- `maxProviderConcurrency` limits concurrent execution for the same external provider.
+- `maxModelConcurrency` limits concurrent execution for the same provider/model pair.
+- `maxOperationConcurrency` limits concurrent execution for the same logical operation.
 
-- `maxPipelineConcurrency`  
-  limits concurrent execution for the same pipeline
-
-- `maxStepConcurrency`  
-  limits concurrent execution for the same step key
-
-- `maxExecutionConcurrency`  
-  limits concurrent execution inside one execution
-
-- `maxInstanceConcurrency`  
-  limits concurrent execution inside one runtime instance
-
-This allows the runtime to scale horizontally while keeping execution bounded.
+This allows the runtime to scale horizontally while keeping execution bounded across internal runtime scopes and external AI/provider dependencies.
 
 ---
 
@@ -1570,6 +1623,81 @@ If the claim fails, the slot is released immediately.
 If the step executes, the slot is released after execution completes or fails.
 
 This avoids leaked concurrency capacity during normal execution.
+
+---
+
+#### Redis ZSET Lease Model
+
+Distributed concurrency is implemented with Redis sorted-set leases.
+
+Each concurrency scope is stored as a Redis ZSET.
+
+Each active lease is represented as:
+
+```text
+member = lease id
+score  = expiration timestamp in Unix milliseconds
+```
+
+Before acquiring capacity, Redis Lua removes expired leases:
+
+```text
+ZREMRANGEBYSCORE scopeKey -inf now
+```
+
+Then it counts active leases:
+
+```text
+ZCARD scopeKey
+```
+
+If capacity is available, the lease is added:
+
+```text
+ZADD scopeKey expiresAt leaseId
+```
+
+This avoids counter drift.
+
+If a worker crashes after acquiring capacity but before releasing it, the lease eventually expires. A later acquisition attempt removes expired leases and restores capacity automatically.
+
+---
+
+#### Supported Distributed Concurrency Scopes
+
+The runtime supports the following distributed concurrency scopes:
+
+```text
+global
+pipeline
+pipeline-step
+execution
+instance
+provider
+model
+operation
+```
+
+The Redis keys follow this structure:
+
+```text
+ai:concurrency:scope:global
+ai:concurrency:scope:pipeline:{pipelineKey}
+ai:concurrency:scope:pipeline-step:{pipelineKey}:{stepKey}
+ai:concurrency:scope:execution:{executionId}
+ai:concurrency:scope:instance:{runtimeInstanceId}
+ai:concurrency:scope:provider:{provider}
+ai:concurrency:scope:model:{provider}:{model}
+ai:concurrency:scope:operation:{operation}
+```
+
+The `pipeline-step` scope intentionally combines the pipeline key and step key.
+
+This prevents unrelated pipelines from throttling each other when they use the same logical step name.
+
+The `model` scope intentionally combines provider and model.
+
+This avoids collisions between different providers that may expose similarly named models.
 
 ---
 
@@ -1608,36 +1736,50 @@ If the claim succeeds, the slot remains owned until step execution finishes.
 
 ---
 
-#### Future Policy-Driven Throttling
+#### Config-Driven and Policy-Config Throttling
 
-The Concurrency Engine is prepared for policy-driven throttling.
+The Concurrency Engine is config-driven today.
 
-Structured policies can define custom scopes such as:
+Direct concurrency values can be declared directly inside `config.concurrency`:
 
 ```json
 {
-  "name": "concurrency.scope.default",
-  "type": "scope",
-  "config": {
-    "kind": "provider",
-    "value": "openai",
-    "limit": 5
+  "concurrency": {
+    "enabled": true,
+    "maxProviderConcurrency": 10,
+    "maxModelConcurrency": 5,
+    "maxOperationConcurrency": 8
+  }
+}
+```
+Concurrency policies can also provide default configuration bundles:
+
+```json
+{
+  "concurrency": {
+    "enabled": true,
+    "policies": [
+      {
+        "name": "provider.openai.standard",
+        "kind": "Concurrency",
+        "config": {
+          "maxProviderConcurrency": 10,
+          "maxModelConcurrency": 5,
+          "maxOperationConcurrency": 8,
+          "leaseSeconds": 300,
+          "defaultRetryAfterMs": 250
+        }
+      }
+    ]
   }
 }
 ```
 
-This will allow future throttling by:
+Policy config does not execute policy logic yet.
 
-- provider
-- model
-- tenant
-- tool
-- operation
-- external dependency
+It acts as a structured default bundle. Direct `config.concurrency` values override policy config values.
 
-The policy defines the admission rule.
-
-The Redis concurrency gate enforces it atomically.
+This gives the runtime a stable path toward future policy-engine-driven throttling while already supporting provider, model, and operation-level distributed admission today.
 
 ---
 
@@ -1650,7 +1792,7 @@ The Concurrency Engine provides:
 - distributed concurrency limits
 - Redis-backed slot ownership
 - lease-based crash safety
-- future provider/model/tenant-aware throttling
+- provider/model/operation distributed throttling is supported today
 
 It is the runtime layer responsible for preventing overload while preserving deterministic distributed execution.
 
@@ -1845,7 +1987,7 @@ A policy can now be declared as an object:
   "policies": [
     {
       "name": "retry.timeout.default",
-      "type": "retry",
+      "kind": "retry",
       "config": {
         "code": "timeout"
       }
@@ -1871,7 +2013,7 @@ Current runtime policy resolution uses:
 policy.Name
 ```
 
-The `type` and `config` fields are forward-compatible extension points.
+The `kind` and `config` fields are forward-compatible extension points.
 
 They allow future policies to carry structured configuration without changing the runtime policy model.
 
@@ -1898,7 +2040,7 @@ Structured format:
   "policies": [
     {
       "name": "retry.transient.default",
-      "type": "retry",
+      "kind": "retry",
       "config": {
         "maxRetries": 5
       }
@@ -1943,7 +2085,7 @@ Each section may use legacy string policies or structured policy objects.
         "retry.transient.default",
         {
           "name": "retry.timeout.default",
-          "type": "retry",
+          "kind": "retry",
           "config": {
             "code": "timeout"
           }
@@ -1963,31 +2105,31 @@ Each section may use legacy string policies or structured policy objects.
 
 ```json
 {
-  "config": {
-    "concurrency": {
-      "enabled": true,
-      "maxDegreeOfParallelism": 8,
-      "policies": [
-        {
-          "name": "concurrency.scope.default",
-          "type": "scope",
-          "config": {
-            "kind": "provider",
-            "value": "openai",
-            "limit": 5
-          }
-        }
-      ]
+  "policies": [
+    {
+      "name": "concurrency.scope.default",
+      "kind": "Concurrency",
+      "config": {
+        "maxProviderConcurrency": 10,
+        "maxModelConcurrency": 5,
+        "maxOperationConcurrency": 8
+      }
     }
-  }
+  ]
 }
 ```
+
+The `name` field is used for policy registry lookup.
+
+The `kind` and `config` fields allow policies to carry structured metadata and policy-specific configuration.
+
+For backward compatibility, legacy JSON using `type` is still accepted during deserialization, but new JSON should prefer `kind`.
 
 ---
 
 ### Future Use Cases
 
-Structured policy configuration enables future runtime capabilities such as:
+Structured policy configuration already supports default configuration bundles for concurrency admission and provides a path toward future policy-engine-driven capabilities such as:
 
 - provider-aware throttling
 - model-level concurrency limits
@@ -2070,7 +2212,7 @@ The runtime supports both legacy string policies and structured policy objects.
         "retry.transient.default",
         {
           "name": "retry.timeout.default",
-          "type": "retry",
+          "kind": "retry",
           "config": {
             "code": "timeout"
           }
@@ -4040,6 +4182,7 @@ They are integrated into the runtime at multiple levels, including:
 - retention decisions
 - resolver behavior
 - storage interactions
+- distributed concurrency admission
 
 Each component contributes its own metrics, allowing a full view of system behavior.
 
@@ -4149,6 +4292,29 @@ These metrics provide visibility into:
 
 ---
 
+### Concurrency Admission Observability
+
+Distributed concurrency admission is traced before DAG step ownership is claimed.
+
+The runtime records:
+
+- whether admission was allowed or denied
+- the pipeline key
+- the step key
+- the lease id
+- the worker/runtime instance id
+- the diagnostic denial reason when throttled
+
+Example denial reason:
+
+```text
+Concurrency limit reached for scope 'ai:concurrency:scope:provider:openai'. Current='10', Limit='10'.
+```
+
+This makes it possible to understand why a ready step was not executed even though its dependencies were complete.
+
+---
+
 ### Logging Integration
 
 In addition to metrics, the runtime integrates structured logging.
@@ -4160,6 +4326,7 @@ Logs include:
 - failures and exceptions
 - retry decisions
 - retention actions
+- concurrency throttling decisions
 
 Logs are structured to support:
 
@@ -4439,11 +4606,11 @@ Or using the structured format:
   "policies": [
     {
       "name": "concurrency.scope.default",
-      "type": "scope",
+      "kind": "Concurrency",
       "config": {
-        "kind": "provider",
-        "value": "openai",
-        "limit": 5
+        "maxProviderConcurrency": 10,
+        "maxModelConcurrency": 5,
+        "maxOperationConcurrency": 8
       }
     }
   ]
@@ -4452,7 +4619,9 @@ Or using the structured format:
 
 The `name` field is used for policy registry lookup.
 
-The `type` and `config` fields allow policies to carry structured metadata and policy-specific configuration.
+The `kind` and `config` fields allow policies to carry structured metadata and policy-specific configuration.
+
+For backward compatibility, legacy JSON using `type` is still accepted during deserialization, but new JSON should prefer `kind`.
 
 This prepares the runtime for advanced policy-driven orchestration such as:
 

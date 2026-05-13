@@ -470,52 +470,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         }
 
         /// <summary>
-        /// Creates a concurrency context for a claimed DAG step.
-        /// </summary>
-        /// <param name="executionId">
-        /// The concrete execution identifier.
-        /// </param>
-        /// <param name="pipelineKey">
-        /// The stable logical pipeline key.
-        /// </param>
-        /// <param name="stepName">
-        /// The claimed step name.
-        /// </param>
-        /// <param name="workerId">
-        /// The runtime worker or process identifier.
-        /// </param>
-        /// <returns>
-        /// A concurrency context matching the scope identity used during step claim admission.
-        /// </returns>
-        /// <remarks>
-        /// <para>
-        /// The lease id must match the value used by <see cref="AiDagStepClaimService"/>
-        /// during admission. Otherwise, release would target a different Redis ZSET member.
-        /// </para>
-        ///
-        /// <para>
-        /// The current lease format is <c>{ExecutionId}:{StepName}:{WorkerId}</c>.
-        /// If the claim service changes this format later, this method must be updated to stay aligned.
-        /// </para>
-        /// </remarks>
-        private static AiConcurrencyContext CreateConcurrencyContext(
-            string executionId,
-            string pipelineKey,
-            string stepName,
-            string workerId)
-        {
-            return new AiConcurrencyContext
-            {
-                ExecutionId = executionId,
-                PipelineKey = pipelineKey,
-                StepId = stepName,
-                StepKey = stepName,
-                RuntimeInstanceId = workerId,
-                LeaseId = $"{executionId}:{stepName}:{workerId}"
-            };
-        }
-
-        /// <summary>
         /// Releases the distributed concurrency lease associated with a claimed step.
         /// </summary>
         /// <param name="executionId">
@@ -573,11 +527,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                 return;
             }
 
-            var concurrencyContext = CreateConcurrencyContext(
-                executionId,
-                pipelineKey,
-                stepName,
-                workerId);
+            var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                 executionId,
+                 pipelineKey,
+                 stepName,
+                 workerId,
+                 stepState);
 
             await _engineServices.ConcurrencyGate.ReleaseAsync(
                 concurrencyContext,

@@ -1,4 +1,6 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Concurrency;
+using Multiplexed.Abstractions.AI.Execution;
+using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
 {
@@ -102,6 +104,96 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Creates the concurrency context matching the lease acquired by the claim service.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key.
+        /// </param>
+        /// <param name="stepName">
+        /// The claimed step name.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker identifier.
+        /// </param>
+        /// <param name="stepState">
+        /// The step state containing optional provider, model, and operation metadata.
+        /// </param>
+        /// <returns>
+        /// The concurrency context used to release the lease.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// The lease id format must stay aligned with <c>AiDagStepClaimService</c>.
+        /// </para>
+        ///
+        /// <para>
+        /// Provider, model, and operation must be reconstructed from the same step configuration
+        /// used during admission. This ensures provider/model/operation scopes are released
+        /// together with the existing global, pipeline, step, execution, and instance scopes.
+        /// </para>
+        /// </remarks>
+        public static AiConcurrencyContext CreateConcurrencyContext(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            AiStepState stepState)
+        {
+            return new AiConcurrencyContext
+            {
+                ExecutionId = executionId,
+                PipelineKey = pipelineKey,
+                StepId = stepName,
+                StepKey = stepName,
+                RuntimeInstanceId = workerId,
+                LeaseId = $"{executionId}:{stepName}:{workerId}",
+                Provider = TryReadString(stepState.Config, "provider"),
+                Model = TryReadString(stepState.Config, "model"),
+                Operation =
+                    TryReadString(stepState.Config, "operation")
+                    ?? TryReadString(stepState.Config, "type")
+            };
+        }
+
+        /// <summary>
+        /// Attempts to read a string value from a step configuration dictionary.
+        /// </summary>
+        /// <param name="config">
+        /// The step configuration dictionary.
+        /// </param>
+        /// <param name="key">
+        /// The configuration key to read.
+        /// </param>
+        /// <returns>
+        /// The string value when present and non-empty; otherwise, <c>null</c>.
+        /// </returns>
+        /// <remarks>
+        /// Step configuration values may come from strongly typed objects, JSON deserialization,
+        /// or dictionary-based pipeline definitions. This helper supports plain strings,
+        /// <see cref="JsonElement"/> string values, and simple scalar JSON values.
+        /// </remarks>
+        public static string? TryReadString(
+            IReadOnlyDictionary<string, object?>? config,
+            string key)
+        {
+            if (config is null || !config.TryGetValue(key, out var value) || value is null)
+            {
+                return null;
+            }
+
+            return value switch
+            {
+                string text when !string.IsNullOrWhiteSpace(text) => text,
+                JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+                JsonElement element when element.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => element.ToString(),
+                _ => value.ToString()
+            };
         }
     }
 }

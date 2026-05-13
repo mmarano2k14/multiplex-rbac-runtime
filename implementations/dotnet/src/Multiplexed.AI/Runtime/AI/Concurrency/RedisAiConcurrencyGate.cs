@@ -424,7 +424,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// Builds the Redis concurrency scopes required by the resolved concurrency definition.
         /// </summary>
         /// <param name="context">
-        /// The concurrency context containing the execution, pipeline, step, and runtime instance identifiers.
+        /// The concurrency context containing execution, pipeline, step, runtime instance,
+        /// provider, model, and operation identifiers.
         /// </param>
         /// <param name="definition">
         /// The resolved concurrency definition containing optional limits for each supported scope.
@@ -438,15 +439,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// </para>
         ///
         /// <para>
-        /// <c>ExecutionId</c> is intentionally used for the execution scope. This limits how many steps
-        /// from the same DAG execution may run concurrently, which is required for bounded parallel DAG
-        /// execution.
-        /// </para>
-        ///
-        /// <para>
-        /// <c>StepKey</c> is intentionally combined with <c>PipelineKey</c> for the step scope.
-        /// This avoids a global collision where unrelated pipelines with the same step key would
-        /// throttle each other unintentionally.
+        /// Optional scopes such as provider, model, and operation are included only when the
+        /// corresponding context values are available.
         /// </para>
         ///
         /// <para>
@@ -474,6 +468,25 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 scopes,
                 $"ai:concurrency:scope:pipeline-step:{context.PipelineKey}:{context.StepKey}",
                 definition.MaxStepConcurrency);
+
+            AddScope(
+                scopes,
+                $"ai:concurrency:scope:provider:{context.Provider}",
+                definition.MaxProviderConcurrency,
+                context.Provider);
+
+            AddScope(
+                scopes,
+                $"ai:concurrency:scope:model:{context.Provider}:{context.Model}",
+                definition.MaxModelConcurrency,
+                context.Provider,
+                context.Model);
+
+            AddScope(
+                scopes,
+                $"ai:concurrency:scope:operation:{context.Operation}",
+                definition.MaxOperationConcurrency,
+                context.Operation);
 
             AddScope(
                 scopes,
@@ -512,6 +525,51 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
 
             scopes.Add(new ConcurrencyScope(key, limit.Value));
         }
+
+        /// <summary>
+        /// Adds a concurrency scope when its configured limit is positive and all required scope parts are present.
+        /// </summary>
+        /// <param name="scopes">
+        /// The collection to which the scope should be added.
+        /// </param>
+        /// <param name="key">
+        /// The Redis sorted set key representing the concurrency scope.
+        /// </param>
+        /// <param name="limit">
+        /// The maximum number of active leases allowed for the scope.
+        /// </param>
+        /// <param name="requiredParts">
+        /// The required context values needed to make this scope meaningful.
+        /// </param>
+        /// <remarks>
+        /// <para>
+        /// This overload is used for optional scopes such as provider, model, and operation.
+        /// </para>
+        ///
+        /// <para>
+        /// For example, model-level throttling requires both provider and model to be present.
+        /// If either value is missing, the model scope is skipped instead of creating an invalid key.
+        /// </para>
+        /// </remarks>
+        private static void AddScope(
+            ICollection<ConcurrencyScope> scopes,
+            string key,
+            int? limit,
+            params string?[] requiredParts)
+        {
+            if (!limit.HasValue || limit.Value <= 0)
+            {
+                return;
+            }
+
+            if (requiredParts.Any(string.IsNullOrWhiteSpace))
+            {
+                return;
+            }
+
+            scopes.Add(new ConcurrencyScope(key, limit.Value));
+        }
+
 
         /// <summary>
         /// Serializes concurrency scopes as positional arrays for Lua consumption.

@@ -629,34 +629,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         }
 
         /// <summary>
-        /// Creates the concurrency context matching the lease acquired by the claim service.
-        /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="stepName">The claimed step name.</param>
-        /// <param name="workerId">The worker identifier.</param>
-        /// <returns>The concurrency context used to release the lease.</returns>
-        /// <remarks>
-        /// The lease id format must stay aligned with <see cref="AiDagStepClaimService"/>.
-        /// </remarks>
-        private static AiConcurrencyContext CreateConcurrencyContext(
-            string executionId,
-            string pipelineKey,
-            string stepName,
-            string workerId)
-        {
-            return new AiConcurrencyContext
-            {
-                ExecutionId = executionId,
-                PipelineKey = pipelineKey,
-                StepId = stepName,
-                StepKey = stepName,
-                RuntimeInstanceId = workerId,
-                LeaseId = $"{executionId}:{stepName}:{workerId}"
-            };
-        }
-
-        /// <summary>
         /// Releases the distributed concurrency lease associated with a claimed step.
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
@@ -690,11 +662,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                 return;
             }
 
-            var concurrencyContext = CreateConcurrencyContext(
-                executionId,
-                pipelineKey,
-                stepName,
-                workerId);
+            var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                     executionId,
+                     pipelineKey,
+                     stepName,
+                     workerId,
+                     stepState);
 
             await _engineServices.ConcurrencyGate.ReleaseAsync(
                 concurrencyContext,

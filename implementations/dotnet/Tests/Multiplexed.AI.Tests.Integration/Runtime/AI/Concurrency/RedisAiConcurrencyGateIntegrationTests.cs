@@ -2,7 +2,9 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
@@ -865,6 +867,1110 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
                 Arg.Any<CancellationToken>());
         }
 
+        /// <summary>
+        /// Verifies that provider-level throttling is shared by contexts using the same provider
+        /// and isolated for different providers.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Respect_Provider_Scope()
+        {
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                MaxProviderConcurrency = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-1",
+                stepName: "llm-summary",
+                workerId: "worker-1",
+                leaseId: "lease-1",
+                provider: "openai");
+
+            var secondSameProvider = CreateContext(
+                executionId: "exec-2",
+                stepName: "llm-compose",
+                workerId: "worker-2",
+                leaseId: "lease-2",
+                provider: "openai");
+
+            var thirdDifferentProvider = CreateContext(
+                executionId: "exec-3",
+                stepName: "llm-compose",
+                workerId: "worker-3",
+                leaseId: "lease-3",
+                provider: "anthropic");
+
+            var firstDecision = await gate.TryAcquireAsync(firstContext, definition);
+            var secondDecision = await gate.TryAcquireAsync(secondSameProvider, definition);
+            var thirdDecision = await gate.TryAcquireAsync(thirdDifferentProvider, definition);
+
+            Assert.True(firstDecision.Allowed);
+            Assert.False(secondDecision.Allowed);
+            Assert.True(thirdDecision.Allowed);
+        }
+
+        /// <summary>
+        /// Verifies that model-level throttling is scoped by both provider and model.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        /// <remarks>
+        /// The model scope uses both provider and model to avoid collisions between different providers
+        /// that may expose similarly named models.
+        /// </remarks>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Respect_Model_Scope()
+        {
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                MaxModelConcurrency = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-1",
+                stepName: "llm-summary",
+                workerId: "worker-1",
+                leaseId: "lease-1",
+                provider: "openai",
+                model: "gpt-4.1");
+
+            var secondSameProviderSameModel = CreateContext(
+                executionId: "exec-2",
+                stepName: "llm-compose",
+                workerId: "worker-2",
+                leaseId: "lease-2",
+                provider: "openai",
+                model: "gpt-4.1");
+
+            var thirdSameProviderDifferentModel = CreateContext(
+                executionId: "exec-3",
+                stepName: "llm-compose",
+                workerId: "worker-3",
+                leaseId: "lease-3",
+                provider: "openai",
+                model: "gpt-4o");
+
+            var fourthDifferentProviderSameModelName = CreateContext(
+                executionId: "exec-4",
+                stepName: "llm-compose",
+                workerId: "worker-4",
+                leaseId: "lease-4",
+                provider: "anthropic",
+                model: "gpt-4.1");
+
+            var firstDecision = await gate.TryAcquireAsync(firstContext, definition);
+            var secondDecision = await gate.TryAcquireAsync(secondSameProviderSameModel, definition);
+            var thirdDecision = await gate.TryAcquireAsync(thirdSameProviderDifferentModel, definition);
+            var fourthDecision = await gate.TryAcquireAsync(fourthDifferentProviderSameModelName, definition);
+
+            Assert.True(firstDecision.Allowed);
+            Assert.False(secondDecision.Allowed);
+            Assert.True(thirdDecision.Allowed);
+            Assert.True(fourthDecision.Allowed);
+        }
+
+        /// <summary>
+        /// Verifies that operation-level throttling is shared across contexts using the same logical operation.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Respect_Operation_Scope()
+        {
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                MaxOperationConcurrency = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-1",
+                stepName: "summary-step",
+                workerId: "worker-1",
+                leaseId: "lease-1",
+                operation: "llm.chat");
+
+            var secondSameOperation = CreateContext(
+                executionId: "exec-2",
+                stepName: "compose-step",
+                workerId: "worker-2",
+                leaseId: "lease-2",
+                operation: "llm.chat");
+
+            var thirdDifferentOperation = CreateContext(
+                executionId: "exec-3",
+                stepName: "retrieve-step",
+                workerId: "worker-3",
+                leaseId: "lease-3",
+                operation: "rag.retrieve");
+
+            var firstDecision = await gate.TryAcquireAsync(firstContext, definition);
+            var secondDecision = await gate.TryAcquireAsync(secondSameOperation, definition);
+            var thirdDecision = await gate.TryAcquireAsync(thirdDifferentOperation, definition);
+
+            Assert.True(firstDecision.Allowed);
+            Assert.False(secondDecision.Allowed);
+            Assert.True(thirdDecision.Allowed);
+        }
+
+        /// <summary>
+        /// Verifies that denied provider-level admission returns a diagnostic reason containing the provider scope.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Return_Diagnostic_Reason_When_Provider_Limit_Is_Reached()
+        {
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                MaxProviderConcurrency = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-1",
+                stepName: "summary-step",
+                workerId: "worker-1",
+                leaseId: "lease-1",
+                provider: "openai");
+
+            var secondContext = CreateContext(
+                executionId: "exec-2",
+                stepName: "compose-step",
+                workerId: "worker-2",
+                leaseId: "lease-2",
+                provider: "openai");
+
+            var firstDecision = await gate.TryAcquireAsync(firstContext, definition);
+            var secondDecision = await gate.TryAcquireAsync(secondContext, definition);
+
+            Assert.True(firstDecision.Allowed);
+
+            Assert.False(secondDecision.Allowed);
+            Assert.NotNull(secondDecision.Reason);
+            Assert.Contains("Concurrency limit reached", secondDecision.Reason);
+            Assert.Contains("ai:concurrency:scope:provider:openai", secondDecision.Reason);
+            Assert.Contains("Current='1'", secondDecision.Reason);
+            Assert.Contains("Limit='1'", secondDecision.Reason);
+        }
+
+        /// <summary>
+        /// Verifies that provider, model, and operation concurrency limits are resolved from step configuration.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        [Fact]
+        public void Resolve_Should_Read_Provider_Model_And_Operation_Concurrency_From_Step_Config()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var stepState = new AiStepState
+            {
+                StepName = "llm-summary",
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20,
+                        ["leaseSeconds"] = 30,
+                        ["defaultRetryAfterMs"] = 250
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(stepState);
+
+            // Assert
+            Assert.True(definition.Enabled);
+            Assert.Equal(10, definition.MaxProviderConcurrency);
+            Assert.Equal(5, definition.MaxModelConcurrency);
+            Assert.Equal(20, definition.MaxOperationConcurrency);
+            Assert.Equal(30, definition.LeaseSeconds);
+            Assert.Equal(250, definition.DefaultRetryAfterMs);
+        }
+
+        /// <summary>
+        /// Verifies that step-level provider, model, and operation concurrency values override pipeline-level values.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        [Fact]
+        public void Resolve_Should_Merge_Provider_Model_And_Operation_Concurrency_From_Pipeline_And_Step_Config()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20,
+                        ["leaseSeconds"] = 60,
+                        ["defaultRetryAfterMs"] = 500
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["maxProviderConcurrency"] = 3,
+                        ["maxModelConcurrency"] = 2
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(pipeline, step);
+
+            // Assert
+            Assert.True(definition.Enabled);
+
+            Assert.Equal(3, definition.MaxProviderConcurrency);
+            Assert.Equal(2, definition.MaxModelConcurrency);
+
+            // Falls back to pipeline because step does not override it.
+            Assert.Equal(20, definition.MaxOperationConcurrency);
+
+            Assert.Equal(60, definition.LeaseSeconds);
+            Assert.Equal(500, definition.DefaultRetryAfterMs);
+        }
+
+        /// <summary>
+        /// Verifies that omitted step-level lease configuration does not override
+        /// a pipeline-level lease value with the runtime default.
+        /// </summary>
+        [Fact]
+        public void Resolve_Should_Keep_Pipeline_LeaseSeconds_When_Step_LeaseSeconds_Is_Missing()
+        {
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["leaseSeconds"] = 60,
+                        ["defaultRetryAfterMs"] = 500
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["maxProviderConcurrency"] = 3
+                    }
+                }
+            };
+
+            var definition = resolver.Resolve(pipeline, step);
+
+            Assert.True(definition.Enabled);
+            Assert.Equal(60, definition.LeaseSeconds);
+            Assert.Equal(500, definition.DefaultRetryAfterMs);
+            Assert.Equal(3, definition.MaxProviderConcurrency);
+        }
+
+        /// <summary>
+        /// Verifies that an explicitly configured step-level lease value overrides
+        /// the pipeline-level lease value.
+        /// </summary>
+        [Fact]
+        public void Resolve_Should_Override_Pipeline_LeaseSeconds_When_Step_LeaseSeconds_Is_Configured()
+        {
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["leaseSeconds"] = 60
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["leaseSeconds"] = 15
+                    }
+                }
+            };
+
+            var definition = resolver.Resolve(pipeline, step);
+
+            Assert.True(definition.Enabled);
+            Assert.Equal(15, definition.LeaseSeconds);
+        }
+
+        /// <summary>
+        /// Verifies that provider, model, and operation limits fall back to pipeline-level
+        /// configuration when the step does not override them.
+        /// </summary>
+        [Fact]
+        public void Resolve_Should_Fallback_To_Pipeline_Provider_Model_And_Operation_Limits_When_Step_Does_Not_Override()
+        {
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["maxStepConcurrency"] = 2
+                    }
+                }
+            };
+
+            var definition = resolver.Resolve(pipeline, step);
+
+            Assert.True(definition.Enabled);
+            Assert.Equal(10, definition.MaxProviderConcurrency);
+            Assert.Equal(5, definition.MaxModelConcurrency);
+            Assert.Equal(20, definition.MaxOperationConcurrency);
+            Assert.Equal(2, definition.MaxStepConcurrency);
+        }
+
+        /// <summary>
+        /// Verifies that step-level provider, model, and operation limits override
+        /// pipeline-level limits when explicitly configured.
+        /// </summary>
+        [Fact]
+        public void Resolve_Should_Override_Pipeline_Provider_Model_And_Operation_Limits_When_Configured_On_Step()
+        {
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["maxProviderConcurrency"] = 3,
+                        ["maxModelConcurrency"] = 2,
+                        ["maxOperationConcurrency"] = 4
+                    }
+                }
+            };
+
+            var definition = resolver.Resolve(pipeline, step);
+
+            Assert.True(definition.Enabled);
+            Assert.Equal(3, definition.MaxProviderConcurrency);
+            Assert.Equal(2, definition.MaxModelConcurrency);
+            Assert.Equal(4, definition.MaxOperationConcurrency);
+        }
+
+        /// <summary>
+        /// Verifies that the claim service passes provider, model, and operation metadata
+        /// from the step state configuration into the concurrency gate context.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        /// <remarks>
+        /// This test validates the full admission context used by provider, model, and
+        /// operation-level throttling scopes.
+        /// </remarks>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Pass_Provider_Model_And_Operation_To_Concurrency_Gate()
+        {
+            // Arrange
+            var executionId = "exec-provider-model-operation";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "llm-summary";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["provider"] = "openai",
+                    ["model"] = "gpt-4.1",
+                    ["operation"] = "llm.chat",
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20
+                    }
+                }
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Allow());
+
+            dagStore.TryClaimStepAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = "claim-token"
+                });
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.NotNull(claimed);
+            Assert.Equal(stepName, claimed.StepName);
+
+            _ = concurrencyGate.Received(1).TryAcquireAsync(
+                Arg.Is<AiConcurrencyContext>(context =>
+                    context.ExecutionId == executionId &&
+                    context.PipelineKey == pipelineKey &&
+                    context.StepId == stepName &&
+                    context.StepKey == stepName &&
+                    context.RuntimeInstanceId == workerId &&
+                    context.LeaseId == $"{executionId}:{stepName}:{workerId}" &&
+                    context.Provider == "openai" &&
+                    context.Model == "gpt-4.1" &&
+                    context.Operation == "llm.chat"),
+                Arg.Is<AiConcurrencyDefinition>(definition =>
+                    definition.Enabled &&
+                    definition.MaxProviderConcurrency == 10 &&
+                    definition.MaxModelConcurrency == 5 &&
+                    definition.MaxOperationConcurrency == 20),
+                Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// Verifies that batch claiming passes provider, model, and operation metadata
+        /// from the step state configuration into the concurrency gate context.
+        /// </summary>
+        /// <returns>
+        /// A task representing the asynchronous test operation.
+        /// </returns>
+        /// <remarks>
+        /// This test validates the batch admission path used by provider, model, and
+        /// operation-level throttling scopes.
+        /// </remarks>
+        [Fact]
+        public async Task ClaimBatchAsync_Should_Pass_Provider_Model_And_Operation_To_Concurrency_Gate()
+        {
+            // Arrange
+            var executionId = "exec-batch-provider-model-operation";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "llm-summary";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["provider"] = "openai",
+                    ["model"] = "gpt-4.1",
+                    ["operation"] = "llm.chat",
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20
+                    }
+                }
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Allow());
+
+            dagStore.TryClaimStepAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = "claim-token"
+                });
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimedSteps = await service.ClaimBatchAsync(
+                executionId,
+                pipelineKey,
+                workerId,
+                maxSteps: 4);
+
+            // Assert
+            var claimed = Assert.Single(claimedSteps);
+            Assert.Equal(stepName, claimed.StepName);
+
+            _ = concurrencyGate.Received(1).TryAcquireAsync(
+                Arg.Is<AiConcurrencyContext>(context =>
+                    context.ExecutionId == executionId &&
+                    context.PipelineKey == pipelineKey &&
+                    context.StepId == stepName &&
+                    context.StepKey == stepName &&
+                    context.RuntimeInstanceId == workerId &&
+                    context.LeaseId == $"{executionId}:{stepName}:{workerId}" &&
+                    context.Provider == "openai" &&
+                    context.Model == "gpt-4.1" &&
+                    context.Operation == "llm.chat"),
+                Arg.Is<AiConcurrencyDefinition>(definition =>
+                    definition.Enabled &&
+                    definition.MaxProviderConcurrency == 10 &&
+                    definition.MaxModelConcurrency == 5 &&
+                    definition.MaxOperationConcurrency == 20),
+                Arg.Any<CancellationToken>());
+
+            _ = dagStore.Received(1).TryClaimStepAsync(
+                executionId,
+                stepName,
+                workerId,
+                Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// Verifies that configured concurrency policies are resolved from JSON-style step configuration.
+        /// </summary>
+        /// <remarks>
+        /// This test validates only JSON/config parsing. It does not execute concurrency policies.
+        /// The current distributed throttling engine remains config-driven, while the policies collection
+        /// is preserved for future policy-driven concurrency behavior.
+        /// </remarks>
+        [Fact]
+        public void Resolve_Should_Read_Configured_Concurrency_Policies_From_Step_Config()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var stepState = new AiStepState
+            {
+                StepName = "llm-summary",
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["provider"] = "openai",
+                    ["model"] = "gpt-4.1",
+                    ["operation"] = "llm.chat",
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 8,
+                        ["policies"] = new[]
+                        {
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "provider.openai.standard",
+                        ["kind"] = "Concurrency",
+                        ["enabled"] = true,
+                        ["config"] = new Dictionary<string, object?>
+                        {
+                            ["maxProviderConcurrency"] = 10,
+                            ["maxModelConcurrency"] = 5,
+                            ["leaseSeconds"] = 30,
+                            ["defaultRetryAfterMs"] = 500
+                        }
+                    }
+                }
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(stepState);
+
+            // Assert
+            Assert.True(definition.Enabled);
+            Assert.Equal(10, definition.MaxProviderConcurrency);
+            Assert.Equal(5, definition.MaxModelConcurrency);
+            Assert.Equal(8, definition.MaxOperationConcurrency);
+
+            var policy = Assert.Single(definition.Policies);
+
+            Assert.Equal("provider.openai.standard", policy.Name);
+            Assert.Equal(AiPolicyKind.Concurrency.ToString(), policy.Kind);
+            Assert.NotNull(policy.Config);
+        }
+
+        /// <summary>
+        /// Verifies that configured concurrency policy config values are applied
+        /// as defaults when direct concurrency values are missing.
+        /// </summary>
+        /// <remarks>
+        /// This test validates policy-config enrichment only. It does not execute policies.
+        /// Direct concurrency configuration remains authoritative when present.
+        /// </remarks>
+        [Fact]
+        public void Resolve_Should_Apply_Concurrency_Limits_From_Configured_Policy_Config()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var stepState = new AiStepState
+            {
+                StepName = "llm-summary",
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["policies"] = new[]
+                        {
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "provider.openai.standard",
+                        ["kind"] = "Concurrency",
+                        ["config"] = new Dictionary<string, object?>
+                        {
+                            ["maxProviderConcurrency"] = 10,
+                            ["maxModelConcurrency"] = 5,
+                            ["maxOperationConcurrency"] = 8,
+                            ["leaseSeconds"] = 30,
+                            ["defaultRetryAfterMs"] = 500,
+                            ["jitter"] = true,
+                            ["maxJitterMs"] = 75
+                        }
+                    }
+                }
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(stepState);
+
+            // Assert
+            Assert.True(definition.Enabled);
+
+            Assert.Equal(10, definition.MaxProviderConcurrency);
+            Assert.Equal(5, definition.MaxModelConcurrency);
+            Assert.Equal(8, definition.MaxOperationConcurrency);
+
+            Assert.Equal(30, definition.LeaseSeconds);
+            Assert.Equal(500, definition.DefaultRetryAfterMs);
+
+            Assert.True(definition.Jitter);
+            Assert.Equal(75, definition.MaxJitterMs);
+
+            var policy = Assert.Single(definition.Policies);
+            Assert.Equal("provider.openai.standard", policy.Name);
+            Assert.Equal("Concurrency", policy.Kind);
+        }
+
+        /// <summary>
+        /// Verifies that direct concurrency configuration values remain authoritative
+        /// when configured policy config also defines the same values.
+        /// </summary>
+        /// <remarks>
+        /// Policy config acts as a default bundle only. It must not override direct
+        /// config.concurrency values.
+        /// </remarks>
+        [Fact]
+        public void Resolve_Should_Keep_Direct_Concurrency_Config_When_Policy_Config_Also_Defines_Value()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var stepState = new AiStepState
+            {
+                StepName = "llm-summary",
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+
+                        // Direct values must win.
+                        ["maxProviderConcurrency"] = 3,
+                        ["maxModelConcurrency"] = 2,
+                        ["maxOperationConcurrency"] = 4,
+                        ["leaseSeconds"] = 15,
+                        ["defaultRetryAfterMs"] = 100,
+
+                        ["policies"] = new[]
+                        {
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "provider.openai.standard",
+                        ["kind"] = "Concurrency",
+                        ["config"] = new Dictionary<string, object?>
+                        {
+                            ["maxProviderConcurrency"] = 10,
+                            ["maxModelConcurrency"] = 5,
+                            ["maxOperationConcurrency"] = 8,
+                            ["leaseSeconds"] = 30,
+                            ["defaultRetryAfterMs"] = 500
+                        }
+                    }
+                }
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(stepState);
+
+            // Assert
+            Assert.True(definition.Enabled);
+
+            Assert.Equal(3, definition.MaxProviderConcurrency);
+            Assert.Equal(2, definition.MaxModelConcurrency);
+            Assert.Equal(4, definition.MaxOperationConcurrency);
+
+            Assert.Equal(15, definition.LeaseSeconds);
+            Assert.Equal(100, definition.DefaultRetryAfterMs);
+
+            var policy = Assert.Single(definition.Policies);
+            Assert.Equal("provider.openai.standard", policy.Name);
+            Assert.Equal("Concurrency", policy.Kind);
+        }
+
+        /// <summary>
+        /// Verifies that step-level policy config values override pipeline-level direct concurrency values.
+        /// </summary>
+        /// <remarks>
+        /// Effective priority:
+        /// step direct config > step policy config > pipeline direct config > pipeline policy config > defaults.
+        /// </remarks>
+        [Fact]
+        public void Resolve_Should_Use_Step_Policy_Config_Before_Pipeline_Direct_Config()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10,
+                        ["maxModelConcurrency"] = 5,
+                        ["maxOperationConcurrency"] = 20,
+                        ["leaseSeconds"] = 60,
+                        ["defaultRetryAfterMs"] = 500
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["policies"] = new[]
+                        {
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "step.openai.fast",
+                        ["kind"] = "Concurrency",
+                        ["config"] = new Dictionary<string, object?>
+                        {
+                            ["maxProviderConcurrency"] = 3,
+                            ["maxModelConcurrency"] = 2,
+                            ["maxOperationConcurrency"] = 4,
+                            ["leaseSeconds"] = 15,
+                            ["defaultRetryAfterMs"] = 100
+                        }
+                    }
+                }
+                    }
+                }
+            };
+
+            // Act
+            var definition = resolver.Resolve(pipeline, step);
+
+            // Assert
+            Assert.True(definition.Enabled);
+
+            Assert.Equal(3, definition.MaxProviderConcurrency);
+            Assert.Equal(2, definition.MaxModelConcurrency);
+            Assert.Equal(4, definition.MaxOperationConcurrency);
+
+            Assert.Equal(15, definition.LeaseSeconds);
+            Assert.Equal(100, definition.DefaultRetryAfterMs);
+
+            var policy = Assert.Single(definition.Policies);
+            Assert.Equal("step.openai.fast", policy.Name);
+            Assert.Equal("Concurrency", policy.Kind);
+        }
+
+        /// <summary>
+        /// Verifies that pipeline-level policy config values are used when the step has no concurrency config.
+        /// </summary>
+        /// <remarks>
+        /// This validates that policy config can act as a pipeline-level concurrency template.
+        /// </remarks>
+        [Fact]
+        public void Resolve_Should_Use_Pipeline_Policy_Config_When_Step_Config_Is_Missing()
+        {
+            // Arrange
+            var resolver = new DefaultAiConcurrencyDefinitionResolver();
+
+            var pipeline = new AiPipelineDefinition
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["policies"] = new[]
+                        {
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "pipeline.openai.standard",
+                        ["kind"] = "Concurrency",
+                        ["config"] = new Dictionary<string, object?>
+                        {
+                            ["maxProviderConcurrency"] = 10,
+                            ["maxModelConcurrency"] = 5,
+                            ["maxOperationConcurrency"] = 20,
+                            ["leaseSeconds"] = 60,
+                            ["defaultRetryAfterMs"] = 500,
+                            ["jitter"] = true,
+                            ["maxJitterMs"] = 90
+                        }
+                    }
+                }
+                    }
+                }
+            };
+
+            var step = new AiPipelineStepDefinition
+            {
+                Name = "llm-summary",
+                StepKey = "llm.summary",
+                Config = new Dictionary<string, object?>()
+            };
+
+            // Act
+            var definition = resolver.Resolve(pipeline, step);
+
+            // Assert
+            Assert.True(definition.Enabled);
+
+            Assert.Equal(10, definition.MaxProviderConcurrency);
+            Assert.Equal(5, definition.MaxModelConcurrency);
+            Assert.Equal(20, definition.MaxOperationConcurrency);
+
+            Assert.Equal(60, definition.LeaseSeconds);
+            Assert.Equal(500, definition.DefaultRetryAfterMs);
+
+            Assert.True(definition.Jitter);
+            Assert.Equal(90, definition.MaxJitterMs);
+
+            var policy = Assert.Single(definition.Policies);
+            Assert.Equal("pipeline.openai.standard", policy.Name);
+            Assert.Equal("Concurrency", policy.Kind);
+        }
+
         private static IAiDagExecutionEngineServices CreateEngineServices(
             IAiDagExecutionStore dagStore,
             IAiConcurrencyGate concurrencyGate)
@@ -882,12 +1988,45 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             return services;
         }
 
+        /// <summary>
+        /// Creates a concurrency context used by the Redis concurrency gate tests.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier used for execution-level throttling.
+        /// </param>
+        /// <param name="stepName">
+        /// The logical step name used as both step id and step key.
+        /// </param>
+        /// <param name="workerId">
+        /// The runtime worker or instance identifier.
+        /// </param>
+        /// <param name="leaseId">
+        /// The lease identifier stored as a Redis ZSET member.
+        /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key used for pipeline and pipeline-step throttling.
+        /// </param>
+        /// <param name="provider">
+        /// The optional provider used for provider/model-level throttling.
+        /// </param>
+        /// <param name="model">
+        /// The optional model used for model-level throttling.
+        /// </param>
+        /// <param name="operation">
+        /// The optional logical operation used for operation-level throttling.
+        /// </param>
+        /// <returns>
+        /// A populated <see cref="AiConcurrencyContext"/>.
+        /// </returns>
         private static AiConcurrencyContext CreateContext(
             string executionId,
             string stepName,
             string workerId,
             string leaseId,
-            string pipelineKey = "pipeline-a:v1")
+            string pipelineKey = "pipeline-a:v1",
+            string? provider = null,
+            string? model = null,
+            string? operation = null)
         {
             return new AiConcurrencyContext
             {
@@ -896,7 +2035,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
                 StepId = stepName,
                 StepKey = stepName,
                 RuntimeInstanceId = workerId,
-                LeaseId = leaseId
+                LeaseId = leaseId,
+                Provider = provider,
+                Model = model,
+                Operation = operation
             };
         }
 

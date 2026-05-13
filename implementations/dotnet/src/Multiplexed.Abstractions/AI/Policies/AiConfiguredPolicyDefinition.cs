@@ -14,9 +14,14 @@ namespace Multiplexed.Abstractions.AI.Policies
         public string Name { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the optional policy type or category.
+        /// Gets or sets the optional policy kind.
         /// </summary>
-        public string? Type { get; set; }
+        /// <remarks>
+        /// Examples include <c>Retry</c>, <c>Retention</c>, <c>Concurrency</c>,
+        /// <c>Timeout</c>, <c>Validation</c>, and <c>Routing</c>.
+        /// </remarks>
+        public string? Kind { get; set; }
+
 
         /// <summary>
         /// Gets or sets policy-specific configuration.

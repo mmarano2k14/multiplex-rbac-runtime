@@ -93,7 +93,7 @@ namespace Multiplexed.AI.Tests.Runtime.Policies
             Assert.NotNull(result);
             Assert.Single(result!.Policies);
             Assert.Equal("concurrency.scope.default", result.Policies[0].Name);
-            Assert.Equal("scope", result.Policies[0].Type);
+            Assert.Equal("scope", result.Policies[0].Kind);
             Assert.Equal(4, result.MaxDegreeOfParallelism);
             Assert.Equal(10, result.MaxGlobalConcurrency);
         }
@@ -181,9 +181,9 @@ namespace Multiplexed.AI.Tests.Runtime.Policies
                 new[] { "concurrency.step.default", "concurrency.scope.default" },
                 concurrency!.Policies.Select(x => x.Name).ToArray());
 
-            Assert.Equal("timeout", retry.Policies[1].Type);
-            Assert.Equal("eviction", retention.Policies[1].Type);
-            Assert.Equal("scope", concurrency.Policies[1].Type);
+            Assert.Equal("timeout", retry.Policies[1].Kind);
+            Assert.Equal("eviction", retention.Policies[1].Kind);
+            Assert.Equal("scope", concurrency.Policies[1].Kind);
 
             Assert.Equal(5, retry.MaxRetries);
             Assert.Equal(8, concurrency.MaxDegreeOfParallelism);

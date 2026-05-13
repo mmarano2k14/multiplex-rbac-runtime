@@ -5,57 +5,77 @@ All notable changes to this project will be documented in this file.
 This project follows a deterministic runtime and observability model designed for high-concurrency execution, focusing on consistency, isolation, and lifecycle control.
 
 ---
-## ## [1.0.4.5] - 2026-012-04 - Distributed Concurrency / Throttling
+
+## [1.0.4.5] - 2026-12-04 - Distributed Concurrency / Throttling
 
 - Added Redis-backed distributed concurrency gate using ZSET-based leases.
-- Replaced counter-style concurrency tracking with crash-safe lease expiration.
+- Replaced counter-based concurrency tracking with crash-safe lease expiration.
 - Added distributed concurrency scopes for:
   - global runtime capacity
   - pipeline-level throttling
   - pipeline-step throttling
   - execution-level bounded parallelism
   - runtime-instance-level throttling
-- Added stable pipeline key propagation into distributed claim acquisition.
+  - provider-level throttling
+  - provider/model-level throttling
+  - operation-level throttling
 - Ensured pipeline-step throttling is scoped by both pipeline key and step key to avoid cross-pipeline collisions.
+- Ensured model-level throttling is scoped by both provider and model to avoid cross-provider model-name collisions.
+- Added stable pipeline key propagation from distributed runners into distributed claim acquisition.
+- Centralized concurrency context creation to ensure acquire/release scope consistency.
+- Added provider, model, and operation metadata to concurrency contexts.
+- Added resolver support for:
+  - `maxProviderConcurrency`
+  - `maxModelConcurrency`
+  - `maxOperationConcurrency`
+- Fixed concurrency resolver merge semantics so omitted step-level values no longer override pipeline-level values with runtime defaults.
+- Added policy-config defaults for concurrency definitions.
+- Preserved concurrency configuration priority order:
+  - step direct config
+  - step policy config
+  - pipeline direct config
+  - pipeline policy config
+  - runtime defaults
+- Renamed structured policy metadata from `type` to `kind`.
+- Preserved backward compatibility for policy configuration:
+  - string policy format is still supported
+  - `key` is accepted as an alias for `name`
+  - `type` is accepted as a legacy alias for `kind`
 - Added diagnostic denial reasons when a concurrency scope blocks admission.
 - Added tracing and logging around concurrency admission decisions.
-- Ensured concurrency leases are released when:
-  - a DAG claim fails after concurrency admission
-  - a claimed step completes
-  - a claimed step fails
-- Added integration coverage for:
+- Updated distributed single-step and batch execution runners to release concurrency leases after step completion or failure.
+- Added release protection when a concurrency lease is acquired but the DAG step claim fails.
+- Added Redis gate integration coverage for:
   - global concurrency limits
   - pipeline concurrency limits
   - pipeline-step concurrency limits
-  - execution concurrency limits
+  - execution-level limits
+  - runtime-instance-level limits
+  - provider concurrency limits
+  - provider/model concurrency limits
+  - operation concurrency limits
   - idempotent lease acquisition
-  - explicit lease release
+  - explicit release recovery
   - TTL-based crash recovery
   - diagnostic throttling reasons
-- Added claim-service tests for:
+- Added claim-service test coverage for:
   - denied admission without DAG claim
   - release after failed distributed claim race
   - batch denied admission
   - batch release after failed distributed claim race
----
-
-## [1.0.4.5] - 2026-012-04 - Runtime Concurrency / Distributed Throttling
-
-- Added Redis-backed distributed concurrency gate using ZSET-based leases.
-- Replaced counter-based concurrency tracking with crash-safe lease expiration.
-- Added global, pipeline, pipeline-step, execution, and runtime-instance concurrency scopes.
-- Ensured pipeline-step throttling is scoped by both pipeline key and step key to avoid cross-pipeline collisions.
-- Added stable pipeline key propagation from distributed runners into the claim service.
-- Updated distributed single-step and batch execution runners to release concurrency leases after step completion or failure.
-- Added release protection when a concurrency lease is acquired but the DAG step claim fails.
-- Added integration coverage for:
-  - global concurrency limits
-  - pipeline concurrency limits
-  - pipeline-step limits
-  - execution-level limits
-  - idempotent lease acquisition
-  - explicit release recovery
-  - TTL-based crash recovery
+  - provider/model/operation context propagation
+- Added resolver regression coverage for:
+  - pipeline fallback behavior
+  - step override behavior
+  - direct config priority over policy config
+  - policy-config defaults
+  - legacy policy JSON compatibility
+- Updated README documentation for:
+  - Redis ZSET lease model
+  - provider/model/operation throttling
+  - policy-config concurrency defaults
+  - diagnostic throttling reasons
+  - concurrency admission observability
 
 ---
 

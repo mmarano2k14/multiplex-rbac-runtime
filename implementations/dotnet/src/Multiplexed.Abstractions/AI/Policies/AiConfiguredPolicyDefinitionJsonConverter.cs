@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Multiplexed.Abstractions.AI.Policies
 {
     /// <summary>
-    /// Supports backward-compatible policy definition deserialization.
+    /// Supports backward-compatible policy definition serialization and deserialization.
     /// </summary>
     /// <remarks>
     /// Supported JSON formats:
@@ -17,21 +17,34 @@ namespace Multiplexed.Abstractions.AI.Policies
     /// ]
     /// </code>
     ///
-    /// Structured object format:
+    /// Preferred structured object format:
     ///
     /// <code>
     /// "policies": [
     ///   {
     ///     "name": "concurrency.scope.default",
-    ///     "type": "scope",
+    ///     "kind": "scope",
     ///     "config": {
-    ///       "kind": "provider",
+    ///       "scope": "provider",
     ///       "value": "openai",
     ///       "limit": 10
     ///     }
     ///   }
     /// ]
     /// </code>
+    ///
+    /// Backward-compatible aliases are also supported during deserialization:
+    ///
+    /// <list type="bullet">
+    /// <item>
+    /// <description><c>key</c> is accepted as an alias for <c>name</c>.</description>
+    /// </item>
+    /// <item>
+    /// <description><c>type</c> is accepted as a legacy alias for <c>kind</c>.</description>
+    /// </item>
+    /// </list>
+    ///
+    /// Serialization always writes the preferred fields: <c>name</c>, <c>kind</c>, and <c>config</c>.
     /// </remarks>
     public sealed class AiConfiguredPolicyDefinitionJsonConverter
         : JsonConverter<AiConfiguredPolicyDefinition>
@@ -74,10 +87,18 @@ namespace Multiplexed.Abstractions.AI.Policies
             {
                 result.Name = nameElement.GetString() ?? string.Empty;
             }
-
-            if (root.TryGetProperty("type", out var typeElement))
+            else if (root.TryGetProperty("key", out var keyElement))
             {
-                result.Type = typeElement.GetString();
+                result.Name = keyElement.GetString() ?? string.Empty;
+            }
+
+            if (root.TryGetProperty("kind", out var kindElement))
+            {
+                result.Kind = kindElement.GetString();
+            }
+            else if (root.TryGetProperty("type", out var legacyTypeElement))
+            {
+                result.Kind = legacyTypeElement.GetString();
             }
 
             if (root.TryGetProperty("config", out var configElement))
@@ -113,11 +134,11 @@ namespace Multiplexed.Abstractions.AI.Policies
                 "name",
                 value.Name);
 
-            if (!string.IsNullOrWhiteSpace(value.Type))
+            if (!string.IsNullOrWhiteSpace(value.Kind))
             {
                 writer.WriteString(
-                    "type",
-                    value.Type);
+                    "kind",
+                    value.Kind);
             }
 
             writer.WritePropertyName("config");

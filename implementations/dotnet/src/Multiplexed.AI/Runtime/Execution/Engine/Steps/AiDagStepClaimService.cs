@@ -1,9 +1,12 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
+using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 {
@@ -147,11 +150,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
 
-                var concurrencyContext = CreateConcurrencyContext(
-                    executionId,
-                    pipelineKey,
-                    readyStep.StepName,
-                    workerId);
+                var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                     executionId,
+                     pipelineKey,
+                     readyStep.StepName,
+                     workerId,
+                     stepState);
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                     concurrencyContext,
@@ -294,11 +298,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
 
-                var concurrencyContext = CreateConcurrencyContext(
-                    executionId,
-                    pipelineKey,
-                    readyStep.StepName,
-                    workerId);
+                var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                     executionId,
+                     pipelineKey,
+                     readyStep.StepName,
+                     workerId,
+                     stepState);
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                     concurrencyContext,
@@ -347,45 +352,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             }
 
             return claimedSteps;
-        }
-
-        /// <summary>
-        /// Creates the concurrency context used by the distributed concurrency gate.
-        /// </summary>
-        /// <param name="executionId">
-        /// The current DAG execution identifier.
-        /// </param>
-        /// <param name="pipelineKey">
-        /// The stable logical pipeline key.
-        /// </param>
-        /// <param name="stepName">
-        /// The ready step name.
-        /// </param>
-        /// <param name="workerId">
-        /// The worker or runtime instance identifier.
-        /// </param>
-        /// <returns>
-        /// The concurrency context for the ready step candidate.
-        /// </returns>
-        /// <remarks>
-        /// The lease id format must remain aligned with the distributed runners that release the
-        /// concurrency lease after execution.
-        /// </remarks>
-        private static AiConcurrencyContext CreateConcurrencyContext(
-            string executionId,
-            string pipelineKey,
-            string stepName,
-            string workerId)
-        {
-            return new AiConcurrencyContext
-            {
-                ExecutionId = executionId,
-                PipelineKey = pipelineKey,
-                StepId = stepName,
-                StepKey = stepName,
-                RuntimeInstanceId = workerId,
-                LeaseId = $"{executionId}:{stepName}:{workerId}"
-            };
         }
 
         /// <summary>
