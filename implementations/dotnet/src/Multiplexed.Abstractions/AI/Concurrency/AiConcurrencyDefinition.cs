@@ -204,5 +204,20 @@ namespace Multiplexed.Abstractions.AI.Concurrency
         /// </para>
         /// </remarks>
         public int MaxJitterMs { get; set; } = 100;
+
+        /// <summary>
+        /// Gets or sets generic distributed concurrency throttling rules resolved from policy configuration.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// These rules support generic policy configuration through <c>concurrency.throttle</c>.
+        /// </para>
+        ///
+        /// <para>
+        /// Rules are applied after the <see cref="AiConcurrencyContext"/> is created, because targeted
+        /// rules must be matched against provider, model, operation, step, step-type, or pipeline values.
+        /// </para>
+        /// </remarks>
+        public List<AiConcurrencyThrottleRule> ThrottleRules { get; set; } = new();
     }
 }

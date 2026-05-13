@@ -428,18 +428,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Verifies that the claim service does not attempt to claim a ready DAG step
-        /// when the distributed concurrency gate denies admission.
+        /// Verifies that the claim service does not claim a ready step when the
+        /// distributed concurrency gate denies admission.
         /// </summary>
-        /// <returns>
-        /// A task representing the asynchronous test operation.
-        /// </returns>
-        /// <remarks>
-        /// This test validates the throttling path:
-        /// the DAG store returns a ready step, the concurrency gate denies capacity,
-        /// and the claim service must return <c>null</c> without attempting a Redis step claim
-        /// and without releasing a lease that was never acquired.
-        /// </remarks>
         [Fact]
         public async Task ClaimNextAsync_Should_Not_Claim_When_Concurrency_Gate_Denies()
         {
@@ -452,18 +443,44 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             var dagStore = Substitute.For<IAiDagExecutionStore>();
             var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             var state = new AiExecutionState
             {
                 ExecutionId = executionId,
                 PipelineName = "test-pipeline",
                 Steps =
-        {
-            [stepName] = new AiStepState
-            {
-                StepName = stepName,
-                Status = AiStepExecutionStatus.Ready
-            }
-        }
+                {
+                    [stepName] = new AiStepState
+                    {
+                        StepName = stepName,
+                        Status = AiStepExecutionStatus.Ready,
+                        Config = stepConfig
+                    }
+                }
             };
 
             dagStore.RecoverTimedOutStepsAsync(
@@ -507,11 +524,23 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId);
 
             // Assert
             Assert.Null(claimed);
+
+            _ = concurrencyGate.Received(1).TryAcquireAsync(
+                Arg.Is<AiConcurrencyContext>(context =>
+                    context.ExecutionId == executionId &&
+                    context.PipelineKey == pipelineKey &&
+                    context.StepId == stepName &&
+                    context.StepKey == stepName &&
+                    context.RuntimeInstanceId == workerId &&
+                    context.LeaseId == $"{executionId}:{stepName}:{workerId}"),
+                Arg.Any<AiConcurrencyDefinition>(),
+                Arg.Any<CancellationToken>());
 
             _ = dagStore.DidNotReceive().TryClaimStepAsync(
                 Arg.Any<string>(),
@@ -525,7 +554,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
                 Arg.Any<CancellationToken>());
         }
 
-        
+
 
         /// <summary>
         /// Verifies that the claim service releases distributed concurrency capacity
@@ -552,6 +581,31 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var dagStore = Substitute.For<IAiDagExecutionStore>();
             var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
 
             var state = new AiExecutionState
             {
@@ -613,6 +667,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId);
 
@@ -673,6 +728,31 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             var dagStore = Substitute.For<IAiDagExecutionStore>();
             var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             var state = new AiExecutionState
             {
                 ExecutionId = executionId,
@@ -728,6 +808,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimedSteps = await service.ClaimBatchAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId,
                 maxSteps: 4);
@@ -830,9 +911,35 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var service = new AiDagStepClaimService(services);
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             // Act
             var claimedSteps = await service.ClaimBatchAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId,
                 maxSteps: 4);
@@ -1109,6 +1216,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
                     }
                 }
             };
+
+
 
             // Act
             var definition = resolver.Resolve(stepState);
@@ -1414,6 +1523,33 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
             };
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxProviderConcurrency"] = 10,
+                    ["maxModelConcurrency"] = 5,
+                    ["maxOperationConcurrency"] = 20
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                 [
+                     new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                 ]
+            };
+
             dagStore.RecoverTimedOutStepsAsync(
                     executionId,
                     Arg.Any<CancellationToken>())
@@ -1465,6 +1601,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId);
 
@@ -1541,6 +1678,34 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
             };
 
+
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxProviderConcurrency"] = 10,
+                    ["maxModelConcurrency"] = 5,
+                    ["maxOperationConcurrency"] = 20
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             dagStore.RecoverTimedOutStepsAsync(
                     executionId,
                     Arg.Any<CancellationToken>())
@@ -1592,6 +1757,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimedSteps = await service.ClaimBatchAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId,
                 maxSteps: 4);
@@ -2145,6 +2311,31 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
             };
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxProviderConcurrency"] = 10
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             dagStore.RecoverTimedOutStepsAsync(
                     executionId,
                     Arg.Any<CancellationToken>())
@@ -2197,6 +2388,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId);
 
@@ -2267,6 +2459,38 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
             };
 
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["policies"] = new[]
+                        {
+                            new Dictionary<string, object?>
+                            {
+                                ["name"] = "concurrency.block.test",
+                                ["kind"] = "Concurrency"
+                            }
+                        }
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+                    {
+                        Name = stepName,
+                        StepKey = stepName,
+                        Config = stepConfig
+                    }
+                ]
+            };
+
             dagStore.RecoverTimedOutStepsAsync(
                     executionId,
                     Arg.Any<CancellationToken>())
@@ -2313,6 +2537,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
+                pipeline,
                 pipelineKey,
                 workerId);
 
@@ -2348,6 +2573,300 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
                 Arg.Any<AiConcurrencyContext>(),
                 Arg.Any<AiConcurrencyDefinition>(),
                 Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// Verifies that a generic provider throttle rule applies when the provider target matches.
+        /// </summary>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Apply_Generic_Provider_Throttle_When_Target_Matches()
+        {
+            // Arrange
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100,
+                ThrottleRules = new List<AiConcurrencyThrottleRule>
+        {
+            new()
+            {
+                Scope = "provider",
+                Target = "openai",
+                Limit = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            }
+        }
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-generic-provider-target-1",
+                stepName: "summary-step",
+                workerId: "worker-1",
+                leaseId: "lease-generic-provider-target-1",
+                provider: "openai",
+                model: "gpt-4.1",
+                operation: "llm.chat");
+
+            var secondContext = CreateContext(
+                executionId: "exec-generic-provider-target-2",
+                stepName: "compose-step",
+                workerId: "worker-2",
+                leaseId: "lease-generic-provider-target-2",
+                provider: "openai",
+                model: "gpt-4.1",
+                operation: "llm.chat");
+
+            var firstDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                firstContext);
+
+            var secondDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                secondContext);
+
+            // Act
+            var firstDecision = await gate.TryAcquireAsync(
+                firstContext,
+                firstDefinition);
+
+            var secondDecision = await gate.TryAcquireAsync(
+                secondContext,
+                secondDefinition);
+
+            // Assert
+            Assert.True(firstDecision.Allowed);
+
+            Assert.False(secondDecision.Allowed);
+            Assert.NotNull(secondDecision.Reason);
+            Assert.Contains("Concurrency limit reached", secondDecision.Reason);
+            Assert.Contains("ai:concurrency:scope:provider:openai", secondDecision.Reason);
+            Assert.Contains("Current='1'", secondDecision.Reason);
+            Assert.Contains("Limit='1'", secondDecision.Reason);
+        }
+
+        /// <summary>
+        /// Verifies that a generic provider throttle rule is ignored when the provider target does not match.
+        /// </summary>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Not_Apply_Generic_Provider_Throttle_When_Target_Does_Not_Match()
+        {
+            // Arrange
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100,
+                ThrottleRules = new List<AiConcurrencyThrottleRule>
+        {
+            new()
+            {
+                Scope = "provider",
+                Target = "openai",
+                Limit = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            }
+        }
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-generic-provider-no-match-1",
+                stepName: "summary-step",
+                workerId: "worker-1",
+                leaseId: "lease-generic-provider-no-match-1",
+                provider: "anthropic",
+                model: "claude-sonnet",
+                operation: "llm.chat");
+
+            var secondContext = CreateContext(
+                executionId: "exec-generic-provider-no-match-2",
+                stepName: "compose-step",
+                workerId: "worker-2",
+                leaseId: "lease-generic-provider-no-match-2",
+                provider: "anthropic",
+                model: "claude-sonnet",
+                operation: "llm.chat");
+
+            var firstDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                firstContext);
+
+            var secondDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                secondContext);
+
+            // Act
+            var firstDecision = await gate.TryAcquireAsync(
+                firstContext,
+                firstDefinition);
+
+            var secondDecision = await gate.TryAcquireAsync(
+                secondContext,
+                secondDefinition);
+
+            // Assert
+            Assert.True(firstDecision.Allowed);
+            Assert.True(secondDecision.Allowed);
+        }
+
+        /// <summary>
+        /// Verifies that a generic model throttle rule applies when the provider/model target matches.
+        /// </summary>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Apply_Generic_Model_Throttle_When_Target_Matches()
+        {
+            // Arrange
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100,
+                ThrottleRules = new List<AiConcurrencyThrottleRule>
+        {
+            new()
+            {
+                Scope = "model",
+                Target = "openai:gpt-4.1",
+                Limit = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            }
+        }
+            };
+
+            var firstContext = CreateContext(
+                executionId: "exec-generic-model-target-1",
+                stepName: "summary-step",
+                workerId: "worker-1",
+                leaseId: "lease-generic-model-target-1",
+                provider: "openai",
+                model: "gpt-4.1",
+                operation: "llm.chat");
+
+            var secondContext = CreateContext(
+                executionId: "exec-generic-model-target-2",
+                stepName: "compose-step",
+                workerId: "worker-2",
+                leaseId: "lease-generic-model-target-2",
+                provider: "openai",
+                model: "gpt-4.1",
+                operation: "llm.chat");
+
+            var firstDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                firstContext);
+
+            var secondDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                secondContext);
+
+            // Act
+            var firstDecision = await gate.TryAcquireAsync(
+                firstContext,
+                firstDefinition);
+
+            var secondDecision = await gate.TryAcquireAsync(
+                secondContext,
+                secondDefinition);
+
+            // Assert
+            Assert.True(firstDecision.Allowed);
+
+            Assert.False(secondDecision.Allowed);
+            Assert.NotNull(secondDecision.Reason);
+            Assert.Contains("Concurrency limit reached", secondDecision.Reason);
+            Assert.Contains("ai:concurrency:scope:model:openai:gpt-4.1", secondDecision.Reason);
+            Assert.Contains("Current='1'", secondDecision.Reason);
+            Assert.Contains("Limit='1'", secondDecision.Reason);
+        }
+
+        /// <summary>
+        /// Verifies that a generic step-type throttle rule applies when the step key target matches.
+        /// </summary>
+        [Fact]
+        public async Task TryAcquireAsync_Should_Apply_Generic_StepType_Throttle_When_Target_Matches()
+        {
+            // Arrange
+            var gate = new RedisAiConcurrencyGate(_redis);
+
+            var definition = new AiConcurrencyDefinition
+            {
+                Enabled = true,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100,
+                ThrottleRules = new List<AiConcurrencyThrottleRule>
+        {
+            new()
+            {
+                Scope = "step-type",
+                Target = "llm.summary",
+                Limit = 1,
+                LeaseSeconds = 10,
+                DefaultRetryAfterMs = 100
+            }
+        }
+            };
+
+            var firstContext = new AiConcurrencyContext
+            {
+                ExecutionId = "exec-generic-step-type-1",
+                PipelineKey = "pipeline-a:v1",
+                StepId = "summarize-a",
+                StepKey = "llm.summary",
+                RuntimeInstanceId = "worker-1",
+                LeaseId = "lease-generic-step-type-1",
+                Provider = "openai",
+                Model = "gpt-4.1",
+                Operation = "llm.chat"
+            };
+
+            var secondContext = new AiConcurrencyContext
+            {
+                ExecutionId = "exec-generic-step-type-2",
+                PipelineKey = "pipeline-a:v1",
+                StepId = "summarize-b",
+                StepKey = "llm.summary",
+                RuntimeInstanceId = "worker-2",
+                LeaseId = "lease-generic-step-type-2",
+                Provider = "openai",
+                Model = "gpt-4.1",
+                Operation = "llm.chat"
+            };
+
+            var firstDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                firstContext);
+
+            var secondDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                secondContext);
+
+            // Act
+            var firstDecision = await gate.TryAcquireAsync(
+                firstContext,
+                firstDefinition);
+
+            var secondDecision = await gate.TryAcquireAsync(
+                secondContext,
+                secondDefinition);
+
+            // Assert
+            Assert.True(firstDecision.Allowed);
+
+            Assert.False(secondDecision.Allowed);
+            Assert.NotNull(secondDecision.Reason);
+            Assert.Contains("Concurrency limit reached", secondDecision.Reason);
+            Assert.Contains("ai:concurrency:scope:pipeline-step:pipeline-a:v1:llm.summary", secondDecision.Reason);
+            Assert.Contains("Current='1'", secondDecision.Reason);
+            Assert.Contains("Limit='1'", secondDecision.Reason);
         }
 
         /// <summary>

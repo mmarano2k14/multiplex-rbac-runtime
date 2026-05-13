@@ -177,6 +177,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
 
             var claimed = await _claimService.ClaimNextAsync(
                 executionId,
+                resolvedPipeline,
                 pipelineKey,
                 workerId,
                 cancellationToken).ConfigureAwait(false);
@@ -588,6 +589,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         claimed.StepName,
                         workerId,
                         state,
+                        resolvedPipeline,
                         CancellationToken.None).ConfigureAwait(false);
                 }
             }
@@ -643,35 +645,53 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// still recovers capacity after lease expiration.
         /// </remarks>
         private async Task ReleaseConcurrencyLeaseAsync(
-            string executionId,
-            string pipelineKey,
-            string stepName,
-            string workerId,
-            AiExecutionState state,
-            CancellationToken cancellationToken)
+    string executionId,
+    string pipelineKey,
+    string stepName,
+    string workerId,
+    AiExecutionState state,
+    ResolvedAiPipeline pipeline,
+    CancellationToken cancellationToken)
         {
             if (!state.Steps.TryGetValue(stepName, out var stepState))
             {
                 return;
             }
 
-            var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+            var stepDefinition = pipeline.Steps.FirstOrDefault(x =>
+                string.Equals(x.Name, stepName, StringComparison.OrdinalIgnoreCase));
 
-            if (!concurrencyDefinition.Enabled)
+            if (stepDefinition is null)
             {
                 return;
             }
 
-            var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
-                     executionId,
-                     pipelineKey,
-                     stepName,
-                     workerId,
-                     stepState);
+            var pipelineStepDefinition = new AiPipelineStepDefinition
+            {
+                Name = stepDefinition.Name,
+                StepKey = stepDefinition.StepKey,
+                Config = stepDefinition.Config ?? new Dictionary<string, object?>(),
+                DependsOn = stepDefinition.DependsOn ?? Array.Empty<string>()
+            };
+
+            var concurrencyAdmission = AiDagExecutionHelpers.CreateConcurrencyAdmission(
+                executionId,
+                pipelineKey,
+                stepName,
+                workerId,
+                stepState,
+                pipeline.Config,
+                pipelineStepDefinition,
+                ConcurrencyDefinitionResolver);
+
+            if (!concurrencyAdmission.Definition.Enabled)
+            {
+                return;
+            }
 
             await _engineServices.ConcurrencyGate.ReleaseAsync(
-                concurrencyContext,
-                concurrencyDefinition,
+                concurrencyAdmission.Context,
+                concurrencyAdmission.Definition,
                 cancellationToken).ConfigureAwait(false);
         }
     }

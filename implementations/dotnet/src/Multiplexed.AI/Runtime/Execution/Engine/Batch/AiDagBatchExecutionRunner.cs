@@ -229,6 +229,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
 
             var claimedSteps = await _claimService.ClaimBatchAsync(
                 executionId,
+                resolvedPipeline,
                 pipelineKey,
                 workerId,
                 maxSteps,
@@ -378,6 +379,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                         claimedStep.StepName,
                         workerId,
                         state,
+                        resolvedPipeline,
                         CancellationToken.None).ConfigureAwait(false);
                 }
             }
@@ -513,6 +515,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
             string stepName,
             string workerId,
             AiExecutionState state,
+            ResolvedAiPipeline pipeline,
             CancellationToken cancellationToken)
         {
             if (!state.Steps.TryGetValue(stepName, out var stepState))
@@ -520,24 +523,59 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                 return;
             }
 
-            var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+            var stepDefinition = FindPipelineStep(
+                pipeline,
+                stepName);
 
-            if (!concurrencyDefinition.Enabled)
+            var concurrencyAdmission = AiDagExecutionHelpers.CreateConcurrencyAdmission(
+                executionId,
+                pipelineKey,
+                stepName,
+                workerId,
+                stepState,
+                pipeline.Config,
+                stepDefinition,
+                ConcurrencyDefinitionResolver);
+
+            if (!concurrencyAdmission.Definition.Enabled)
             {
                 return;
             }
 
-            var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
-                 executionId,
-                 pipelineKey,
-                 stepName,
-                 workerId,
-                 stepState);
-
             await _engineServices.ConcurrencyGate.ReleaseAsync(
-                concurrencyContext,
-                concurrencyDefinition,
+                concurrencyAdmission.Context,
+                concurrencyAdmission.Definition,
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Finds the pipeline step definition for a claimed step.
+        /// </summary>
+        private static AiPipelineStepDefinition FindPipelineStep(
+            ResolvedAiPipeline pipeline,
+            string stepName)
+        {
+            var step = pipeline.Steps.FirstOrDefault(x =>
+                string.Equals(x.Name, stepName, StringComparison.OrdinalIgnoreCase));
+
+            if (step is not null)
+            {
+                return new AiPipelineStepDefinition
+                {
+                    Name = step.Name,
+                    StepKey = string.IsNullOrWhiteSpace(step.StepKey)
+                        ? step.Name
+                        : step.StepKey,
+                    Config = step.Config ?? new Dictionary<string, object?>()
+                };
+            }
+
+            return new AiPipelineStepDefinition
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = new Dictionary<string, object?>()
+            };
         }
 
         /// <summary>

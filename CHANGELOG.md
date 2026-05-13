@@ -6,6 +6,96 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.4.6] - 2026-14-04 - Policy-Driven Concurrency Admission and Generic Throttling
+
+- Added policy-aware concurrency admission before Redis distributed lease acquisition.
+- Integrated concurrency policy evaluation into DAG step claiming.
+- Ensured denied concurrency policies prevent:
+  - Redis lease acquisition
+  - DAG step claiming
+  - step execution
+- Added concrete concurrency admission policies:
+  - `concurrency.provider.admission`
+  - `concurrency.model.admission`
+  - `concurrency.operation.admission`
+- Added generic distributed throttle policy:
+  - `concurrency.throttle`
+- Added generic throttle rule support with:
+  - `scope`
+  - `target`
+  - `limit`
+  - `leaseSeconds`
+  - `defaultRetryAfterMs`
+- Added supported generic throttle scopes:
+  - `provider`
+  - `model`
+  - `operation`
+  - `step`
+  - `step-type`
+  - `pipeline`
+- Added optional `target` matching for generic throttle rules.
+- Added provider target matching for pipeline-level throttle rules.
+- Added model target matching using the normalized `{provider}:{model}` format.
+- Added operation target matching using the logical operation name.
+- Added step throttle targeting by concrete step name.
+- Added step-type throttle targeting by logical step key.
+- Added pipeline throttle targeting by stable pipeline key.
+- Added `AiConcurrencyThrottleRule` to represent generic throttle rules resolved from policy configuration.
+- Added `AiConcurrencyThrottleRuleApplicator` to apply matching throttle rules after `AiConcurrencyContext` creation.
+- Added `AiConcurrencyPolicyContext` so concurrency policies can receive policy-specific configuration without polluting `AiConcurrencyContext`.
+- Kept `AiConcurrencyContext` focused on runtime admission identity:
+  - execution id
+  - pipeline key
+  - step id
+  - step key
+  - runtime instance id
+  - lease id
+  - provider
+  - model
+  - operation
+- Updated `DefaultAiConcurrencyEngine` to execute configured concurrency policies with their own policy config.
+- Updated `DefaultAiConcurrencyDefinitionResolver` to resolve generic throttle rules from `concurrency.throttle` policy configuration.
+- Preserved direct concurrency configuration priority over policy-derived throttle rules.
+- Preserved pipeline-level concurrency policy configuration without copying pipeline config into `AiExecutionState`.
+- Updated DAG claim preparation so concurrency admission can use both:
+  - pipeline-level concurrency config
+  - step-level concurrency config
+- Updated DAG claim service to use the effective concurrency definition for both acquisition and release.
+- Updated distributed batch and distributed single-step runners to pass the resolved pipeline into claim acquisition.
+- Added provider admission policy tests for:
+  - allowed provider
+  - blocked provider
+  - required provider missing
+  - case-insensitive provider matching
+- Added model admission policy tests for:
+  - allowed provider/model pair
+  - blocked provider/model pair
+  - required model missing
+  - case-insensitive model matching
+  - provider-scoped model matching
+- Added operation admission policy tests for:
+  - allowed operation
+  - blocked operation
+  - required operation missing
+  - case-insensitive operation matching
+- Added generic throttle policy tests verifying that `concurrency.throttle` acts as an allow-through marker policy while Redis enforces distributed throttling.
+- Added Redis gate integration coverage for generic throttle rules:
+  - provider target match
+  - provider target no-match
+  - model target match
+  - step-type target match
+- Added real DAG execution integration coverage for:
+  - provider admission deny/allow
+  - model admission deny/allow
+  - operation admission deny/allow
+  - pipeline-level generic provider throttle
+  - pipeline-level provider target no-match
+  - pipeline-level generic model throttle
+- Documented that policy denial occurs before Redis lease acquisition and before DAG step claiming.
+- Documented that generic throttle policy enforcement is performed by Redis distributed concurrency scopes, not by the policy itself.
+
+---
+
 ## [1.0.4.5] - 2026-12-04 - Distributed Concurrency / Throttling
 
 - Added Redis-backed distributed concurrency gate using ZSET-based leases.

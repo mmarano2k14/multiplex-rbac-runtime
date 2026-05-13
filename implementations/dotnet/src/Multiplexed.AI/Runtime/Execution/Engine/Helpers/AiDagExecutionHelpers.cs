@@ -1,5 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.AI.Runtime.AI.Concurrency;
 using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
@@ -195,5 +197,98 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 _ => value.ToString()
             };
         }
+
+        /// <summary>
+        /// Creates the effective concurrency admission data for a DAG step.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key.
+        /// </param>
+        /// <param name="stepName">
+        /// The concrete step name.
+        /// </param>
+        /// <param name="workerId">
+        /// The worker or runtime instance identifier.
+        /// </param>
+        /// <param name="stepState">
+        /// The step state containing concurrency, provider, model, and operation config.
+        /// </param>
+        /// <param name="definitionResolver">
+        /// The concurrency definition resolver.
+        /// </param>
+        /// <returns>
+        /// The concurrency context and effective concurrency definition.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This helper centralizes the full admission preparation flow:
+        /// </para>
+        ///
+        /// <list type="number">
+        /// <item><description>Resolve <see cref="AiConcurrencyDefinition"/> from step config.</description></item>
+        /// <item><description>Create <see cref="AiConcurrencyContext"/> from runtime and step metadata.</description></item>
+        /// <item><description>Apply matching generic throttle rules using the runtime context.</description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// It is important that acquire and release paths use the same effective definition
+        /// so Redis scope acquisition and release remain aligned.
+        /// </para>
+        /// </remarks>
+        public static AiDagConcurrencyAdmission CreateConcurrencyAdmission(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            AiStepState stepState,
+            IReadOnlyDictionary<string, object?>? pipelineConfig,
+            AiPipelineStepDefinition stepDefinition,
+            IAiConcurrencyDefinitionResolver definitionResolver)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+            ArgumentNullException.ThrowIfNull(stepState);
+            ArgumentNullException.ThrowIfNull(stepDefinition);
+            ArgumentNullException.ThrowIfNull(definitionResolver);
+
+            var pipelineDefinition = new AiPipelineDefinition
+            {
+                Name = pipelineKey,
+                Version = "runtime",
+                ExecutionMode = AiExecutionMode.Dag,
+                Config = pipelineConfig ?? new Dictionary<string, object?>(),
+                Steps = new[]
+                {
+                    stepDefinition
+                }
+            };
+
+            var definition = definitionResolver.Resolve(
+                pipelineDefinition,
+                stepDefinition);
+
+            var context = CreateConcurrencyContext(
+                executionId,
+                pipelineKey,
+                stepName,
+                workerId,
+                stepState);
+
+            var effectiveDefinition = AiConcurrencyThrottleRuleApplicator.Apply(
+                definition,
+                context);
+
+            return new AiDagConcurrencyAdmission
+            {
+                Context = context,
+                Definition = effectiveDefinition
+            };
+        }
+
     }
 }

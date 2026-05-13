@@ -22,21 +22,15 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     ///
     /// <para>
     /// Configured policy entries can provide default concurrency values through
-    /// <c>policy.config</c>. These policy-provided values only fill missing values from the same
-    /// concurrency definition. Direct <c>config.concurrency</c> values remain authoritative.
+    /// <c>policy.config</c>. These values only fill missing values from the same concurrency
+    /// definition. Direct <c>config.concurrency</c> values remain authoritative.
     /// </para>
     ///
     /// <para>
-    /// Effective priority:
+    /// Generic throttle rules are also resolved from policies named
+    /// <c>concurrency.throttle</c>. These rules support scoped throttling with optional targets:
+    /// provider, model, operation, step, step-type, and pipeline.
     /// </para>
-    ///
-    /// <list type="number">
-    /// <item><description>Step direct <c>config.concurrency</c> values.</description></item>
-    /// <item><description>Step <c>config.concurrency.policies[].config</c> values.</description></item>
-    /// <item><description>Pipeline direct <c>config.concurrency</c> values.</description></item>
-    /// <item><description>Pipeline <c>config.concurrency.policies[].config</c> values.</description></item>
-    /// <item><description>Runtime defaults.</description></item>
-    /// </list>
     /// </remarks>
     public sealed class DefaultAiConcurrencyDefinitionResolver : IAiConcurrencyDefinitionResolver
     {
@@ -44,6 +38,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         {
             Enabled = false,
             Policies = new List<AiConfiguredPolicyDefinition>(),
+            ThrottleRules = new List<AiConcurrencyThrottleRule>(),
             DefaultRetryAfterMs = 250,
             LeaseSeconds = 300,
             MaxJitterMs = 100
@@ -104,16 +99,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <returns>
         /// A raw nullable concurrency definition, or <c>null</c> when no concurrency section exists.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// The raw definition preserves whether values were explicitly present in configuration.
-        /// </para>
-        ///
-        /// <para>
-        /// After deserialization, configured policy defaults are applied only to missing values.
-        /// Direct values from <c>config.concurrency</c> are never overwritten by policy config.
-        /// </para>
-        /// </remarks>
         private static RawAiConcurrencyDefinition? TryReadDefinition(
             IReadOnlyDictionary<string, object?>? config)
         {
@@ -157,16 +142,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <returns>
         /// The enriched raw definition.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// This does not execute policy logic. It only treats <c>policy.config</c> as a structured
-        /// configuration bundle for default concurrency values.
-        /// </para>
-        ///
-        /// <para>
-        /// Existing direct values are preserved. Policy config only fills missing values.
-        /// </para>
-        /// </remarks>
         private static RawAiConcurrencyDefinition ApplyConfiguredPolicyDefaults(
             RawAiConcurrencyDefinition definition)
         {
@@ -181,6 +156,10 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 {
                     continue;
                 }
+
+                AddThrottleRuleIfConfigured(
+                    definition,
+                    policy);
 
                 definition.Enabled ??= TryReadBool(policy.Config, "enabled");
 
@@ -207,6 +186,64 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
+        /// Adds a generic throttle rule when a configured policy declares scope and limit.
+        /// </summary>
+        /// <param name="definition">
+        /// The raw definition being enriched.
+        /// </param>
+        /// <param name="policy">
+        /// The configured policy definition.
+        /// </param>
+        /// <remarks>
+        /// <para>
+        /// This supports:
+        /// </para>
+        ///
+        /// <code>
+        /// {
+        ///   "name": "concurrency.throttle",
+        ///   "config": {
+        ///     "scope": "provider",
+        ///     "target": "openai",
+        ///     "limit": 10
+        ///   }
+        /// }
+        /// </code>
+        /// </remarks>
+        private static void AddThrottleRuleIfConfigured(
+            RawAiConcurrencyDefinition definition,
+            AiConfiguredPolicyDefinition policy)
+        {
+            if (!string.Equals(
+                    policy.Name,
+                    "concurrency.throttle",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var scope = TryReadString(policy.Config, "scope");
+            var limit = TryReadInt(policy.Config, "limit");
+
+            if (string.IsNullOrWhiteSpace(scope) || limit is null or <= 0)
+            {
+                return;
+            }
+
+            definition.ThrottleRules ??= new List<AiConcurrencyThrottleRule>();
+
+            definition.ThrottleRules.Add(
+                new AiConcurrencyThrottleRule
+                {
+                    Scope = scope,
+                    Target = TryReadString(policy.Config, "target"),
+                    Limit = limit.Value,
+                    LeaseSeconds = TryReadInt(policy.Config, "leaseSeconds"),
+                    DefaultRetryAfterMs = TryReadInt(policy.Config, "defaultRetryAfterMs")
+                });
+        }
+
+        /// <summary>
         /// Merges pipeline-level and step-level raw concurrency definitions.
         /// </summary>
         /// <param name="pipeline">
@@ -218,17 +255,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <returns>
         /// The merged raw concurrency definition.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// Step-level values override pipeline-level values only when the step value is explicitly
-        /// configured or supplied through step-level policy config.
-        /// </para>
-        ///
-        /// <para>
-        /// The existing policy behavior is preserved: when step policies are configured, they replace
-        /// pipeline policies. Otherwise, pipeline policies are used.
-        /// </para>
-        /// </remarks>
         private static RawAiConcurrencyDefinition Merge(
             RawAiConcurrencyDefinition pipeline,
             RawAiConcurrencyDefinition step)
@@ -240,6 +266,10 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 Policies = step.Policies is { Count: > 0 }
                     ? step.Policies
                     : pipeline.Policies,
+
+                ThrottleRules = MergeThrottleRules(
+                    pipeline.ThrottleRules,
+                    step.ThrottleRules),
 
                 MaxDegreeOfParallelism = step.MaxDegreeOfParallelism
                     ?? pipeline.MaxDegreeOfParallelism,
@@ -283,6 +313,44 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
+        /// Merges pipeline-level and step-level throttle rules.
+        /// </summary>
+        /// <param name="pipelineRules">
+        /// The pipeline-level rules.
+        /// </param>
+        /// <param name="stepRules">
+        /// The step-level rules.
+        /// </param>
+        /// <returns>
+        /// The combined throttle rules.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Unlike the policy list, throttle rules are additive. Pipeline rules and step rules
+        /// can both apply, and direct configured concurrency values still remain authoritative
+        /// during effective definition application.
+        /// </para>
+        /// </remarks>
+        private static List<AiConcurrencyThrottleRule> MergeThrottleRules(
+            List<AiConcurrencyThrottleRule>? pipelineRules,
+            List<AiConcurrencyThrottleRule>? stepRules)
+        {
+            var result = new List<AiConcurrencyThrottleRule>();
+
+            if (pipelineRules is { Count: > 0 })
+            {
+                result.AddRange(pipelineRules);
+            }
+
+            if (stepRules is { Count: > 0 })
+            {
+                result.AddRange(stepRules);
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Converts a raw nullable concurrency definition into the runtime definition.
         /// </summary>
         /// <param name="definition">
@@ -291,10 +359,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <returns>
         /// A normalized <see cref="AiConcurrencyDefinition"/>.
         /// </returns>
-        /// <remarks>
-        /// Defaults are applied only here, after policy enrichment and pipeline/step merge have
-        /// completed.
-        /// </remarks>
         private static AiConcurrencyDefinition ToRuntimeDefinition(
             RawAiConcurrencyDefinition definition)
         {
@@ -303,6 +367,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 Enabled = definition.Enabled ?? false,
 
                 Policies = definition.Policies ?? new List<AiConfiguredPolicyDefinition>(),
+                ThrottleRules = definition.ThrottleRules ?? new List<AiConcurrencyThrottleRule>(),
 
                 MaxDegreeOfParallelism = definition.MaxDegreeOfParallelism,
 
@@ -335,15 +400,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <summary>
         /// Attempts to read an integer value from policy configuration.
         /// </summary>
-        /// <param name="config">
-        /// The policy configuration dictionary.
-        /// </param>
-        /// <param name="key">
-        /// The configuration key.
-        /// </param>
-        /// <returns>
-        /// The integer value when present and valid; otherwise, <c>null</c>.
-        /// </returns>
         private static int? TryReadInt(
             IReadOnlyDictionary<string, object?> config,
             string key)
@@ -371,15 +427,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <summary>
         /// Attempts to read a boolean value from policy configuration.
         /// </summary>
-        /// <param name="config">
-        /// The policy configuration dictionary.
-        /// </param>
-        /// <param name="key">
-        /// The configuration key.
-        /// </param>
-        /// <returns>
-        /// The boolean value when present and valid; otherwise, <c>null</c>.
-        /// </returns>
         private static bool? TryReadBool(
             IReadOnlyDictionary<string, object?> config,
             string key)
@@ -402,20 +449,28 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
+        /// Attempts to read a string value from policy configuration.
+        /// </summary>
+        private static string? TryReadString(
+            IReadOnlyDictionary<string, object?> config,
+            string key)
+        {
+            if (!TryGetValue(config, key, out var value) || value is null)
+            {
+                return null;
+            }
+
+            return value switch
+            {
+                string text when !string.IsNullOrWhiteSpace(text) => text,
+                JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+                _ => value.ToString()
+            };
+        }
+
+        /// <summary>
         /// Attempts to read a value from a dictionary using case-insensitive key matching.
         /// </summary>
-        /// <param name="config">
-        /// The configuration dictionary.
-        /// </param>
-        /// <param name="key">
-        /// The key to find.
-        /// </param>
-        /// <param name="value">
-        /// The matched value.
-        /// </param>
-        /// <returns>
-        /// <c>true</c> when the key exists; otherwise, <c>false</c>.
-        /// </returns>
         private static bool TryGetValue(
             IReadOnlyDictionary<string, object?> config,
             string key,
@@ -442,10 +497,6 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// <summary>
         /// Internal nullable representation of concurrency configuration.
         /// </summary>
-        /// <remarks>
-        /// This type exists to preserve whether configuration values were explicitly provided before
-        /// runtime defaults are applied.
-        /// </remarks>
         private sealed class RawAiConcurrencyDefinition
         {
             /// <summary>
@@ -457,6 +508,11 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             /// Gets or sets configured concurrency policies.
             /// </summary>
             public List<AiConfiguredPolicyDefinition>? Policies { get; set; }
+
+            /// <summary>
+            /// Gets or sets generic throttle rules resolved from configured policies.
+            /// </summary>
+            public List<AiConcurrencyThrottleRule>? ThrottleRules { get; set; }
 
             /// <summary>
             /// Gets or sets the local maximum degree of parallelism.
@@ -541,6 +597,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 {
                     Enabled = definition.Enabled,
                     Policies = definition.Policies,
+                    ThrottleRules = definition.ThrottleRules,
                     MaxDegreeOfParallelism = definition.MaxDegreeOfParallelism,
                     MaxGlobalConcurrency = definition.MaxGlobalConcurrency,
                     MaxPipelineConcurrency = definition.MaxPipelineConcurrency,

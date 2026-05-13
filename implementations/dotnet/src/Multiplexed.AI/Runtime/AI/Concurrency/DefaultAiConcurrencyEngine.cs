@@ -12,12 +12,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This engine is decision-only.
-    /// </para>
-    ///
-    /// <para>
-    /// It resolves concurrency configuration from the current step state, executes configured
-    /// concurrency policies, and computes whether a step may proceed to distributed slot acquisition.
+    /// This engine is decision-only. It evaluates configured concurrency policies and computes
+    /// whether a step may proceed to distributed Redis concurrency-slot acquisition.
     /// </para>
     ///
     /// <para>
@@ -26,9 +22,8 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
     /// </para>
     ///
     /// <para>
-    /// The engine follows the same policy-engine pattern as the retry engine:
-    /// resolve the step-scoped definition, resolve policies by kind, execute policies, then convert
-    /// policy results into a domain decision.
+    /// Configured concurrency policies are executed one by one so each policy receives its own
+    /// <c>AiConfiguredPolicyDefinition.Config</c> through <see cref="AiConcurrencyPolicyContext"/>.
     /// </para>
     /// </remarks>
     [AiPolicyEngine(AiPolicyKind.Concurrency)]
@@ -104,13 +99,9 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 };
             }
 
-            var policies = ResolvePolicies(
-                definition.Policies.GetPolicyNames(),
-                AiPolicyKind.Concurrency);
-
-            var results = await ExecutePoliciesAsync(
+            var results = await ExecuteConfiguredConcurrencyPoliciesAsync(
                     context,
-                    policies,
+                    definition,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -126,8 +117,7 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         }
 
         /// <summary>
-        /// Resolves concurrency configuration from the current step context and falls back
-        /// to the default concurrency definition when no configuration is available.
+        /// Resolves concurrency configuration from the current step context.
         /// </summary>
         /// <param name="cancellationToken">
         /// A token used to cancel the asynchronous operation.
@@ -137,14 +127,9 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
         /// </returns>
         /// <remarks>
         /// <para>
-        /// The resolver is intentionally used here instead of deserializing directly into
-        /// <see cref="AiConcurrencyDefinition"/>.
-        /// </para>
-        ///
-        /// <para>
-        /// This preserves the resolver behavior added for concurrency:
-        /// nullable raw config, policy-config defaults, direct config priority, and safe default
-        /// application after merge.
+        /// The resolver is used instead of direct deserialization so policy-config defaults,
+        /// direct config priority, and nullable merge semantics remain consistent with the rest
+        /// of the concurrency system.
         /// </para>
         /// </remarks>
         public Task<AiConcurrencyDefinition> ResolveConcurrencyDefinitionAsync(
@@ -156,6 +141,69 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
                 StepContext.StepState);
 
             return Task.FromResult(definition ?? DefaultConcurrencyDefinition);
+        }
+
+        /// <summary>
+        /// Executes configured concurrency policies while preserving each policy's own configuration.
+        /// </summary>
+        /// <param name="context">
+        /// The distributed concurrency context.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the asynchronous operation.
+        /// </param>
+        /// <returns>
+        /// The ordered policy execution results.
+        /// </returns>
+        private async Task<IReadOnlyCollection<AiPolicyResult>> ExecuteConfiguredConcurrencyPoliciesAsync(
+            AiConcurrencyContext context,
+            AiConcurrencyDefinition definition,
+            CancellationToken cancellationToken)
+        {
+            if (definition.Policies.Count == 0)
+            {
+                return Array.Empty<AiPolicyResult>();
+            }
+
+            var results = new List<AiPolicyResult>(definition.Policies.Count);
+
+            foreach (var configuredPolicy in definition.Policies)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrWhiteSpace(configuredPolicy.Name))
+                {
+                    continue;
+                }
+
+                var policies = ResolvePolicies(
+                    new[] { configuredPolicy.Name },
+                    AiPolicyKind.Concurrency);
+
+                if (policies.Count == 0)
+                {
+                    continue;
+                }
+
+                var policyContext = new AiConcurrencyPolicyContext
+                {
+                    Concurrency = context,
+                    Config = configuredPolicy.Config
+                };
+
+                var policyResults = await ExecutePoliciesAsync(
+                        policyContext,
+                        policies,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                results.AddRange(policyResults);
+            }
+
+            return results;
         }
 
         /// <summary>
@@ -174,10 +222,20 @@ namespace Multiplexed.AI.Runtime.AI.Concurrency
             AiConcurrencyDefinition definition,
             IReadOnlyCollection<AiPolicyResult> results)
         {
+            if (results.Count == 0)
+            {
+                return AiConcurrencyDecision.Allow();
+            }
+
             if (results.Any(x => x.Kind == AiPolicyResultKind.Block))
             {
+                var reason = results
+                    .Where(x => x.Kind == AiPolicyResultKind.Block)
+                    .Select(x => x.Message)
+                    .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+
                 return AiConcurrencyDecision.Deny(
-                    "Blocked by concurrency policy.",
+                    reason ?? "Blocked by concurrency policy.",
                     TimeSpan.FromMilliseconds(definition.DefaultRetryAfterMs));
             }
 

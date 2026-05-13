@@ -15,9 +15,21 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This service is responsible for selecting ready DAG step candidates, applying policy-aware
-    /// concurrency admission, acquiring distributed concurrency capacity, and then atomically claiming
-    /// the admitted step through the distributed DAG store.
+    /// This service is responsible for selecting ready DAG step candidates, evaluating
+    /// policy-aware concurrency admission, acquiring distributed concurrency capacity,
+    /// and then atomically claiming admitted steps through the distributed DAG store.
+    /// </para>
+    ///
+    /// <para>
+    /// Concurrency admission is resolved from both pipeline-level and step-level
+    /// configuration. This allows pipeline-level throttle policies to apply to all
+    /// matching steps without copying pipeline configuration into execution state.
+    /// </para>
+    ///
+    /// <para>
+    /// The admission preparation is centralized through
+    /// <see cref="AiDagExecutionHelpers.CreateConcurrencyAdmission"/> so single-step and batch
+    /// claiming use the same concurrency context and effective concurrency definition.
     /// </para>
     ///
     /// <para>
@@ -25,8 +37,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// </para>
     ///
     /// <list type="number">
-    /// <item><description>Resolve the step concurrency definition.</description></item>
+    /// <item><description>Resolve pipeline-level and step-level concurrency configuration.</description></item>
     /// <item><description>Create the distributed concurrency context.</description></item>
+    /// <item><description>Apply matching generic throttle rules using the runtime context.</description></item>
     /// <item><description>Evaluate configured concurrency policies when present.</description></item>
     /// <item><description>Acquire distributed Redis concurrency capacity.</description></item>
     /// <item><description>Claim DAG step ownership.</description></item>
@@ -38,7 +51,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     ///
     /// <para>
     /// If Redis capacity is acquired but the DAG claim fails because another worker won the claim race,
-    /// the concurrency lease is released immediately.
+    /// the concurrency lease is released immediately using the same effective definition that was used
+    /// for acquisition.
     /// </para>
     /// </remarks>
     public sealed class AiDagStepClaimService
@@ -68,6 +82,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="executionId">
         /// The execution identifier.
         /// </param>
+        /// <param name="pipeline">
+        /// The resolved pipeline definition used to apply pipeline-level concurrency configuration.
+        /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
         /// </param>
@@ -83,11 +100,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </returns>
         public async Task<AiClaimedStep?> ClaimNextAsync(
             string executionId,
+            ResolvedAiPipeline pipeline,
             string pipelineKey,
             string workerId,
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
 
@@ -135,20 +154,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     continue;
                 }
 
-                var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+                var stepDefinition = FindPipelineStep(
+                    pipeline,
+                    readyStep.StepName);
 
-                var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                var concurrencyAdmission = AiDagExecutionHelpers.CreateConcurrencyAdmission(
                     executionId,
                     pipelineKey,
                     readyStep.StepName,
                     workerId,
-                    stepState);
+                    stepState,
+                    pipeline.Config,
+                    stepDefinition,
+                    ConcurrencyDefinitionResolver);
+
+                var concurrencyContext = concurrencyAdmission.Context;
+                var concurrencyDefinition = concurrencyAdmission.Definition;
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                         concurrencyContext,
                         concurrencyDefinition,
                         state,
                         stepState,
+                        stepDefinition,
                         readyStep.StepName,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -204,6 +232,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="executionId">
         /// The execution identifier.
         /// </param>
+        /// <param name="pipeline">
+        /// The resolved pipeline definition used to apply pipeline-level concurrency configuration.
+        /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
         /// </param>
@@ -221,12 +252,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </returns>
         public async Task<IReadOnlyList<AiClaimedStep>> ClaimBatchAsync(
             string executionId,
+            ResolvedAiPipeline pipeline,
             string pipelineKey,
             string workerId,
             int maxSteps,
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(pipeline);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
             ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
@@ -277,20 +310,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     continue;
                 }
 
-                var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
+                var stepDefinition = FindPipelineStep(
+                    pipeline,
+                    readyStep.StepName);
 
-                var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
+                var concurrencyAdmission = AiDagExecutionHelpers.CreateConcurrencyAdmission(
                     executionId,
                     pipelineKey,
                     readyStep.StepName,
                     workerId,
-                    stepState);
+                    stepState,
+                    pipeline.Config,
+                    stepDefinition,
+                    ConcurrencyDefinitionResolver);
+
+                var concurrencyContext = concurrencyAdmission.Context;
+                var concurrencyDefinition = concurrencyAdmission.Definition;
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
                         concurrencyContext,
                         concurrencyDefinition,
                         state,
                         stepState,
+                        stepDefinition,
                         readyStep.StepName,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -347,13 +389,16 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// The concurrency context for the ready step.
         /// </param>
         /// <param name="definition">
-        /// The resolved concurrency definition.
+        /// The effective concurrency definition after applying matching throttle rules.
         /// </param>
         /// <param name="state">
         /// The current execution state.
         /// </param>
         /// <param name="stepState">
         /// The current step state.
+        /// </param>
+        /// <param name="stepDefinition">
+        /// The resolved pipeline step definition.
         /// </param>
         /// <param name="stepName">
         /// The ready step name.
@@ -381,6 +426,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             AiConcurrencyDefinition definition,
             AiExecutionState state,
             AiStepState stepState,
+            AiPipelineStepDefinition stepDefinition,
             string stepName,
             CancellationToken cancellationToken)
         {
@@ -407,6 +453,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                 definition,
                                 state,
                                 stepState,
+                                stepDefinition,
                                 stepName,
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -450,13 +497,16 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// The concurrency context.
         /// </param>
         /// <param name="definition">
-        /// The resolved concurrency definition.
+        /// The effective concurrency definition.
         /// </param>
         /// <param name="state">
         /// The execution state.
         /// </param>
         /// <param name="stepState">
         /// The step state.
+        /// </param>
+        /// <param name="stepDefinition">
+        /// The resolved pipeline step definition.
         /// </param>
         /// <param name="stepName">
         /// The step name.
@@ -471,7 +521,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <para>
         /// The policy engine is only created when at least one concurrency policy is configured.
         /// This avoids adding policy-engine dependencies to the fast path where throttling is purely
-        /// config-driven.
+        /// config-driven or Redis-gate-driven.
         /// </para>
         /// </remarks>
         private async Task<AiConcurrencyDecision> EvaluateConfiguredConcurrencyPoliciesAsync(
@@ -479,6 +529,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             AiConcurrencyDefinition definition,
             AiExecutionState state,
             AiStepState stepState,
+            AiPipelineStepDefinition stepDefinition,
             string stepName,
             CancellationToken cancellationToken)
         {
@@ -491,6 +542,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 context.ExecutionId,
                 state,
                 stepState,
+                stepDefinition,
                 stepName,
                 cancellationToken);
 
@@ -522,6 +574,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="stepState">
         /// The step state.
         /// </param>
+        /// <param name="stepDefinition">
+        /// The resolved pipeline step definition.
+        /// </param>
         /// <param name="stepName">
         /// The step name.
         /// </param>
@@ -546,6 +601,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             string executionId,
             AiExecutionState state,
             AiStepState stepState,
+            AiPipelineStepDefinition stepDefinition,
             string stepName,
             CancellationToken cancellationToken)
         {
@@ -567,15 +623,55 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             var resolvedStep = new ResolvedAiPipelineStep
             {
                 Name = stepName,
-                StepKey = string.IsNullOrWhiteSpace(stepState.StepName)
+                StepKey = string.IsNullOrWhiteSpace(stepDefinition.StepKey)
                     ? stepName
-                    : stepState.StepName,
-                Config = stepState.Config ?? new Dictionary<string, object?>()
+                    : stepDefinition.StepKey,
+                Config = stepDefinition.Config ?? stepState.Config ?? new Dictionary<string, object?>()
             };
 
             return new AiStepExecutionContext(
                 executionContext,
                 resolvedStep);
+        }
+
+        /// <summary>
+        /// Finds the pipeline step definition for a ready step.
+        /// </summary>
+        /// <param name="pipeline">
+        /// The resolved pipeline definition.
+        /// </param>
+        /// <param name="stepName">
+        /// The ready step name.
+        /// </param>
+        /// <returns>
+        /// The matching pipeline step definition, or a minimal fallback definition when the step
+        /// cannot be found.
+        /// </returns>
+        private static AiPipelineStepDefinition FindPipelineStep(
+            ResolvedAiPipeline pipeline,
+            string stepName)
+        {
+            var step = pipeline.Steps.FirstOrDefault(x =>
+                string.Equals(x.Name, stepName, StringComparison.OrdinalIgnoreCase));
+
+            if (step is not null)
+            {
+                return new AiPipelineStepDefinition
+                {
+                    Name = step.Name,
+                    StepKey = step.StepKey,
+                    Config = step.Config ?? new Dictionary<string, object?>(),
+                    DependsOn = step.DependsOn ?? Array.Empty<string>()
+                };
+            }
+
+            return new AiPipelineStepDefinition
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = new Dictionary<string, object?>(),
+                DependsOn = Array.Empty<string>()
+            };
         }
 
         /// <summary>
