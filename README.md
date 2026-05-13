@@ -1378,6 +1378,14 @@ Concurrency is configured through `config.concurrency`.
 
 The distributed concurrency limits control admission across workers and runtime instances.
 
+Concurrency admission is enforced before DAG step ownership is claimed.
+
+A worker first resolves `config.concurrency`, then attempts to acquire a distributed concurrency lease. Only after admission succeeds does the worker attempt to claim the DAG step through Redis Lua.
+
+If admission is denied, the step remains ready and unclaimed.
+
+If admission succeeds but the DAG claim fails because another worker won the claim race, the concurrency lease is released immediately.
+
 Example:
 
 ```json
@@ -1409,6 +1417,34 @@ Example:
   }
 }
 ```
+
+### Redis ZSET Lease Model
+
+Distributed concurrency is implemented with Redis sorted-set leases.
+
+Each concurrency scope is stored as a Redis ZSET. Each active lease is stored as:
+
+```text
+member = lease id
+score  = expiration timestamp in Unix milliseconds
+```
+
+Before acquiring capacity, Redis Lua removes expired leases:
+```text
+ZREMRANGEBYSCORE scopeKey -inf now
+```
+
+Then it counts active leases:
+
+ZCARD scopeKey
+
+If capacity is available, the lease is added:
+
+ZADD scopeKey expiresAt leaseId
+
+This avoids counter drift.
+
+If a worker crashes after acquiring capacity but before releasing it, the lease eventually expires. A later acquisition attempt removes the expired lease and restores capacity automatically.
 
 This allows the runtime to scale execution throughput while preserving:
 
