@@ -3,10 +3,10 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
-using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 {
@@ -15,35 +15,30 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This service is responsible for selecting ready DAG step candidates, applying distributed
-    /// concurrency admission, and then atomically claiming the admitted step through the distributed
-    /// DAG store.
+    /// This service is responsible for selecting ready DAG step candidates, applying policy-aware
+    /// concurrency admission, acquiring distributed concurrency capacity, and then atomically claiming
+    /// the admitted step through the distributed DAG store.
     /// </para>
     ///
     /// <para>
-    /// The service intentionally separates three concerns:
+    /// The admission flow is intentionally ordered:
     /// </para>
     ///
-    /// <list type="bullet">
-    /// <item>
-    /// <description>Recover timed-out distributed steps.</description>
-    /// </item>
-    /// <item>
-    /// <description>Acquire distributed concurrency capacity through the concurrency gate.</description>
-    /// </item>
-    /// <item>
-    /// <description>Claim step ownership through the DAG store.</description>
-    /// </item>
+    /// <list type="number">
+    /// <item><description>Resolve the step concurrency definition.</description></item>
+    /// <item><description>Create the distributed concurrency context.</description></item>
+    /// <item><description>Evaluate configured concurrency policies when present.</description></item>
+    /// <item><description>Acquire distributed Redis concurrency capacity.</description></item>
+    /// <item><description>Claim DAG step ownership.</description></item>
     /// </list>
     ///
     /// <para>
-    /// If concurrency capacity is acquired but the DAG claim fails, the lease is released immediately.
-    /// This prevents a losing worker from holding distributed capacity for a step it did not actually own.
+    /// If policy admission is denied, Redis capacity is not acquired and the step is not claimed.
     /// </para>
     ///
     /// <para>
-    /// Throttled steps are traced and logged with the diagnostic reason returned by the concurrency gate.
-    /// This makes distributed admission decisions observable in production.
+    /// If Redis capacity is acquired but the DAG claim fails because another worker won the claim race,
+    /// the concurrency lease is released immediately.
     /// </para>
     /// </remarks>
     public sealed class AiDagStepClaimService
@@ -75,8 +70,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
-        /// This value must be stable across multiple executions of the same pipeline.
-        /// A recommended format is <c>{PipelineName}:{PipelineVersion}</c>.
         /// </param>
         /// <param name="workerId">
         /// The worker or runtime instance identifier.
@@ -88,17 +81,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// The claimed step, or <c>null</c> when no step is ready, no step can be admitted,
         /// or all admitted candidates lose the distributed claim race.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// This method evaluates ready candidates one by one. Each candidate must first pass
-        /// distributed concurrency admission before the service attempts to claim the step.
-        /// </para>
-        ///
-        /// <para>
-        /// If a step is throttled, the denial is traced and logged, then the service continues
-        /// evaluating the next ready candidate.
-        /// </para>
-        /// </remarks>
         public async Task<AiClaimedStep?> ClaimNextAsync(
             string executionId,
             string pipelineKey,
@@ -115,21 +97,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             }
 
             var recoveredCount = await RecoverTimedOutStepsAsync(
-                executionId,
-                workerId,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             if (recoveredCount > 0)
             {
-                _services.Logger.Engine.StepsRecovered(executionId, recoveredCount);
+                _services.Logger.Engine.StepsRecovered(
+                    executionId,
+                    recoveredCount);
 
                 _services.Logger.Engine.LogInformation(
                     $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
             }
 
             var state = await _services.DagStore.GetStateAsync(
-                executionId,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             if (state is null || state.Steps.Count == 0)
             {
@@ -137,9 +123,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             }
 
             var readySteps = await _services.DagStore.GetReadyStepsAsync(
-                executionId,
-                maxSteps: 16,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    maxSteps: 16,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             foreach (var readyStep in readySteps)
             {
@@ -151,17 +138,20 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
 
                 var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
-                     executionId,
-                     pipelineKey,
-                     readyStep.StepName,
-                     workerId,
-                     stepState);
+                    executionId,
+                    pipelineKey,
+                    readyStep.StepName,
+                    workerId,
+                    stepState);
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
-                    concurrencyContext,
-                    concurrencyDefinition,
-                    readyStep.StepName,
-                    cancellationToken).ConfigureAwait(false);
+                        concurrencyContext,
+                        concurrencyDefinition,
+                        state,
+                        stepState,
+                        readyStep.StepName,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (!gateDecision.Allowed)
                 {
@@ -176,17 +166,19 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 }
 
                 var claimed = await TryClaimStepAsync(
-                    executionId,
-                    readyStep.StepName,
-                    workerId,
-                    cancellationToken).ConfigureAwait(false);
+                        executionId,
+                        readyStep.StepName,
+                        workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (claimed is null)
                 {
                     await _services.ConcurrencyGate.ReleaseAsync(
-                        concurrencyContext,
-                        concurrencyDefinition,
-                        cancellationToken).ConfigureAwait(false);
+                            concurrencyContext,
+                            concurrencyDefinition,
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     _services.Logger.Engine.LogInformation(
                         $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
@@ -214,8 +206,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </param>
         /// <param name="pipelineKey">
         /// The stable logical pipeline key used for distributed pipeline-level throttling.
-        /// This value must be stable across multiple executions of the same pipeline.
-        /// A recommended format is <c>{PipelineName}:{PipelineVersion}</c>.
         /// </param>
         /// <param name="workerId">
         /// The worker or runtime instance identifier.
@@ -229,18 +219,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <returns>
         /// The claimed steps.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// Each ready candidate is independently admitted, claimed, and returned.
-        /// A batch therefore owns one concurrency lease per claimed step, not one lease for the
-        /// whole batch.
-        /// </para>
-        ///
-        /// <para>
-        /// If a candidate is admitted but the actual DAG claim fails, the corresponding lease is
-        /// released immediately and the service continues with the next candidate.
-        /// </para>
-        /// </remarks>
         public async Task<IReadOnlyList<AiClaimedStep>> ClaimBatchAsync(
             string executionId,
             string pipelineKey,
@@ -259,13 +237,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             }
 
             await RecoverTimedOutStepsAsync(
-                executionId,
-                workerId,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             var state = await _services.DagStore.GetStateAsync(
-                executionId,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             if (state is null || state.Steps.Count == 0)
             {
@@ -273,9 +253,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             }
 
             var readySteps = await _services.DagStore.GetReadyStepsAsync(
-                executionId,
-                maxSteps,
-                cancellationToken).ConfigureAwait(false);
+                    executionId,
+                    maxSteps,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             if (readySteps.Count == 0)
             {
@@ -299,17 +280,20 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 var concurrencyDefinition = ConcurrencyDefinitionResolver.Resolve(stepState);
 
                 var concurrencyContext = AiDagExecutionHelpers.CreateConcurrencyContext(
-                     executionId,
-                     pipelineKey,
-                     readyStep.StepName,
-                     workerId,
-                     stepState);
+                    executionId,
+                    pipelineKey,
+                    readyStep.StepName,
+                    workerId,
+                    stepState);
 
                 var gateDecision = await TryAcquireConcurrencyLeaseAsync(
-                    concurrencyContext,
-                    concurrencyDefinition,
-                    readyStep.StepName,
-                    cancellationToken).ConfigureAwait(false);
+                        concurrencyContext,
+                        concurrencyDefinition,
+                        state,
+                        stepState,
+                        readyStep.StepName,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (!gateDecision.Allowed)
                 {
@@ -324,17 +308,19 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 }
 
                 var claimed = await TryClaimStepAsync(
-                    executionId,
-                    readyStep.StepName,
-                    workerId,
-                    cancellationToken).ConfigureAwait(false);
+                        executionId,
+                        readyStep.StepName,
+                        workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (claimed is null)
                 {
                     await _services.ConcurrencyGate.ReleaseAsync(
-                        concurrencyContext,
-                        concurrencyDefinition,
-                        cancellationToken).ConfigureAwait(false);
+                            concurrencyContext,
+                            concurrencyDefinition,
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     _services.Logger.Engine.LogInformation(
                         $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
@@ -363,6 +349,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="definition">
         /// The resolved concurrency definition.
         /// </param>
+        /// <param name="state">
+        /// The current execution state.
+        /// </param>
+        /// <param name="stepState">
+        /// The current step state.
+        /// </param>
         /// <param name="stepName">
         /// The ready step name.
         /// </param>
@@ -370,48 +362,220 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// The cancellation token.
         /// </param>
         /// <returns>
-        /// The concurrency decision returned by the configured concurrency gate.
+        /// The final concurrency decision.
         /// </returns>
         /// <remarks>
-        /// The acquisition is traced as a storage operation because the default distributed gate is
-        /// Redis-backed. The trace includes the step, pipeline, worker, lease id, admission result,
-        /// and denial reason when throttled.
+        /// <para>
+        /// Configured concurrency policies are evaluated first through the policy engine factory.
+        /// If policy admission is denied, the Redis concurrency gate is not called.
+        /// </para>
+        ///
+        /// <para>
+        /// If no concurrency policies are configured, policy-engine construction is skipped and
+        /// the method proceeds directly to Redis distributed admission. This preserves the existing
+        /// fast path and avoids requiring a step policy context when policies are not used.
+        /// </para>
         /// </remarks>
         private async Task<AiConcurrencyDecision> TryAcquireConcurrencyLeaseAsync(
             AiConcurrencyContext context,
             AiConcurrencyDefinition definition,
+            AiExecutionState state,
+            AiStepState stepState,
             string stepName,
             CancellationToken cancellationToken)
         {
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
-                new AiStorageTraceContext
-                {
-                    ExecutionId = context.ExecutionId,
-                    StepId = stepName,
-                    Backend = "Redis",
-                    Operation = "TryAcquireConcurrencyLease"
-                },
-                async trace =>
-                {
-                    var decision = await _services.ConcurrencyGate.TryAcquireAsync(
-                        context,
-                        definition,
-                        cancellationToken).ConfigureAwait(false);
-
-                    trace.SetTag("concurrency.allowed", decision.Allowed);
-                    trace.SetTag("concurrency.pipelineKey", context.PipelineKey);
-                    trace.SetTag("concurrency.stepKey", context.StepKey);
-                    trace.SetTag("concurrency.leaseId", context.LeaseId);
-                    trace.SetTag("workerId", context.RuntimeInstanceId);
-
-                    if (!decision.Allowed)
+                    new AiStorageTraceContext
                     {
-                        trace.SetTag("concurrency.denied", true);
-                        trace.SetTag("concurrency.reason", decision.Reason ?? "Concurrency limit reached.");
-                    }
+                        ExecutionId = context.ExecutionId,
+                        StepId = stepName,
+                        Backend = "Redis",
+                        Operation = "TryAcquireConcurrencyLease"
+                    },
+                    async trace =>
+                    {
+                        trace.SetTag("concurrency.pipelineKey", context.PipelineKey);
+                        trace.SetTag("concurrency.stepKey", context.StepKey);
+                        trace.SetTag("concurrency.leaseId", context.LeaseId);
+                        trace.SetTag("concurrency.provider", context.Provider ?? string.Empty);
+                        trace.SetTag("concurrency.model", context.Model ?? string.Empty);
+                        trace.SetTag("concurrency.operation", context.Operation ?? string.Empty);
+                        trace.SetTag("workerId", context.RuntimeInstanceId);
 
-                    return decision;
-                }).ConfigureAwait(false);
+                        var policyDecision = await EvaluateConfiguredConcurrencyPoliciesAsync(
+                                context,
+                                definition,
+                                state,
+                                stepState,
+                                stepName,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        trace.SetTag("concurrency.policy.allowed", policyDecision.Allowed);
+
+                        if (!policyDecision.Allowed)
+                        {
+                            trace.SetTag("concurrency.allowed", false);
+                            trace.SetTag("concurrency.denied", true);
+                            trace.SetTag("concurrency.policy.denied", true);
+                            trace.SetTag("concurrency.reason", policyDecision.Reason ?? "Concurrency policy denied execution.");
+
+                            return policyDecision;
+                        }
+
+                        var gateDecision = await _services.ConcurrencyGate.TryAcquireAsync(
+                                context,
+                                definition,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        trace.SetTag("concurrency.allowed", gateDecision.Allowed);
+                        trace.SetTag("concurrency.gate.allowed", gateDecision.Allowed);
+
+                        if (!gateDecision.Allowed)
+                        {
+                            trace.SetTag("concurrency.denied", true);
+                            trace.SetTag("concurrency.reason", gateDecision.Reason ?? "Concurrency limit reached.");
+                        }
+
+                        return gateDecision;
+                    })
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Evaluates configured concurrency policies for the ready step candidate.
+        /// </summary>
+        /// <param name="context">
+        /// The concurrency context.
+        /// </param>
+        /// <param name="definition">
+        /// The resolved concurrency definition.
+        /// </param>
+        /// <param name="state">
+        /// The execution state.
+        /// </param>
+        /// <param name="stepState">
+        /// The step state.
+        /// </param>
+        /// <param name="stepName">
+        /// The step name.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The policy-level concurrency decision.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// The policy engine is only created when at least one concurrency policy is configured.
+        /// This avoids adding policy-engine dependencies to the fast path where throttling is purely
+        /// config-driven.
+        /// </para>
+        /// </remarks>
+        private async Task<AiConcurrencyDecision> EvaluateConfiguredConcurrencyPoliciesAsync(
+            AiConcurrencyContext context,
+            AiConcurrencyDefinition definition,
+            AiExecutionState state,
+            AiStepState stepState,
+            string stepName,
+            CancellationToken cancellationToken)
+        {
+            if (definition.Policies.Count == 0)
+            {
+                return AiConcurrencyDecision.Allow();
+            }
+
+            var stepContext = CreateStepExecutionContext(
+                context.ExecutionId,
+                state,
+                stepState,
+                stepName,
+                cancellationToken);
+
+            var policyEngine = _services.PolicyEngineFactory.Create(
+                AiPolicyKind.Concurrency,
+                stepContext);
+
+            if (policyEngine is not IAiConcurrencyEngine concurrencyEngine)
+            {
+                throw new InvalidOperationException(
+                    $"Policy engine for kind '{AiPolicyKind.Concurrency}' must implement {nameof(IAiConcurrencyEngine)}.");
+            }
+
+            return await concurrencyEngine.DecideAsync(
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Creates a minimal step execution context for policy-engine evaluation during admission.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="state">
+        /// The execution state.
+        /// </param>
+        /// <param name="stepState">
+        /// The step state.
+        /// </param>
+        /// <param name="stepName">
+        /// The step name.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// A step-scoped execution context.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This context is used only for policy-engine evaluation before Redis admission.
+        /// It does not execute the step.
+        /// </para>
+        ///
+        /// <para>
+        /// The resolved pipeline step carries the step identity and configuration required by
+        /// policy engines that read from <see cref="AiStepExecutionContext.StepState"/>.
+        /// </para>
+        /// </remarks>
+        private AiStepExecutionContext CreateStepExecutionContext(
+            string executionId,
+            AiExecutionState state,
+            AiStepState stepState,
+            string stepName,
+            CancellationToken cancellationToken)
+        {
+            var record = new AiExecutionRecord
+            {
+                ExecutionId = executionId,
+                PipelineName = state.PipelineName,
+                ExecutionMode = AiExecutionMode.Dag
+            };
+
+            var executionContext = new AiExecutionContext(
+                record,
+                state,
+                _services.Services,
+                _services.StateReader,
+                _services.StateWriter,
+                cancellationToken);
+
+            var resolvedStep = new ResolvedAiPipelineStep
+            {
+                Name = stepName,
+                StepKey = string.IsNullOrWhiteSpace(stepState.StepName)
+                    ? stepName
+                    : stepState.StepName,
+                Config = stepState.Config ?? new Dictionary<string, object?>()
+            };
+
+            return new AiStepExecutionContext(
+                executionContext,
+                resolvedStep);
         }
 
         /// <summary>
@@ -439,31 +603,33 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             CancellationToken cancellationToken)
         {
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
-                new AiStorageTraceContext
-                {
-                    ExecutionId = executionId,
-                    Backend = "Redis",
-                    Operation = "TryClaimStep"
-                },
-                async trace =>
-                {
-                    var result = await _services.DagStore!.TryClaimStepAsync(
-                        executionId,
-                        stepName,
-                        workerId,
-                        cancellationToken).ConfigureAwait(false);
-
-                    trace.SetTag("claimAcquired", result is not null);
-                    trace.SetTag("workerId", workerId);
-                    trace.SetTag("stepId", stepName);
-
-                    if (result is not null)
+                    new AiStorageTraceContext
                     {
-                        trace.SetTag("claimToken", result.ClaimToken);
-                    }
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "TryClaimStep"
+                    },
+                    async trace =>
+                    {
+                        var result = await _services.DagStore!.TryClaimStepAsync(
+                                executionId,
+                                stepName,
+                                workerId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
 
-                    return result;
-                }).ConfigureAwait(false);
+                        trace.SetTag("claimAcquired", result is not null);
+                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("stepId", stepName);
+
+                        if (result is not null)
+                        {
+                            trace.SetTag("claimToken", result.ClaimToken);
+                        }
+
+                        return result;
+                    })
+                .ConfigureAwait(false);
         }
 
         /// <summary>
@@ -516,24 +682,26 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             CancellationToken cancellationToken)
         {
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
-                new AiStorageTraceContext
-                {
-                    ExecutionId = executionId,
-                    Backend = "Redis",
-                    Operation = "RecoverTimedOutSteps"
-                },
-                async trace =>
-                {
-                    var result = await _services.DagStore!.RecoverTimedOutStepsAsync(
-                        executionId,
-                        cancellationToken).ConfigureAwait(false);
+                    new AiStorageTraceContext
+                    {
+                        ExecutionId = executionId,
+                        Backend = "Redis",
+                        Operation = "RecoverTimedOutSteps"
+                    },
+                    async trace =>
+                    {
+                        var result = await _services.DagStore!.RecoverTimedOutStepsAsync(
+                                executionId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
 
-                    trace.SetTag("recoveredCount", result);
-                    trace.SetTag("workerId", workerId);
-                    trace.SetTag("recovered", result > 0);
+                        trace.SetTag("recoveredCount", result);
+                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("recovered", result > 0);
 
-                    return result;
-                }).ConfigureAwait(false);
+                        return result;
+                    })
+                .ConfigureAwait(false);
         }
     }
 }

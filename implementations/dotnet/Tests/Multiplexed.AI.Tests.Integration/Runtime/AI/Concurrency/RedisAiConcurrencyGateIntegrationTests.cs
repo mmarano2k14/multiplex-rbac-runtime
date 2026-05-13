@@ -1,11 +1,13 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Concurrency;
+using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 using Multiplexed.AI.Runtime.Logging;
@@ -1971,21 +1973,381 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
             Assert.Equal("Concurrency", policy.Kind);
         }
 
+        /// <summary>
+        /// Creates the minimal engine service bundle required by the step claim service tests.
+        /// </summary>
+        /// <param name="dagStore">
+        /// The substituted distributed DAG store.
+        /// </param>
+        /// <param name="concurrencyGate">
+        /// The substituted concurrency gate.
+        /// </param>
+        /// <param name="policyEngineFactory">
+        /// The optional substituted policy engine factory.
+        /// </param>
+        /// <returns>
+        /// A substituted <see cref="IAiDagExecutionEngineServices"/> instance.
+        /// </returns>
         private static IAiDagExecutionEngineServices CreateEngineServices(
-            IAiDagExecutionStore dagStore,
-            IAiConcurrencyGate concurrencyGate)
+    IAiDagExecutionStore dagStore,
+    IAiConcurrencyGate concurrencyGate,
+    IAiPolicyEngineFactory? policyEngineFactory = null)
         {
             var services = Substitute.For<IAiDagExecutionEngineServices>();
 
             var logger = Substitute.For<IAiRuntimeLogger>();
             var observability = Substitute.For<IAiRuntimeObservability>();
+            var tracer = new PassthroughAiRuntimeTracer();
 
             services.DagStore.Returns(dagStore);
             services.ConcurrencyGate.Returns(concurrencyGate);
+            services.PolicyEngineFactory.Returns(
+                policyEngineFactory ?? Substitute.For<IAiPolicyEngineFactory>());
+
+            services.Services.Returns(Substitute.For<IServiceProvider>());
+            services.StateReader.Returns(Substitute.For<IAiExecutionStateReader>());
+            services.StateWriter.Returns(Substitute.For<IAiExecutionStateWriter>());
+
             services.Logger.Returns(logger);
+
             services.ObservabilityService.Returns(observability);
+            observability.Tracer.Returns(tracer);
 
             return services;
+        }
+
+        private sealed class PassthroughAiRuntimeTracer : IAiRuntimeTracer
+        {
+            public IAiTraceScope StartExecution(AiExecutionTraceContext context)
+            {
+                return Substitute.For<IAiTraceScope>();
+            }
+
+            public IAiTraceScope StartResolver(AiResolverTraceContext context)
+            {
+                return Substitute.For<IAiTraceScope>();
+            }
+
+            public IAiTraceScope StartRetention(AiRetentionTraceContext context)
+            {
+                return Substitute.For<IAiTraceScope>();
+            }
+
+            public IAiTraceScope StartStep(AiStepTraceContext context)
+            {
+                return Substitute.For<IAiTraceScope>();
+            }
+
+            public IAiTraceScope StartStorage(AiStorageTraceContext context)
+            {
+                return Substitute.For<IAiTraceScope>();
+            }
+
+            public Task<TResult> TraceStorageAsync<TResult>(
+                AiStorageTraceContext context,
+                Func<IAiTraceScope, Task<TResult>> action,
+                CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var scope = Substitute.For<IAiTraceScope>();
+
+                return action(scope);
+            }
+        }
+
+        /// <summary>
+        /// Configures storage tracing to execute the supplied callback immediately.
+        /// </summary>
+        /// <param name="tracer">
+        /// The substituted runtime tracer.
+        /// </param>
+        /// <remarks>
+        /// The claim service wraps Redis operations in storage traces. These tests are not validating
+        /// tracing behavior, so the tracer is configured as a passthrough wrapper.
+        /// </remarks>
+        private static void ConfigureTraceStoragePassthrough(IAiRuntimeTracer tracer)
+        {
+            tracer.TraceStorageAsync(
+                    Arg.Any<AiStorageTraceContext>(),
+                    Arg.Any<Func<IAiTraceScope, Task<int>>>())
+                .Returns(callInfo =>
+                {
+                    var callback = callInfo.Arg<Func<IAiTraceScope, Task<int>>>();
+                    var scope = Substitute.For<IAiTraceScope>();
+
+                    return callback(scope);
+                });
+
+            tracer.TraceStorageAsync(
+                    Arg.Any<AiStorageTraceContext>(),
+                    Arg.Any<Func<IAiTraceScope, Task<AiClaimedStep?>>>())
+                .Returns(callInfo =>
+                {
+                    var callback = callInfo.Arg<Func<IAiTraceScope, Task<AiClaimedStep?>>>();
+                    var scope = Substitute.For<IAiTraceScope>();
+
+                    return callback(scope);
+                });
+
+            tracer.TraceStorageAsync(
+                    Arg.Any<AiStorageTraceContext>(),
+                    Arg.Any<Func<IAiTraceScope, Task<AiConcurrencyDecision>>>())
+                .Returns(callInfo =>
+                {
+                    var callback = callInfo.Arg<Func<IAiTraceScope, Task<AiConcurrencyDecision>>>();
+                    var scope = Substitute.For<IAiTraceScope>();
+
+                    return callback(scope);
+                });
+        }
+
+        /// <summary>
+        /// Verifies that the claim service does not create a concurrency policy engine
+        /// when no concurrency policies are configured.
+        /// </summary>
+        /// <remarks>
+        /// The fast path remains config-driven. Without configured policies, the service should go
+        /// directly to the Redis concurrency gate.
+        /// </remarks>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Not_Create_Concurrency_Policy_Engine_When_No_Policies_Are_Configured()
+        {
+            // Arrange
+            var executionId = "exec-no-policy";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "step-a";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+            var policyEngineFactory = Substitute.For<IAiPolicyEngineFactory>();
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10
+                    }
+                }
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Allow());
+
+            dagStore.TryClaimStepAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = "claim-token"
+                });
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate,
+                policyEngineFactory: policyEngineFactory);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.NotNull(claimed);
+
+            _ = policyEngineFactory.DidNotReceive().Create(
+                Arg.Any<AiPolicyKind>(),
+                Arg.Any<AiStepExecutionContext>());
+
+            _ = concurrencyGate.Received(1).TryAcquireAsync(
+                Arg.Any<AiConcurrencyContext>(),
+                Arg.Any<AiConcurrencyDefinition>(),
+                Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// Verifies that a denied concurrency policy decision prevents Redis lease acquisition
+        /// and DAG step claiming.
+        /// </summary>
+        /// <remarks>
+        /// Policy admission runs before the distributed Redis gate. If the policy-aware
+        /// concurrency engine denies admission, no Redis lease should be acquired and
+        /// the DAG step should not be claimed.
+        /// </remarks>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Not_Acquire_Redis_Lease_When_Concurrency_Policy_Denies()
+        {
+            // Arrange
+            var executionId = "exec-policy-denied";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "step-a";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+            var policyEngineFactory = Substitute.For<IAiPolicyEngineFactory>();
+
+            var policyEngine = Substitute.For<IAiPolicyEngine, IAiConcurrencyEngine>();
+            var concurrencyEngine = (IAiConcurrencyEngine)policyEngine;
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["policies"] = new[]
+                        {
+                            new Dictionary<string, object?>
+                            {
+                                ["name"] = "concurrency.block.test",
+                                ["kind"] = "Concurrency"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            policyEngineFactory.Create(
+                    AiPolicyKind.Concurrency,
+                    Arg.Any<AiStepExecutionContext>())
+                .Returns((IAiPolicyEngine)policyEngine);
+
+            concurrencyEngine.DecideAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Deny(
+                    "Blocked by concurrency policy.",
+                    TimeSpan.FromMilliseconds(100)));
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate,
+                policyEngineFactory: policyEngineFactory);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.Null(claimed);
+
+            _ = policyEngineFactory.Received(1).Create(
+                AiPolicyKind.Concurrency,
+                Arg.Any<AiStepExecutionContext>());
+
+            _ = concurrencyEngine.Received(1).DecideAsync(
+                Arg.Is<AiConcurrencyContext>(context =>
+                    context.ExecutionId == executionId &&
+                    context.PipelineKey == pipelineKey &&
+                    context.StepId == stepName &&
+                    context.StepKey == stepName &&
+                    context.RuntimeInstanceId == workerId &&
+                    context.LeaseId == $"{executionId}:{stepName}:{workerId}"),
+                Arg.Any<CancellationToken>());
+
+            _ = concurrencyGate.DidNotReceive().TryAcquireAsync(
+                Arg.Any<AiConcurrencyContext>(),
+                Arg.Any<AiConcurrencyDefinition>(),
+                Arg.Any<CancellationToken>());
+
+            _ = dagStore.DidNotReceive().TryClaimStepAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
+
+            _ = concurrencyGate.DidNotReceive().ReleaseAsync(
+                Arg.Any<AiConcurrencyContext>(),
+                Arg.Any<AiConcurrencyDefinition>(),
+                Arg.Any<CancellationToken>());
         }
 
         /// <summary>
