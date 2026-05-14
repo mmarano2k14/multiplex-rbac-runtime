@@ -183,6 +183,156 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultiInstance
         }
 
         /// <summary>
+        /// Verifies that multiple runtime instances can safely converge the same DAG execution
+        /// while retry, aggressive retention, and provider-level throttling are active together.
+        /// </summary>
+        [RedisFact]
+        public async Task MultiInstanceDagExecution_Should_Converge_With_Retry_Retention_And_Provider_Throttle()
+        {
+            var pipelineName = $"multi-instance-retention-resilience-{Guid.NewGuid():N}";
+            var filePath = WriteRetentionResiliencePipelineDefinitionToConfig(pipelineName);
+
+            await using var hostA = await CreateIntegrationHostAsync(
+                "runtime-instance-a",
+                $"{pipelineName}.json");
+
+            await using var hostB = await CreateIntegrationHostAsync(
+                "runtime-instance-b",
+                $"{pipelineName}.json");
+
+            await using var hostC = await CreateIntegrationHostAsync(
+                "runtime-instance-c",
+                $"{pipelineName}.json");
+
+            var created = await hostA.Engine.CreateAsync(
+                pipelineName,
+                "multi-instance-retention-resilience-test");
+
+            var database = _redis.GetDatabase();
+            var providerScopeKey = "ai:concurrency:scope:provider:openai";
+            var flakyAttemptKeyPrefix = $"ai:test:multi-instance:flaky:{created.ExecutionId}:";
+
+            var maxObservedProviderConcurrency = 0L;
+
+            try
+            {
+                AiExecutionRecord? record = null;
+
+                for (var attempt = 0; attempt < 250; attempt++)
+                {
+                    await Task.WhenAll(
+                        ExecuteDistributedBatchCycleAsync(hostA.Engine, created.ExecutionId),
+                        ExecuteDistributedBatchCycleAsync(hostB.Engine, created.ExecutionId),
+                        ExecuteDistributedBatchCycleAsync(hostC.Engine, created.ExecutionId));
+
+                    var activeProviderLeases = await database.SortedSetLengthAsync(
+                        providerScopeKey);
+
+                    if (activeProviderLeases > maxObservedProviderConcurrency)
+                    {
+                        maxObservedProviderConcurrency = activeProviderLeases;
+                    }
+
+                    var dagStore = hostA.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                    record = await dagStore.GetRecordAsync(created.ExecutionId);
+
+                    if (record is not null && record.IsTerminal)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(25);
+                }
+
+                Assert.NotNull(record);
+                Assert.Equal(AiExecutionStatus.Completed, record!.Status);
+                Assert.Equal(AiExecutionMode.Dag, record.ExecutionMode);
+                Assert.Equal(8, record.CompletedSteps.Count);
+
+                Assert.True(
+                    maxObservedProviderConcurrency <= 2,
+                    $"Provider throttle was exceeded. MaxObserved='{maxObservedProviderConcurrency}', Limit='2'.");
+
+                var finalDagStore = hostA.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var state = await finalDagStore.GetStateAsync(created.ExecutionId);
+
+                Assert.NotNull(state);
+
+                var flakyAttemptCount = await database.StringGetAsync(
+                    flakyAttemptKeyPrefix + "flaky-provider-step");
+
+                Assert.True(flakyAttemptCount.HasValue);
+                Assert.True((int)flakyAttemptCount >= 2);
+
+                var resolver = hostA.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+                await resolver.WarmAsync(
+                    created.ExecutionId,
+                    state!,
+                    cancellationToken: default);
+
+                var resolvedFlakyStepStatus = await resolver.GetStepStatusAsync(
+                    created.ExecutionId,
+                    "flaky-provider-step",
+                    state!,
+                    cancellationToken: default);
+
+                Assert.NotNull(resolvedFlakyStepStatus);
+                Assert.Equal(AiStepExecutionStatus.Completed, resolvedFlakyStepStatus!.Status);
+
+                var resolvedFlakyStep = await resolver.GetStepAsync(
+                    created.ExecutionId,
+                    "flaky-provider-step",
+                    state!,
+                    cancellationToken: default);
+
+                Assert.NotNull(resolvedFlakyStep);
+                Assert.Equal(AiStepExecutionStatus.Completed, resolvedFlakyStep!.Status);
+
+                var resolvedFinalStep = await resolver.GetStepAsync(
+                    created.ExecutionId,
+                    "provider-step-08",
+                    state!,
+                    cancellationToken: default);
+
+                Assert.NotNull(resolvedFinalStep);
+                Assert.Equal(AiStepExecutionStatus.Completed, resolvedFinalStep!.Status);
+
+                var terminalStepsInHotState = state!.Steps.Values
+                    .Count(step => step.Status == AiStepExecutionStatus.Completed);
+
+                Assert.True(
+                    terminalStepsInHotState <= 8,
+                    "Retention-enabled execution should remain valid even when terminal steps are compacted or evicted.");
+
+                Assert.All(
+                    state.Steps.Values,
+                    step =>
+                    {
+                        Assert.True(
+                            step.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.None,
+                            $"Unexpected hot step status. Step='{step.StepName}', Status='{step.Status}'.");
+
+                        Assert.Null(step.ClaimedBy);
+                        Assert.Null(step.ClaimToken);
+                        Assert.Null(step.ClaimedAtUtc);
+                        Assert.Null(step.LeaseExpiresAtUtc);
+                    });
+            }
+            finally
+            {
+                await CleanupDagExecutionAsync(
+                    hostA.ServiceProvider,
+                    created.ExecutionId);
+
+                await database.KeyDeleteAsync(providerScopeKey);
+                await DeleteKeysByPatternAsync(flakyAttemptKeyPrefix + "*");
+
+                TryDeleteFile(filePath);
+            }
+        }
+
+        /// <summary>
         /// Creates one fully wired integration runtime host with a JSON pipeline definition file.
         /// </summary>
         /// <param name="runtimeInstanceId">The deterministic runtime instance identifier.</param>
@@ -357,6 +507,172 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultiInstance
                 {
                     definition
                 }
+            };
+
+            var json = JsonSerializer.Serialize(
+                root,
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+            var baseDir = AppContext.BaseDirectory;
+            var configDir = Path.Combine(baseDir, "config");
+
+            Directory.CreateDirectory(configDir);
+
+            var filePath = Path.Combine(configDir, $"{pipelineName}.json");
+
+            File.WriteAllText(filePath, json);
+
+            return filePath;
+        }
+
+        /// <summary>
+        /// Writes a deterministic DAG pipeline definition containing provider-throttled steps,
+        /// one flaky retry-enabled provider step, and aggressive retention configuration.
+        /// </summary>
+        /// <param name="pipelineName">The generated pipeline name.</param>
+        /// <returns>The created file path.</returns>
+        private static string WriteRetentionResiliencePipelineDefinitionToConfig(
+            string pipelineName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+
+            var providerConcurrencyConfig = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["leaseSeconds"] = 30,
+                ["maxProviderConcurrency"] = 2,
+                ["defaultRetryAfterMs"] = 25
+            };
+
+            var retentionConfig = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["archiveReason"] = "multi-instance-retention-resilience-test",
+                ["policies"] = new[]
+                {
+            new Dictionary<string, object?>
+            {
+                ["name"] = "retention.hybrid.terminal"
+            }
+        },
+                ["trigger"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxStepsInState"] = 1,
+                    ["maxCompletedStepsInState"] = 0,
+                    ["maxInlinePayloadBytes"] = 1
+                }
+            };
+
+            var providerConfig = new Dictionary<string, object?>
+            {
+                ["delayMs"] = 100,
+                ["provider"] = "openai",
+                ["model"] = "gpt-test",
+                ["operation"] = "llm.chat",
+                ["concurrency"] = providerConcurrencyConfig,
+                ["retention"] = retentionConfig
+            };
+
+            var flakyProviderConfig = new Dictionary<string, object?>
+            {
+                ["delayMs"] = 100,
+                ["provider"] = "openai",
+                ["model"] = "gpt-test",
+                ["operation"] = "llm.chat",
+                ["failOnce"] = true,
+                ["concurrency"] = providerConcurrencyConfig,
+                ["retention"] = retentionConfig,
+            };
+
+            var definition = new AiPipelineDefinition
+            {
+                Name = pipelineName,
+                Version = "1.0.0",
+                ExecutionMode = AiExecutionMode.Dag,
+                Config = new Dictionary<string, object?>
+                {
+                    ["retention"] = retentionConfig
+                },
+                Steps = new List<AiPipelineStepDefinition>
+        {
+            new()
+            {
+                Name = "provider-step-01",
+                StepKey = "hello-world",
+                Order = 1,
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "provider-step-02",
+                StepKey = "hello-world",
+                Order = 2,
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "provider-step-03",
+                StepKey = "hello-world",
+                Order = 3,
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "flaky-provider-step",
+                StepKey = "multi-instance-flaky-provider",
+                Order = 4,
+                Config = flakyProviderConfig,
+                Execution = new AiPipelineStepExecutionDefinition
+                {
+                    MaxRetries = 2,
+                    RetryDelayMs = 25
+                }
+            },
+            new()
+            {
+                Name = "provider-step-05",
+                StepKey = "hello-world",
+                Order = 5,
+                DependsOn = new[] { "provider-step-01", "provider-step-02" },
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "provider-step-06",
+                StepKey = "hello-world",
+                Order = 6,
+                DependsOn = new[] { "provider-step-03", "flaky-provider-step" },
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "provider-step-07",
+                StepKey = "hello-world",
+                Order = 7,
+                DependsOn = new[] { "provider-step-05" },
+                Config = providerConfig
+            },
+            new()
+            {
+                Name = "provider-step-08",
+                StepKey = "hello-world",
+                Order = 8,
+                DependsOn = new[] { "provider-step-06", "provider-step-07" },
+                Config = providerConfig
+            }
+        }
+            };
+
+            var root = new
+            {
+                pipelines = new[]
+                {
+            definition
+        }
             };
 
             var json = JsonSerializer.Serialize(
