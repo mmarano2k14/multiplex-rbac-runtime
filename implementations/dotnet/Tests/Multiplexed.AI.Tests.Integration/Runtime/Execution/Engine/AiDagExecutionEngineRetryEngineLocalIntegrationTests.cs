@@ -34,6 +34,7 @@ using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
+using Multiplexed.AI.Tests.Fixtures;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using Multiplexed.AI.Tests.Runtime.Execution.Instance;

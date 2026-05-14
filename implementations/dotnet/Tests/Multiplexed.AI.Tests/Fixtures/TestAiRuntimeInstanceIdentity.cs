@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 
-namespace Multiplexed.AI.Tests.Runtime.Execution.Instance
+namespace Multiplexed.AI.Tests.Fixtures
 {
     /// <summary>
     /// Test implementation of <see cref="IAiRuntimeInstanceIdentity"/> with a deterministic runtime instance identifier.

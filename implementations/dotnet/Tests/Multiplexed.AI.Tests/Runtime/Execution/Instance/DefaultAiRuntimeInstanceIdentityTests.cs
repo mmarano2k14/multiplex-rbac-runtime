@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Tests.Fixtures;
 
 namespace Multiplexed.AI.Tests.Runtime.Execution.Instance
 {
