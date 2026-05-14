@@ -20,9 +20,11 @@ using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Metrics.Workers;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Runtime;
@@ -52,6 +54,7 @@ using Multiplexed.AI.Runtime.Execution.Engine.Local;
 using Multiplexed.AI.Runtime.Execution.Engine.Retention;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 using Multiplexed.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
@@ -70,6 +73,7 @@ using Multiplexed.AI.Runtime.Metrics.Policy;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
+using Multiplexed.AI.Runtime.Metrics.Workers;
 using Multiplexed.AI.Runtime.Observability;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
@@ -376,7 +380,7 @@ namespace Multiplexed.AI.DI
             // Tracing
             // ------------------------------------------------------------
 
-            services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
+            // services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
             services.AddSingleton<IAiTraceTimeline, InMemoryAiTraceTimeline>();
 
             // Recorder 
@@ -459,8 +463,10 @@ namespace Multiplexed.AI.DI
 
             services.TryAddSingleton<IAiPolicyMetrics, AiPolicyMetrics>();
 
+            services.TryAddSingleton<IAiRuntimeInstanceWorkerMetrics, AiRuntimeInstanceWorkerMetrics>();
 
-            
+
+
 
 
             // ------------------------------------------------------------
@@ -491,6 +497,10 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
+            services.TryAddScoped<IAiRuntimeInstanceWorker, AiRuntimeInstanceWorker>();
+
+            services.TryAddSingleton<IOptions<AiRuntimeInstanceWorkerOptions>>(
+                Options.Create(options.RuntimeInstanceWorker ?? new AiRuntimeInstanceWorkerOptions()));
 
 
             // ------------------------------------------------------------

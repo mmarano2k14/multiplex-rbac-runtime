@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Metrics.Workers;
 using Multiplexed.AI.Runtime.Metrics.HotState;
 
 namespace Multiplexed.Abstractions.AI.Metrics
@@ -55,5 +56,10 @@ namespace Multiplexed.Abstractions.AI.Metrics
         /// Gets metrics related to runtime Policy execution
         /// </summary>
         IAiPolicyMetrics Policy { get; }
+
+        /// <summary>
+        /// Gets metrics related to runtime instance worker orchestration loops.
+        /// </summary>
+        IAiRuntimeInstanceWorkerMetrics Worker { get; }
     }
 }

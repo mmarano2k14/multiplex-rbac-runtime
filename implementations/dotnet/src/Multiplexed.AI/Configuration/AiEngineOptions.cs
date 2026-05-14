@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.AI.Runtime.Configuration;
+using Multiplexed.AI.Runtime.Execution.Instance.Worker;
 
 namespace Multiplexed.AI.Configuration
 {
@@ -68,5 +69,12 @@ namespace Multiplexed.AI.Configuration
         /// - Observability remains fully optional and non-blocking.
         /// </remarks>
         public AiObservabilityOptions Observability { get; set; } = new();
+
+        /// <summary>
+        /// Gets or sets runtime instance worker options.
+        /// </summary>
+        public AiRuntimeInstanceWorkerOptions RuntimeInstanceWorker { get; set; } = new();
+
+
     }
 }

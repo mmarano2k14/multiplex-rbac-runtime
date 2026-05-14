@@ -4,6 +4,7 @@ using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Metrics.Workers;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Multiplexed.AI.Runtime.Metrics.HotState;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
@@ -26,7 +27,8 @@ namespace Multiplexed.AI.Runtime.Metrics
     ///
     /// IMPORTANT:
     /// - Keep this class lightweight.
-    /// - Do not reintroduce execution, retention, storage, hot-state, or resolver counters here.
+    /// - Do not reintroduce execution, retention, storage, hot-state, resolver, policy,
+    ///   or worker counters here.
     /// </summary>
     public sealed class AiRuntimeMetrics : IAiRuntimeMetrics
     {
@@ -38,6 +40,8 @@ namespace Multiplexed.AI.Runtime.Metrics
         /// <param name="storage">Storage and payload metrics.</param>
         /// <param name="hotState">Hot execution state metrics.</param>
         /// <param name="resolver">Resolver and input binding metrics.</param>
+        /// <param name="policy">Policy evaluation metrics.</param>
+        /// <param name="worker">Runtime instance worker metrics.</param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when one of the required metric domains is <c>null</c>.
         /// </exception>
@@ -46,8 +50,9 @@ namespace Multiplexed.AI.Runtime.Metrics
             IAiRetentionMetrics retention,
             IAiStorageMetrics storage,
             IAiHotStateMetrics hotState,
-            IAiResolverMetrics resolver, 
-            IAiPolicyMetrics policy)
+            IAiResolverMetrics resolver,
+            IAiPolicyMetrics policy,
+            IAiRuntimeInstanceWorkerMetrics worker)
         {
             Execution = execution ?? throw new ArgumentNullException(nameof(execution));
             Retention = retention ?? throw new ArgumentNullException(nameof(retention));
@@ -55,6 +60,7 @@ namespace Multiplexed.AI.Runtime.Metrics
             HotState = hotState ?? throw new ArgumentNullException(nameof(hotState));
             Resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
             Policy = policy ?? throw new ArgumentNullException(nameof(policy));
+            Worker = worker ?? throw new ArgumentNullException(nameof(worker));
         }
 
         /// <inheritdoc />
@@ -71,7 +77,11 @@ namespace Multiplexed.AI.Runtime.Metrics
 
         /// <inheritdoc />
         public IAiResolverMetrics Resolver { get; }
+
         /// <inheritdoc />
         public IAiPolicyMetrics Policy { get; }
+
+        /// <inheritdoc />
+        public IAiRuntimeInstanceWorkerMetrics Worker { get; }
     }
 }
