@@ -1,7 +1,9 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.DI;
+using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Sample.External.Plugins.Rag;
 using Multiplexed.Sample.External.Plugins.Rag.DI;
@@ -38,10 +40,41 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             Assert.NotNull(created);
             Assert.False(string.IsNullOrWhiteSpace(created.ExecutionId));
 
-            var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-                engine.ExecuteAllAsync(created.ExecutionId));
+            AiExecutionRecord result = created;
 
-            Assert.Contains("unknown-composer", ex.Message, StringComparison.OrdinalIgnoreCase);
+            for (var attempt = 0; attempt < 50; attempt++)
+            {
+                result = await engine.ExecuteAllAsync(created.ExecutionId);
+
+                if (result.IsTerminal)
+                {
+                    break;
+                }
+
+                await Task.Delay(25);
+            }
+
+            Assert.True(
+                result.IsTerminal,
+                $"Execution did not reach a terminal state. LastStatus='{result.Status}'.");
+
+            Assert.Equal(AiExecutionStatus.Failed, result.Status);
+
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var state = await dagStore.GetStateAsync(created.ExecutionId);
+
+            Assert.NotNull(state);
+
+            var failedSteps = state!.Steps.Values
+                .Where(step => step.Status == AiStepExecutionStatus.Failed)
+                .ToList();
+
+            Assert.NotEmpty(failedSteps);
+
+            Assert.Contains(
+                failedSteps,
+                step => !string.IsNullOrWhiteSpace(step.Error) &&
+                        step.Error.Contains("unknown-composer", StringComparison.OrdinalIgnoreCase));
         }
 
         private static async Task<AiDagExecutionEngineTestHost> CreateHostAsync(string jsonPath)

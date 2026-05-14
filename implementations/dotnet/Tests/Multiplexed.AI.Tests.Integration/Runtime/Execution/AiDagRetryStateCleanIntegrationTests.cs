@@ -143,12 +143,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             try
             {
-                await ExecuteIgnoringFailureAsync(engine, created.ExecutionId);
+                // First execution fails internally and schedules retry.
+                // Runtime now converts thrown step exceptions into persisted retry state.
+                await engine.ExecuteNextAsync(created.ExecutionId);
 
                 var stateAfterFirstFailure = await dagStore.GetStateAsync(created.ExecutionId);
                 Assert.NotNull(stateAfterFirstFailure);
 
                 var stepAfterFirstFailure = stateWriter.GetOrCreateStep(stateAfterFirstFailure!, "retry-step");
+
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, stepAfterFirstFailure.Status);
                 Assert.Equal(1, stepAfterFirstFailure.RetryState?.RetryCount);
                 Assert.Equal(1, stepAfterFirstFailure.Retry?.MaxRetries);
@@ -167,18 +170,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var results = new[] { worker1.Result, worker2.Result };
 
-                Assert.Equal(1, results.Count(x => x.Outcome == WorkerExecutionOutcome.Thrown));
-                Assert.Equal(1, results.Count(x => x.Outcome == WorkerExecutionOutcome.Returned));
+                // With runtime exception protection, step failures are persisted as DAG state.
+                // ExecuteNextAsync should no longer throw when the retry attempt fails.
+                Assert.Equal(0, results.Count(x => x.Outcome == WorkerExecutionOutcome.Thrown));
+                Assert.Equal(2, results.Count(x => x.Outcome == WorkerExecutionOutcome.Returned));
 
                 var finalState = await dagStore.GetStateAsync(created.ExecutionId);
                 Assert.NotNull(finalState);
 
                 var finalStep = stateWriter.GetOrCreateStep(finalState!, "retry-step");
 
+                // This is the real proof that only one retry window was consumed:
+                // RetryCount remains 1 and the step is terminal Failed after max retry budget is exhausted.
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
                 Assert.Equal(1, finalStep.Retry?.MaxRetries);
                 Assert.Equal(1, finalStep.RetryState?.RetryCount);
                 Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
+
+                Assert.True(
+                    string.IsNullOrWhiteSpace(finalStep.ClaimedBy) &&
+                    string.IsNullOrWhiteSpace(finalStep.ClaimToken) &&
+                    !finalStep.ClaimedAtUtc.HasValue,
+                    "The failed step must not keep an active claim after retry exhaustion.");
             }
             finally
             {

@@ -72,8 +72,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             try
             {
-                // First execution fails and schedules retry.
-                await Assert.ThrowsAnyAsync<Exception>(() => engine.ExecuteNextAsync(record.ExecutionId));
+                // First execution fails internally and schedules retry.
+                // The runtime now converts thrown step exceptions into persisted failure/retry state.
+                await engine.ExecuteNextAsync(record.ExecutionId);
 
                 var stateAfterFailure = await dagStore.GetStateAsync(record.ExecutionId);
                 Assert.NotNull(stateAfterFailure);
@@ -82,9 +83,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 Assert.NotNull(failedStep.Retry);
                 Assert.Equal(1, failedStep.Retry!.MaxRetries);
-                Assert.Equal(1, failedStep.RetryState?.RetryCount);
-
-
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, failedStep.Status);
                 Assert.Equal(1, failedStep.RetryState?.RetryCount);
                 Assert.True(failedStep.RetryState?.NextRetryAtUtc.HasValue);
@@ -105,25 +103,27 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var results = new[] { worker1.Result, worker2.Result };
 
-                // Exactly one worker should have actually executed the retry attempt
-                // and therefore hit the intentional failure.
-                Assert.Equal(1, results.Count(x => x.Outcome == WorkerExecutionOutcome.Thrown));
-
-                // The losing worker may observe either:
-                // - no work available right now
-                // - non-terminal waiting/running projection
-                Assert.Equal(1, results.Count(x =>
-                    x.Outcome == WorkerExecutionOutcome.Returned));
+                // With runtime exception protection, ExecuteNextAsync should not throw.
+                // The failure is persisted as DAG state instead.
+                Assert.Equal(0, results.Count(x => x.Outcome == WorkerExecutionOutcome.Thrown));
+                Assert.Equal(2, results.Count(x => x.Outcome == WorkerExecutionOutcome.Returned));
 
                 var finalState = await dagStore.GetStateAsync(record.ExecutionId);
                 Assert.NotNull(finalState);
 
                 var finalStep = finalState!.Steps["start"];
 
-                // With MaxRetries = 1, the retry attempt should now be exhausted.
+                // With MaxRetries = 1, exactly one retry attempt should be consumed,
+                // and the retry budget should now be exhausted.
                 Assert.Equal(AiStepExecutionStatus.Failed, finalStep.Status);
                 Assert.Equal(1, finalStep.RetryState?.RetryCount);
                 Assert.Null(finalStep.RetryState?.NextRetryAtUtc);
+
+                Assert.True(
+                    string.IsNullOrWhiteSpace(finalStep.ClaimedBy) &&
+                    string.IsNullOrWhiteSpace(finalStep.ClaimToken) &&
+                    !finalStep.ClaimedAtUtc.HasValue,
+                    "The failed step must not keep an active claim after retry exhaustion.");
             }
             finally
             {
@@ -150,7 +150,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             try
             {
                 // First execution fails and schedules retry #1.
-                await Assert.ThrowsAnyAsync<Exception>(() => engine.ExecuteNextAsync(record.ExecutionId));
+                await engine.ExecuteNextAsync(record.ExecutionId);
 
                 var stateAfterFirstFailure = await dagStore.GetStateAsync(record.ExecutionId);
                 Assert.NotNull(stateAfterFirstFailure);
@@ -214,7 +214,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             try
             {
                 // First execution fails and schedules retry #1.
-                await Assert.ThrowsAnyAsync<Exception>(() => engine.ExecuteNextAsync(record.ExecutionId));
+                await engine.ExecuteNextAsync(record.ExecutionId);
 
                 var stateWriter = provider.GetRequiredService<IAiExecutionStateWriter>();
 

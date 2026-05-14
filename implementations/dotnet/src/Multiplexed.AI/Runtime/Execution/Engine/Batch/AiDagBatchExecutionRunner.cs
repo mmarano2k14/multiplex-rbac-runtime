@@ -127,48 +127,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         /// <returns>
         /// The latest execution record after the batch execution and convergence evaluation.
         /// </returns>
-        /// <remarks>
-        /// <para>
-        /// This method uses the following distributed execution sequence:
-        /// </para>
-        ///
-        /// <list type="number">
-        /// <item>
-        /// <description>Load the execution record and execution state.</description>
-        /// </item>
-        /// <item>
-        /// <description>Resolve the pipeline and derive a stable pipeline key.</description>
-        /// </item>
-        /// <item>
-        /// <description>Recover timed-out steps and claim a bounded number of ready steps.</description>
-        /// </item>
-        /// <item>
-        /// <description>Execute claimed steps with bounded local parallelism.</description>
-        /// </item>
-        /// <item>
-        /// <description>Persist completion or failure transitions in the distributed DAG store.</description>
-        /// </item>
-        /// <item>
-        /// <description>Release the distributed concurrency lease for each claimed step.</description>
-        /// </item>
-        /// <item>
-        /// <description>Evaluate deterministic convergence and persist the converged record.</description>
-        /// </item>
-        /// </list>
-        ///
-        /// <para>
-        /// The concurrency lease release happens in a <c>finally</c> block for each completed
-        /// batch result. This prevents the runtime from keeping distributed capacity until TTL
-        /// expiration when a completion or failure persistence operation throws.
-        /// </para>
-        /// </remarks>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown when the distributed DAG store is not configured, the execution record cannot be found,
-        /// the execution state cannot be found, or a claimed step cannot be completed.
-        /// </exception>
-        /// <exception cref="ArgumentOutOfRangeException">
-        /// Thrown when <paramref name="maxSteps"/> is less than one.
-        /// </exception>
         public async Task<AiExecutionRecord> ExecuteBatchAsync(
             string executionId,
             int maxSteps,
@@ -189,7 +147,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                     "Distributed DAG store is not configured.");
             }
 
-            var workerId = Guid.NewGuid().ToString("N");
+            var workerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
 
             var record = await _engineServices.DagStore.GetRecordAsync(
                 executionId,
@@ -330,9 +288,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                 var claimedStep = item.ClaimedStep;
                 var result = item.Result;
 
+                var shouldComplete =
+                    result.Success &&
+                    string.IsNullOrWhiteSpace(result.Error);
+
                 try
                 {
-                    if (result.Success)
+                    if (shouldComplete)
                     {
                         var completed = await _engineServices.DagStore.TryCompleteStepAsync(
                             executionId,
@@ -356,19 +318,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                     }
                     else
                     {
-                        await _engineServices.DagStore.TryFailStepAsync(
+                        var error = string.IsNullOrWhiteSpace(result.Error)
+                            ? "Step execution failed."
+                            : result.Error;
+
+                        var failed = await _engineServices.DagStore.TryFailStepAsync(
                             executionId,
                             claimedStep.StepName,
                             claimedStep.ClaimToken,
-                            result.Error,
+                            error,
                             cancellationToken);
+
+                        if (!failed)
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to persist failed claimed step '{claimedStep.StepName}' for execution '{executionId}'.");
+                        }
 
                         _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
                             executionId,
                             claimedStep.StepName);
 
                         _engineServices.Logger.Engine.LogInformation(
-                            $"[AI DAG BATCH] Step failed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}', Error='{result.Error}'.");
+                            $"[AI DAG BATCH] Step failed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}', Error='{error}'.");
                     }
                 }
                 finally

@@ -610,7 +610,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Metrics
 
             Assert.Contains(events, e =>
                 string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&
-                e.Name.StartsWith("TryClaimNextReadyStep", StringComparison.Ordinal));
+                e.Name.Contains("Claim", StringComparison.OrdinalIgnoreCase));
+
+            Assert.Contains(events, e =>
+                string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&
+                (
+                    e.Name.Contains("Complete", StringComparison.OrdinalIgnoreCase) ||
+                    e.Name.Contains("Fail", StringComparison.OrdinalIgnoreCase)
+                ));
 
             Assert.Contains(events, e =>
                 string.Equals(e.Category, "dag-store", StringComparison.OrdinalIgnoreCase) &&

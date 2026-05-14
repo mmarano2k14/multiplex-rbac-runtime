@@ -12,6 +12,7 @@ using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.AI.Tests.Runtime.Execution.Instance;
+using StackExchange.Redis;
 using System.Text.Json;
 using Xunit;
 
@@ -23,6 +24,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultiInstance
     [Collection("redis")]
     public sealed class MultiInstanceDagExecutionIntegrationTests
     {
+        private readonly IConnectionMultiplexer _redis;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MultiInstanceDagExecutionIntegrationTests"/> class.
+        /// </summary>
+        /// <param name="fixture">The shared Redis fixture.</param>
+        public MultiInstanceDagExecutionIntegrationTests(
+            RedisFixture fixture)
+        {
+            ArgumentNullException.ThrowIfNull(fixture);
+
+            _redis = fixture.Connection;
+        }
+
         /// <summary>
         /// Verifies that multiple integration runtime hosts can be created with isolated service providers,
         /// different runtime instance identities, and resolvable DAG execution engines.
@@ -181,6 +196,104 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultiInstance
                     StringComparison.Ordinal))
             {
                 // Expected race loser in distributed multi-instance execution.
+            }
+        }
+
+        /// <summary>
+        /// Verifies that provider-level throttling is enforced globally across multiple runtime instances.
+        /// </summary>
+        [RedisFact]
+        public async Task MultiInstanceDagExecution_Should_Respect_Provider_Throttle_Across_Runtime_Instances()
+        {
+            var pipelineName = $"multi-instance-provider-throttle-{Guid.NewGuid():N}";
+            var filePath = WriteProviderThrottlePipelineDefinitionToConfig(pipelineName);
+
+            await using var hostA = await CreateIntegrationHostAsync(
+                "runtime-instance-a",
+                $"{pipelineName}.json");
+
+            await using var hostB = await CreateIntegrationHostAsync(
+                "runtime-instance-b",
+                $"{pipelineName}.json");
+
+            await using var hostC = await CreateIntegrationHostAsync(
+                "runtime-instance-c",
+                $"{pipelineName}.json");
+
+            var created = await hostA.Engine.CreateAsync(
+                pipelineName,
+                "provider-throttle-test");
+
+            var providerScopeKey = "ai:concurrency:scope:provider:openai";
+            var database = _redis.GetDatabase();
+
+            var maxObservedProviderConcurrency = 0L;
+
+            try
+            {
+                AiExecutionRecord? record = null;
+
+                for (var attempt = 0; attempt < 150; attempt++)
+                {
+                    await Task.WhenAll(
+                        ExecuteDistributedBatchCycleAsync(hostA.Engine, created.ExecutionId),
+                        ExecuteDistributedBatchCycleAsync(hostB.Engine, created.ExecutionId),
+                        ExecuteDistributedBatchCycleAsync(hostC.Engine, created.ExecutionId));
+
+                    var activeProviderLeases = await database.SortedSetLengthAsync(
+                        providerScopeKey);
+
+                    if (activeProviderLeases > maxObservedProviderConcurrency)
+                    {
+                        maxObservedProviderConcurrency = activeProviderLeases;
+                    }
+
+                    var dagStore = hostA.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                    record = await dagStore.GetRecordAsync(created.ExecutionId);
+
+                    if (record is not null && record.IsTerminal)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(25);
+                }
+
+                Assert.NotNull(record);
+                Assert.Equal(AiExecutionStatus.Completed, record!.Status);
+                Assert.Equal(AiExecutionMode.Dag, record.ExecutionMode);
+                Assert.Equal(10, record.CompletedSteps.Count);
+
+                Assert.True(
+                    maxObservedProviderConcurrency <= 2,
+                    $"Provider throttle was exceeded. MaxObserved='{maxObservedProviderConcurrency}', Limit='2'.");
+
+                var finalDagStore = hostA.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+                var state = await finalDagStore.GetStateAsync(created.ExecutionId);
+
+                Assert.NotNull(state);
+                Assert.Equal(10, state!.Steps.Count);
+
+                Assert.All(
+                    state.Steps.Values,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.Null(step.ClaimedBy);
+                        Assert.Null(step.ClaimToken);
+                        Assert.Null(step.ClaimedAtUtc);
+                        Assert.Null(step.LeaseExpiresAtUtc);
+                    });
+            }
+            finally
+            {
+                await CleanupDagExecutionAsync(
+                    hostA.ServiceProvider,
+                    created.ExecutionId);
+
+                await database.KeyDeleteAsync(providerScopeKey);
+
+                TryDeleteFile(filePath);
             }
         }
 
@@ -421,6 +534,75 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultiInstance
             {
                 // Best-effort cleanup only.
             }
+        }
+
+        /// <summary>
+        /// Writes a deterministic provider-throttled DAG pipeline definition to the test config directory.
+        /// </summary>
+        /// <param name="pipelineName">The generated pipeline name.</param>
+        /// <returns>The created file path.</returns>
+        private static string WriteProviderThrottlePipelineDefinitionToConfig(
+            string pipelineName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+
+            var steps = Enumerable
+                .Range(1, 10)
+                .Select(index => new AiPipelineStepDefinition
+                {
+                    Name = $"provider-step-{index:00}",
+                    StepKey = "hello-world",
+                    Order = index,
+                    Config = new Dictionary<string, object?>
+                    {
+                        ["delayMs"] = 100,
+                        ["provider"] = "openai",
+                        ["model"] = "gpt-test",
+                        ["operation"] = "llm.chat",
+                        ["concurrency"] = new Dictionary<string, object?>
+                        {
+                            ["enabled"] = true,
+                            ["leaseSeconds"] = 30,
+                            ["maxProviderConcurrency"] = 2,
+                            ["defaultRetryAfterMs"] = 25
+                        }
+                    }
+                })
+                .ToList();
+
+            var definition = new AiPipelineDefinition
+            {
+                Name = pipelineName,
+                Version = "1.0.0",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps = steps
+            };
+
+            var root = new
+            {
+                pipelines = new[]
+                {
+            definition
+        }
+            };
+
+            var json = JsonSerializer.Serialize(
+                root,
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+            var baseDir = AppContext.BaseDirectory;
+            var configDir = Path.Combine(baseDir, "config");
+
+            Directory.CreateDirectory(configDir);
+
+            var filePath = Path.Combine(configDir, $"{pipelineName}.json");
+
+            File.WriteAllText(filePath, json);
+
+            return filePath;
         }
 
         /// <summary>

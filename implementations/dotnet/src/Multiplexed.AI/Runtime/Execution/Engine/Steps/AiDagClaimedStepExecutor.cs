@@ -114,30 +114,45 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             try
             {
-                return await _services.ObservabilityService.Tracer.TraceStepAsync(
-                    new AiStepTraceContext
-                    {
-                        ExecutionId = record.ExecutionId,
-                        StepId = claimedStep.StepName,
-                        StepType = resolvedStep.Step.GetType().Name,
-                        Status = "Running",
-                        RetryCount = stepState?.RetryState?.RetryCount ?? 0,
-                        RecoveryCount = stepState?.RecoveryCount ?? 0,
-                        WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
-                        ClaimToken = claimedStep.ClaimToken
-                    },
-                    async () =>
-                    {
-                        var result = await resolvedStep.Step.ExecuteAsync(
-                            stepContext,
-                            cancellationToken);
+                try
+                {
+                    return await _services.ObservabilityService.Tracer.TraceStepAsync(
+                        new AiStepTraceContext
+                        {
+                            ExecutionId = record.ExecutionId,
+                            StepId = claimedStep.StepName,
+                            StepType = resolvedStep.Step.GetType().Name,
+                            Status = "Running",
+                            RetryCount = stepState?.RetryState?.RetryCount ?? 0,
+                            RecoveryCount = stepState?.RecoveryCount ?? 0,
+                            WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
+                            ClaimToken = claimedStep.ClaimToken
+                        },
+                        async () =>
+                        {
+                            var result = await resolvedStep.Step.ExecuteAsync(
+                                stepContext,
+                                cancellationToken).ConfigureAwait(false);
 
-                        await _services.PayloadCompactor.CompactAsync(
-                            result,
-                            cancellationToken).ConfigureAwait(false);
+                            await _services.PayloadCompactor.CompactAsync(
+                                result,
+                                cancellationToken).ConfigureAwait(false);
 
-                        return result;
-                    }).ConfigureAwait(false);
+                            return result;
+                        }).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _services.Logger.Engine.LogWarning(
+                        $"[AI DAG] Step exception converted to failed result. ExecutionId='{record.ExecutionId}', StepName='{claimedStep.StepName}', ClaimToken='{claimedStep.ClaimToken}', Error='{ex.Message}'.");
+
+                    return AiStepResult.Fail(
+                        ex.Message);
+                }
             }
             finally
             {

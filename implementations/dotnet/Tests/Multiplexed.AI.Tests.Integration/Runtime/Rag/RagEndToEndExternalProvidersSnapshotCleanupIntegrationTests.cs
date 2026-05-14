@@ -71,7 +71,23 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
             var payloadStoreResolver = host.ServiceProvider.GetRequiredService<IAiPayloadStoreResolver>();
 
             // Prove runtime DI can externalize with the SAME host used by the RAG test.
-            var probePayload = await dataPolicy.StoreAsync("force-externalization");
+            // Use a deliberately large structured payload instead of a scalar string,
+            // because scalar values may be kept inline by the smart data policy.
+            var probeData = new Dictionary<string, object?>
+            {
+                ["kind"] = "externalization-probe",
+                ["text"] = new string('x', 4096),
+                ["items"] = Enumerable.Range(0, 128)
+                    .Select(i => new Dictionary<string, object?>
+                    {
+                        ["index"] = i,
+                        ["value"] = $"probe-value-{i}",
+                        ["payload"] = new string('y', 128)
+                    })
+                    .ToList()
+            };
+
+            var probePayload = await dataPolicy.StoreAsync(probeData);
 
             Assert.False(probePayload.IsInline);
             Assert.False(string.IsNullOrWhiteSpace(probePayload.ArtifactId));
