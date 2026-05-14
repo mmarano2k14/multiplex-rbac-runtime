@@ -202,7 +202,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                     trace.SetTag("stepsBefore", stepsBefore);
                     trace.SetTag("stepsAfter", stepsAfter);
                     trace.SetTag("removedSteps", stepsBefore - stepsAfter);
-                    trace.SetTag("workerId", Environment.MachineName);
+                    trace.SetTag("workerId", _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId);
 
                     return true;
                 });

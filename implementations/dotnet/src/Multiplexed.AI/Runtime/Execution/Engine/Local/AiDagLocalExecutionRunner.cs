@@ -170,15 +170,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                     state,
                     nextStep.Name);
 
+                var workerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
+                var claimToken = Guid.NewGuid().ToString("N");
+
                 stepState.MarkRunning(
-                    "local-worker",
-                    Guid.NewGuid().ToString("N"));
+                    workerId,
+                    claimToken);
 
                 record.MarkRunning();
                 record.CurrentStep = nextStep.Name;
 
                 _engineServices.Logger.Engine.LogInformation(
-                    $"[AI DAG] Local step started. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', Worker='local-worker'.");
+                    $"[AI DAG] Local step started. ExecutionId='{record.ExecutionId}', StepName='{nextStep.Name}', Worker='{workerId}'.");
 
                 var stepContext = new AiStepExecutionContext(
                     executionContext,
@@ -197,7 +200,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                             Status = "Running",
                             RetryCount = stepState.RetryState?.RetryCount ?? 0,
                             RecoveryCount = stepState.RecoveryCount,
-                            WorkerId = Environment.MachineName,
+                            WorkerId = workerId,
                             ClaimToken = stepState.ClaimToken
                         },
                         async () =>

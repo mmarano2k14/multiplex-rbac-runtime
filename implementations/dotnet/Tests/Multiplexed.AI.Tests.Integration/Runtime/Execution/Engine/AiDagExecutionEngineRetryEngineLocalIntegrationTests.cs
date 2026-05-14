@@ -9,6 +9,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions.AI.Policies;
@@ -35,6 +36,7 @@ using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
+using Multiplexed.AI.Tests.Runtime.Execution.Instance;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime;
 using Multiplexed.Rbac.Core.Stores.Memory;
@@ -248,6 +250,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
 
             var concurrencyGate = new NoOpAiConcurrencyGate();
 
+            var runtimeInstanceIdentity = new TestAiRuntimeInstanceIdentity("test-runtime-instance");
+
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
@@ -259,6 +263,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiPolicyEngineFactory)] = policyFactory,
                 [typeof(IAiDagStepExecutionOrchestrator)] = stepExecutionOrchestrator,
                 [typeof(IAiConcurrencyGate)] = concurrencyGate,
+                [typeof(IAiRuntimeInstanceIdentity)] = runtimeInstanceIdentity,
             });
 
             
@@ -278,6 +283,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 stateReader,
                 stateWriter,
                 stepResolver,
+                runtimeInstanceIdentity,
                 policyFactory,
                 concurrencyGate,
                 stepExecutionOrchestrator,

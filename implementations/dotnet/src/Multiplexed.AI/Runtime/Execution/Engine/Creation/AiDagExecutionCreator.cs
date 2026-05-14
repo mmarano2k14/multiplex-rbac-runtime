@@ -173,7 +173,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                         StepId = step.Name,
                         StepType = "retry.definition",
                         Status = "resolving.policy",
-                        WorkerId = Environment.MachineName
+                        WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId
                     },
                     async () =>
                     {

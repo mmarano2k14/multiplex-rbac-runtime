@@ -134,7 +134,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
 
             validateExecutionId(executionId);
 
-            var workerId = Environment.MachineName;
+            var workerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
 
             var record = await _engineServices.DagStore!.GetRecordAsync(
                 executionId,

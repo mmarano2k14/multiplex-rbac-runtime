@@ -108,8 +108,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 PipelineKey = $"{resolvedPipeline.Name}:{resolvedPipeline.Version}",
                 StepId = claimedStep.StepName,
                 StepKey = resolvedStep.StepKey,
-                RuntimeInstanceId = Environment.MachineName,
-                LeaseId = $"{record.ExecutionId}:{claimedStep.StepName}:{Environment.MachineName}"
+                RuntimeInstanceId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
+                LeaseId = $"{record.ExecutionId}:{claimedStep.StepName}:{_services.RuntimeInstanceIdentity.RuntimeInstanceId}"
             };
 
             try
@@ -123,7 +123,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         Status = "Running",
                         RetryCount = stepState?.RetryState?.RetryCount ?? 0,
                         RecoveryCount = stepState?.RecoveryCount ?? 0,
-                        WorkerId = Environment.MachineName,
+                        WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
                         ClaimToken = claimedStep.ClaimToken
                     },
                     async () =>

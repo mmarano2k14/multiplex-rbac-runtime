@@ -120,8 +120,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="stepName">
         /// The claimed step name.
         /// </param>
-        /// <param name="workerId">
-        /// The worker identifier.
+        /// <param name="runtimeInstanceId">
+        /// The stable runtime instance identifier participating in distributed execution.
         /// </param>
         /// <param name="stepState">
         /// The step state containing optional provider, model, and operation metadata.
@@ -135,6 +135,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// </para>
         ///
         /// <para>
+        /// The runtime instance id identifies the runtime host/process that owns the
+        /// concurrency lease. It must remain stable for the lifetime of the runtime instance.
+        /// </para>
+        ///
+        /// <para>
+        /// The lease id identifies one concrete concurrency admission for one execution step.
+        /// It is deterministic for the tuple execution id, step name, and runtime instance id
+        /// so the same context can be reconstructed later for release.
+        /// </para>
+        ///
+        /// <para>
         /// Provider, model, and operation must be reconstructed from the same step configuration
         /// used during admission. This ensures provider/model/operation scopes are released
         /// together with the existing global, pipeline, step, execution, and instance scopes.
@@ -144,17 +155,23 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             string executionId,
             string pipelineKey,
             string stepName,
-            string workerId,
+            string runtimeInstanceId,
             AiStepState stepState)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
+            ArgumentNullException.ThrowIfNull(stepState);
+
             return new AiConcurrencyContext
             {
                 ExecutionId = executionId,
                 PipelineKey = pipelineKey,
                 StepId = stepName,
                 StepKey = stepName,
-                RuntimeInstanceId = workerId,
-                LeaseId = $"{executionId}:{stepName}:{workerId}",
+                RuntimeInstanceId = runtimeInstanceId,
+                LeaseId = $"{executionId}:{stepName}:{runtimeInstanceId}",
                 Provider = TryReadString(stepState.Config, "provider"),
                 Model = TryReadString(stepState.Config, "model"),
                 Operation =
@@ -210,11 +227,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="stepName">
         /// The concrete step name.
         /// </param>
-        /// <param name="workerId">
-        /// The worker or runtime instance identifier.
+        /// <param name="runtimeInstanceId">
+        /// The stable runtime instance identifier participating in distributed execution.
         /// </param>
         /// <param name="stepState">
         /// The step state containing concurrency, provider, model, and operation config.
+        /// </param>
+        /// <param name="pipelineConfig">
+        /// The optional pipeline-level configuration used to resolve effective concurrency rules.
+        /// </param>
+        /// <param name="stepDefinition">
+        /// The pipeline step definition used to resolve step-level concurrency rules.
         /// </param>
         /// <param name="definitionResolver">
         /// The concurrency definition resolver.
@@ -242,7 +265,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             string executionId,
             string pipelineKey,
             string stepName,
-            string workerId,
+            string runtimeInstanceId,
             AiStepState stepState,
             IReadOnlyDictionary<string, object?>? pipelineConfig,
             AiPipelineStepDefinition stepDefinition,
@@ -251,7 +274,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
-            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
             ArgumentNullException.ThrowIfNull(stepState);
             ArgumentNullException.ThrowIfNull(stepDefinition);
             ArgumentNullException.ThrowIfNull(definitionResolver);
@@ -264,8 +287,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 Config = pipelineConfig ?? new Dictionary<string, object?>(),
                 Steps = new[]
                 {
-                    stepDefinition
-                }
+            stepDefinition
+        }
             };
 
             var definition = definitionResolver.Resolve(
@@ -276,7 +299,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 executionId,
                 pipelineKey,
                 stepName,
-                workerId,
+                runtimeInstanceId,
                 stepState);
 
             var effectiveDefinition = AiConcurrencyThrottleRuleApplicator.Apply(

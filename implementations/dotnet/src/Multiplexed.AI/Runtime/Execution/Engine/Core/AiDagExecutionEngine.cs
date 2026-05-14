@@ -152,7 +152,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
                     ExecutionId = executionId,
                     ExecutionMode = "Dag",
                     Status = "Running",
-                    WorkerId = Environment.MachineName
+                    WorkerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId
                 },
                 async () =>
                 {

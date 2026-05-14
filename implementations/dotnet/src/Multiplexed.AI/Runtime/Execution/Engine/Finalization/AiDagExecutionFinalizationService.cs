@@ -131,7 +131,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     CompletedAtUtc = utcNow,
                     CompletedSteps = completedSteps,
                     CurrentStep = string.Empty,
-                    WorkerId = Environment.MachineName
+                    WorkerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId
                 };
 
                 var success =
@@ -150,7 +150,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
                             trace.SetTag("finalized", result);
                             trace.SetTag("status", convergence.Status.ToString());
-                            trace.SetTag("workerId", Environment.MachineName);
+                            trace.SetTag("workerId", _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId);
                             trace.SetTag("expectedStepKey", expectedStepKey);
                             trace.SetTag("completedSteps", completedSteps.Count);
 

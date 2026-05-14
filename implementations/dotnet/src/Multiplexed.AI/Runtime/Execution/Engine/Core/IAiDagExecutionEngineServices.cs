@@ -10,6 +10,7 @@ using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
@@ -83,6 +84,26 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// Gets the AI engine options.
         /// </summary>
         IOptions<AiEngineOptions> AiOptions { get; }
+
+        /// <summary>
+        /// Gets the stable identity of the current AI runtime instance.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This identity is stable for the lifetime of the runtime host and is used by
+        /// distributed execution components to identify the current runtime instance.
+        /// </para>
+        /// <para>
+        /// It may be used for DAG claim ownership, concurrency lease ownership, tracing,
+        /// metrics, diagnostics, and recovery analysis.
+        /// </para>
+        /// <para>
+        /// This value must not be used as a step claim token. Claim tokens remain unique
+        /// per claim attempt, while the runtime instance identity identifies the process
+        /// participating in distributed execution.
+        /// </para>
+        /// </remarks>
+        IAiRuntimeInstanceIdentity RuntimeInstanceIdentity { get; }
 
         /// <summary>
         /// Gets the step result payload compactor.

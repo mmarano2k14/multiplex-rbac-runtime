@@ -9,6 +9,7 @@ using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Configuration;
@@ -44,6 +45,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             IAiExecutionStateReader stateReader,
             IAiExecutionStateWriter stateWriter,
             IAiExecutionStepResolver stepResolver,
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity,
             IAiPolicyEngineFactory policyEngineFactory,
             IAiConcurrencyGate concurrencyGate,
             IAiDagStepExecutionOrchestrator stepExecutionOrchestrator,
@@ -63,6 +65,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             StateReader = stateReader ?? throw new ArgumentNullException(nameof(stateReader));
             StateWriter = stateWriter ?? throw new ArgumentNullException(nameof(stateWriter));
             StepResolver = stepResolver ?? throw new ArgumentNullException(nameof(stepResolver));
+            RuntimeInstanceIdentity = runtimeInstanceIdentity ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
             PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
             ConcurrencyGate = concurrencyGate ?? throw new ArgumentNullException(nameof(concurrencyGate));
@@ -100,6 +103,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 
         /// <inheritdoc />
         public IOptions<AiEngineOptions> AiOptions { get; }
+
+        /// <inheritdoc />
+        public IAiRuntimeInstanceIdentity RuntimeInstanceIdentity { get; }
 
         /// <inheritdoc />
         public IAiStepResultPayloadCompactor PayloadCompactor { get; }

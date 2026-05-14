@@ -22,6 +22,7 @@ using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.Abstractions.Runtime;
@@ -50,6 +51,7 @@ using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
 using Multiplexed.AI.Runtime.Execution.Engine.Local;
 using Multiplexed.AI.Runtime.Execution.Engine.Retention;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Metrics;
@@ -484,7 +486,11 @@ namespace Multiplexed.AI.DI
             services.AddSingleton<IAiConcurrencyGate, RedisAiConcurrencyGate>();
             services.TryAddSingleton<IAiConcurrencyEngine, DefaultAiConcurrencyEngine>();
 
+            // ------------------------------------------------------------
+            // instance identity
+            // ------------------------------------------------------------
 
+            services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
 
 
             // ------------------------------------------------------------
