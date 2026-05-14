@@ -493,11 +493,12 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<IAiConcurrencyEngine, DefaultAiConcurrencyEngine>();
 
             // ------------------------------------------------------------
-            // instance identity
+            // instance identity / runtime instance worker
             // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
             services.TryAddScoped<IAiRuntimeInstanceWorker, AiRuntimeInstanceWorker>();
+            services.TryAddScoped<IAiRuntimeInstanceWorkerGroup, AiRuntimeInstanceWorkerGroup>();
 
             services.TryAddSingleton<IOptions<AiRuntimeInstanceWorkerOptions>>(
                 Options.Create(options.RuntimeInstanceWorker ?? new AiRuntimeInstanceWorkerOptions()));
