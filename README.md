@@ -6,7 +6,7 @@ Distributed • State-Driven • Fault-Tolerant • Observable
 
 This repository provides a **reference implementation of a multiplexed, deterministic AI runtime**, demonstrating how to build **distributed, observable, and fault-tolerant execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.6-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.4.7-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---
@@ -2047,6 +2047,437 @@ It is the foundation that makes the runtime:
 - safe
 - deterministic
 - scalable
+
+---
+
+## Multi-Run Isolated Execution API
+
+Multiplex AI Runtime now exposes a higher-level **multi-run isolated execution API** for submitting and managing several independent runtime executions from the same controller/runtime host.
+
+This is the current validated capability.
+
+It is **not yet** the same as multiple runtime instances advancing the same `ExecutionId` together.
+
+For now, each submitted run creates its own isolated runtime execution:
+
+```text
+Submit run request
+        ↓
+RunId = controller/job lifecycle id
+        ↓
+Runtime creates a new isolated execution
+        ↓
+ExecutionId = authoritative runtime execution id
+        ↓
+DAG record + DAG state + snapshot + replay data
+        ↓
+Execution runs independently from other submitted runs
+```
+
+This means the runtime can safely launch multiple executions side by side, while keeping each execution isolated by its own `ExecutionId`.
+
+---
+
+### Current Scope
+
+The current API validates **multiple isolated executions**, not distributed co-execution of one shared execution.
+
+Current behavior:
+
+- each submitted controller run receives a unique `RunId`
+- each runtime execution receives a unique `ExecutionId`
+- each `ExecutionId` owns its own DAG record and state
+- each execution can complete independently
+- each execution can be snapshotted independently
+- each execution can be replayed independently
+- `RunId` and `ExecutionId` are strictly separated
+
+Not yet covered by this feature:
+
+- several runtime instances advancing the same `ExecutionId`
+- multiple workers competing for the same execution's steps across processes
+- distributed worker-group orchestration for one shared execution
+
+Those are future distributed multi-instance scenarios.
+
+---
+
+### Why This Matters
+
+Even before true distributed co-execution, a production runtime needs to safely manage many independent executions at the same time.
+
+Typical use cases include:
+
+- multiple queued AI workflow requests
+- several background executions running in parallel
+- isolated tenant or user executions
+- independent DAG runs using the same pipeline definition
+- concurrent replay and validation scenarios
+
+Without strict execution identity, these runs can corrupt each other.
+
+The multi-run isolated execution API ensures that every submitted run has its own execution namespace and that controller lifecycle identifiers never collide with runtime execution identifiers.
+
+---
+
+### RunId vs ExecutionId
+
+The runtime distinguishes between controller/job identifiers and runtime execution identifiers.
+
+```text
+RunId
+= lifecycle id of a submitted controller run
+= used by the background controller to track the queued/running job
+
+ExecutionId
+= authoritative id of the runtime DAG execution
+= used by DAG state, records, snapshots, replay, resolver, and cleanup
+```
+
+This separation is critical.
+
+A `RunId` is not a DAG execution id.
+
+An `ExecutionId` is not a controller queue id.
+
+The tests validate that:
+
+```text
+RunId != ExecutionId
+```
+
+and that the two namespaces do not overlap.
+
+---
+
+### Background Controller Execution Flow
+
+The background controller accepts runtime pipeline requests and returns a handle.
+
+Each handle tracks both:
+
+- the controller `RunId`
+- the runtime `ExecutionId` created for that run
+
+Example:
+
+```csharp
+var controller = serviceProvider
+    .GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+await controller.StartAsync();
+
+var handle = await controller.EnqueueAsync(
+    new AiRuntimePipelineRunRequest
+    {
+        PipelineName = pipelineName,
+        PipelineDefinition = pipelineDefinition,
+        Input = new
+        {
+            candidateId = "candidate-001",
+            source = "background-controller"
+        }
+    });
+
+var final = await handle.Completion;
+```
+
+After enqueue:
+
+```text
+handle.RunId       → controller lifecycle id
+handle.ExecutionId → runtime DAG execution id
+```
+
+The completion task returns the terminal execution record for that specific `ExecutionId`.
+
+---
+
+### Multiple Isolated Runs
+
+The same controller can enqueue several independent executions.
+
+```csharp
+var handles = new List<AiRuntimeWorkerRunHandle>();
+
+for (var index = 0; index < runCount; index++)
+{
+    var handle = await controller.EnqueueAsync(
+        new AiRuntimePipelineRunRequest
+        {
+            PipelineName = pipelineName,
+            PipelineDefinition = pipelineDefinition,
+            Input = new
+            {
+                candidateId = $"candidate-{index:000}",
+                runIndex = index
+            }
+        });
+
+    handles.Add(handle);
+}
+
+var finals = await Task.WhenAll(
+    handles.Select(handle => handle.Completion));
+```
+
+Each handle produces a different `ExecutionId`.
+
+```text
+Run 1 → RunId A → ExecutionId 1
+Run 2 → RunId B → ExecutionId 2
+Run 3 → RunId C → ExecutionId 3
+```
+
+Each execution has its own:
+
+- DAG record
+- DAG state
+- step states
+- retry state
+- retention behavior
+- snapshot
+- replay contract
+
+This gives the runtime safe parallel execution of multiple independent DAG workflows.
+
+---
+
+### Isolation Guarantees
+
+The current API guarantees that independent executions do not share runtime state.
+
+For every submitted run:
+
+```text
+RunId is unique
+ExecutionId is unique
+RunId does not equal ExecutionId
+RunId namespace does not overlap ExecutionId namespace
+```
+
+The DAG store is queried by `ExecutionId`, not by `RunId`.
+
+The tests validate that asking the DAG store for a `RunId` returns nothing:
+
+```text
+DAG store lookup by RunId       → null
+DAG store lookup by ExecutionId → execution record/state
+```
+
+This prevents application code from accidentally treating controller job ids as runtime execution ids.
+
+---
+
+### Interaction with DAG Execution
+
+Each isolated execution still uses the full DAG runtime internally.
+
+Inside each `ExecutionId`, the engine continues to provide:
+
+- DAG dependency evaluation
+- bounded batch execution
+- retry-safe step transitions
+- terminal convergence
+- retention and compaction compatibility
+- resolver-based access to completed or archived steps
+
+The isolation boundary is the `ExecutionId`.
+
+Two executions may use the same pipeline definition, but their states remain separate:
+
+```text
+Pipeline Definition X
+        ↓
+ExecutionId 1 → independent DAG state
+ExecutionId 2 → independent DAG state
+ExecutionId 3 → independent DAG state
+```
+
+---
+
+### Interaction with Concurrency and Throttling
+
+The current multi-run API can run several independent executions while still using concurrency configuration inside each execution.
+
+Example:
+
+```json
+{
+  "config": {
+    "concurrency": {
+      "enabled": true,
+      "maxDegreeOfParallelism": 4,
+      "maxProviderConcurrency": 2,
+      "leaseSeconds": 60,
+      "defaultRetryAfterMs": 25,
+      "jitter": false
+    }
+  }
+}
+```
+
+At this stage, the important validated behavior is that each execution carries and applies its own runtime configuration correctly.
+
+True cross-runtime distributed throttling for multiple runtime instances advancing the same `ExecutionId` belongs to the distributed concurrency layer and remains a separate capability.
+
+---
+
+### Interaction with Retry
+
+Each isolated execution owns its own retry state.
+
+If two independent executions run the same flaky step, their retry counters remain isolated because they belong to different `ExecutionId` values.
+
+```text
+ExecutionId 1 → chaos-step-01 retry count
+ExecutionId 2 → chaos-step-01 retry count
+```
+
+The runtime validates that retry counts survive terminal lifecycle processing and replay.
+
+---
+
+### Interaction with Retention and Resolver
+
+Each isolated execution can use retention, compaction, and eviction independently.
+
+Completed step data may be compacted or evicted from hot state, while the resolver keeps required completed steps accessible.
+
+The integration tests validate that required completed steps remain resolvable after terminal lifecycle processing.
+
+This proves that isolated executions can complete safely even when hot state is bounded by retention.
+
+---
+
+### Snapshot and Replay Support
+
+Each isolated execution can be snapshotted and replayed independently.
+
+The runtime validates two replay contracts.
+
+#### Replay when the execution still exists
+
+```text
+Execution still exists in DAG store
+        ↓
+ReplayAsync(ExecutionId)
+        ↓
+AlreadyExists = true
+Restored      = false
+```
+
+This proves replay is idempotent and does not duplicate live execution state.
+
+#### Replay after live state deletion
+
+```text
+Execution completed
+        ↓
+Terminal snapshot persisted
+        ↓
+Live DAG record/state deleted
+        ↓
+ReplayAsync(ExecutionId)
+        ↓
+Restored      = true
+AlreadyExists = false
+        ↓
+DAG record/state restored
+```
+
+This proves the runtime can restore a completed DAG execution from its terminal snapshot.
+
+---
+
+### Deterministic Replay Validation
+
+The current integration coverage also validates deterministic replay.
+
+The test captures a stable execution fingerprint before deleting live state, restores the execution from snapshot, and compares the restored execution with the original.
+
+The deterministic fingerprint includes:
+
+- `ExecutionId`
+- pipeline name
+- terminal status
+- completed steps
+- required resolved step statuses
+- retry counts
+
+The expected result is:
+
+```text
+original completed execution fingerprint
+=
+restored execution fingerprint after replay
+```
+
+This proves that replay restores the same terminal execution result, not only a successful replay flag.
+
+---
+
+### Validated Behavior
+
+The current multi-run isolated execution API is validated through integration tests that check:
+
+- multiple queued runs complete successfully
+- every queued run receives a unique `RunId`
+- every runtime execution receives a unique `ExecutionId`
+- `RunId` and `ExecutionId` never overlap
+- DAG store records and states are addressed by `ExecutionId`
+- small runtime simulations complete successfully
+- larger chaos simulations complete successfully
+- retry counts are preserved
+- retention does not break required completed step resolution
+- terminal snapshots are created
+- replay reports `AlreadyExists` when live state still exists
+- replay restores from snapshot after live DAG state deletion
+- restored execution fingerprints match original execution fingerprints
+
+---
+
+### Current Boundary and Future Direction
+
+The current feature should be understood as:
+
+```text
+multiple isolated executions
+same runtime/controller API
+unique ExecutionId per execution
+safe snapshot/replay per execution
+```
+
+The future distributed direction is:
+
+```text
+one ExecutionId
+multiple runtime instances
+shared distributed DAG execution
+workers competing for the same execution's steps
+```
+
+That future capability should be documented separately when it is implemented and fully validated.
+
+---
+
+### Summary
+
+The multi-run isolated execution API turns the runtime from a single execution primitive into a controller-driven execution layer capable of safely launching and tracking many independent DAG executions.
+
+It provides:
+
+- clear `RunId` / `ExecutionId` separation
+- unique execution identity
+- isolated DAG state per execution
+- safe parallel run submission
+- terminal snapshot support
+- idempotent replay
+- restore-from-snapshot behavior
+- deterministic replay validation
+- metrics and tracing coverage for background executions
+
+This is an important step toward production runtime orchestration, while keeping the current scope precise: **multiple isolated executions today, distributed shared-execution across runtime instances later**.
 
 ---
 

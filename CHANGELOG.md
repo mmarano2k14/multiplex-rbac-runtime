@@ -6,6 +6,127 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.4.7] - 2026-05-15 - Background Controller / Batch DAG / Snapshot Replay Hardening
+
+### Added
+
+- Added full background-controller integration coverage for DAG executions.
+- Added validation that controller `RunId` and runtime `ExecutionId` are always different namespaces.
+- Added multi-run background-controller tests validating:
+  - unique `RunId` per queued run
+  - unique `ExecutionId` per runtime execution
+  - no overlap between controller run identifiers and runtime execution identifiers
+  - completed runtime executions across multiple queued runs
+- Added small validated runtime simulation covering:
+  - retry behavior
+  - retention configuration
+  - compaction / eviction configuration
+  - concurrency configuration
+  - tracing
+  - runtime metrics
+  - completed-step resolution
+- Added full chaos runtime simulation with:
+  - 50-step DAG pipeline
+  - multiple queued runs
+  - bounded batch execution
+  - retryable flaky steps
+  - policy-driven retention
+  - concurrency / throttling configuration
+  - tracing and worker metrics
+- Added a custom `chaos.flaky-provider` step for integration testing retry behavior.
+- Added resolver validation after terminal lifecycle to ensure completed required steps remain resolvable after retention, compaction, eviction, and finalization.
+- Added terminal snapshot validation for background-controller executions.
+- Added replay validation when the live execution still exists:
+  - `ReplayAsync(...)` returns `AlreadyExists = true`
+  - `Restored = false`
+- Added restore-from-snapshot validation after deleting live DAG state:
+  - terminal snapshot exists
+  - live DAG record/state are deleted
+  - replay restores from snapshot
+  - `Restored = true`
+  - `AlreadyExists = false`
+  - restored record/state are available again from the DAG store
+- Added deterministic replay validation:
+  - captures execution fingerprint before deletion
+  - deletes live DAG state
+  - restores from snapshot
+  - compares restored execution against original execution
+  - validates deterministic consistency for:
+    - `ExecutionId`
+    - `PipelineName`
+    - terminal status
+    - completed steps
+    - step statuses
+    - retry counts
+    - required resolved steps
+
+### Changed
+
+- Aligned batch DAG execution with retention-aware terminal lifecycle while preserving stable bounded batch behavior.
+- Kept `AiDagBatchExecutionRunner` batch-safe instead of applying single-step retention semantics directly to each batch item.
+- Preserved the stable batch execution flow:
+  - claim batch
+  - execute batch
+  - persist step transitions
+  - evaluate convergence
+  - persist final record
+  - snapshot / cleanup terminal execution
+- Added batch-safe retention coordination support without breaking small or chaos runtime simulations.
+- Updated background-controller replay tests to separate two replay contracts:
+  - replay against existing execution
+  - replay after live DAG state deletion
+- Updated resolver validation to use the correct resolver contract:
+  - `GetStepStatusAsync(...)` for status / dependency / convergence validation
+  - `GetStepAsync(...)` when full step state, retry state, or payload-backed data is required
+- Improved replay test structure so replay is validated through snapshot existence, runtime restore behavior, DAG store availability, and deterministic comparison.
+- Improved terminal lifecycle snapshot handling by surfacing snapshot persistence failures instead of allowing silent timeout-only failures.
+- Updated `AiDagExecutionLifecycleHelper` to normalize JSON-derived state before snapshot persistence.
+- Updated snapshot persistence to normalize:
+  - `AiExecutionState.PipelineConfig`
+  - step config dictionaries
+  - step result data dictionaries
+- Converted `System.Text.Json.JsonElement` values into MongoDB-serializable .NET values before snapshot persistence.
+- Updated `DefaultAiExecutionReplayService<TContext>` so distributed DAG replay restores into the authoritative `IAiDagExecutionStore` when available, instead of restoring only into the generic `IAiExecutionStore`.
+
+### Fixed
+
+- Fixed replay snapshot timeout caused by MongoDB failing to serialize `JsonElement` values inside `AiExecutionState.PipelineConfig`.
+- Fixed hidden snapshot persistence failures by making snapshot errors visible during tests.
+- Fixed replay restore behavior for distributed DAG executions where `ReplayAsync(...)` returned `Restored = true` but the restored execution was not available from `IAiDagExecutionStore`.
+- Fixed replay contract mismatch by restoring distributed DAG snapshots into the DAG store.
+- Fixed test ambiguity between controller `RunId` and runtime `ExecutionId`.
+- Fixed background-controller tests so they validate runtime execution namespace correctly.
+- Fixed retention / resolver validation assumptions by distinguishing hot-state access from archive-aware step status resolution.
+- Fixed replay test design so `AlreadyExists` and `Restored` are validated as separate scenarios.
+- Fixed deterministic replay coverage to prove replay restores the same terminal execution state rather than only returning a successful replay result.
+- Fixed snapshot replay flow for DAG executions using JSON pipeline configuration values.
+
+### Validated
+
+- Verified small background-controller runtime simulation passes.
+- Verified full chaos background-controller simulation passes.
+- Verified completed required steps remain resolvable after terminal lifecycle.
+- Verified replay returns `AlreadyExists = true` when the execution still exists.
+- Verified replay restores from snapshot after live DAG state deletion.
+- Verified deterministic replay produces the same execution fingerprint before and after restore.
+- Verified retry counts survive snapshot replay.
+- Verified completed step metadata remains stable across replay.
+- Verified restored DAG executions are readable again through `IAiDagExecutionStore`.
+- Verified snapshot persistence works with JSON-derived pipeline configuration.
+- Verified `RunId` and `ExecutionId` remain strictly separated.
+
+### Notes
+
+- `RunId` is the controller/job lifecycle identifier.
+- `ExecutionId` is the runtime execution namespace used by DAG state, records, snapshots, and replay.
+- A replay result of `AlreadyExists = true` is valid when the execution still exists.
+- A replay result of `Restored = true` is expected only after live execution record/state have been removed.
+- Batch execution should not blindly reuse single-step distributed retention flow per step; batch execution needs batch-safe retention behavior.
+- Snapshot persistence must normalize runtime state before writing to MongoDB because JSON pipeline definitions may introduce `JsonElement` values.
+- In distributed DAG mode, replay must restore into `IAiDagExecutionStore`, because that is the authoritative execution store.
+
+---
+
 ## [1.0.4.6] - 2026-14-04 - Policy-Driven Concurrency Admission and Generic Throttling
 
 - Added policy-aware concurrency admission before Redis distributed lease acquisition.
