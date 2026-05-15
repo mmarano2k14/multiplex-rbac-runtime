@@ -97,315 +97,315 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         }
 
         /// <summary>
-        /// Executes a bounded distributed DAG step batch.
-        /// </summary>
-        /// <param name="executionId">
-        /// The identifier of the distributed DAG execution to advance.
-        /// </param>
-        /// <param name="maxSteps">
-        /// The maximum number of ready DAG steps to claim and execute in this batch.
-        /// </param>
-        /// <param name="loadContextAndSetAsync">
-        /// A delegate used to load the execution context from the record context key and set it
-        /// as the current runtime context.
-        /// </param>
-        /// <param name="buildExecutionContext">
-        /// A delegate used to build an execution context from the execution record and state.
-        /// </param>
-        /// <param name="persistAsync">
-        /// A delegate used to persist the execution record and state after convergence.
-        /// </param>
-        /// <param name="ensurePipelineName">
-        /// A delegate used to validate or populate the execution record pipeline name.
-        /// </param>
-        /// <param name="validateExecutionId">
-        /// A delegate used to validate the supplied execution identifier.
-        /// </param>
-        /// <param name="cancellationToken">
-        /// A cancellation token used to cancel the batch execution operation.
-        /// </param>
-        /// <returns>
-        /// The latest execution record after the batch execution and convergence evaluation.
-        /// </returns>
-        public async Task<AiExecutionRecord> ExecuteBatchAsync(
-            string executionId,
-            int maxSteps,
-            Func<string, Task> loadContextAndSetAsync,
-            Func<AiExecutionRecord, AiExecutionState, CancellationToken, AiExecutionContext> buildExecutionContext,
-            Func<AiExecutionRecord, string, AiExecutionState, CancellationToken, Task> persistAsync,
-            Action<AiExecutionRecord> ensurePipelineName,
-            Action<string> validateExecutionId,
-            CancellationToken cancellationToken = default)
+/// Executes a bounded distributed DAG step batch.
+/// </summary>
+/// <param name="executionId">
+/// The identifier of the distributed DAG execution to advance.
+/// </param>
+/// <param name="maxSteps">
+/// The maximum number of ready DAG steps to claim and execute in this batch.
+/// </param>
+/// <param name="loadContextAndSetAsync">
+/// A delegate used to load the execution context from the record context key and set it
+/// as the current runtime context.
+/// </param>
+/// <param name="buildExecutionContext">
+/// A delegate used to build an execution context from the execution record and state.
+/// </param>
+/// <param name="persistAsync">
+/// A delegate used to persist the execution record and state after convergence.
+/// </param>
+/// <param name="ensurePipelineName">
+/// A delegate used to validate or populate the execution record pipeline name.
+/// </param>
+/// <param name="validateExecutionId">
+/// A delegate used to validate the supplied execution identifier.
+/// </param>
+/// <param name="cancellationToken">
+/// A cancellation token used to cancel the batch execution operation.
+/// </param>
+/// <returns>
+/// The latest execution record after the batch execution and convergence evaluation.
+/// </returns>
+public async Task<AiExecutionRecord> ExecuteBatchAsync(
+    string executionId,
+    int maxSteps,
+    Func<string, Task> loadContextAndSetAsync,
+    Func<AiExecutionRecord, AiExecutionState, CancellationToken, AiExecutionContext> buildExecutionContext,
+    Func<AiExecutionRecord, string, AiExecutionState, CancellationToken, Task> persistAsync,
+    Action<AiExecutionRecord> ensurePipelineName,
+    Action<string> validateExecutionId,
+    CancellationToken cancellationToken = default)
+{
+    validateExecutionId(executionId);
+
+    ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+
+    if (_engineServices.DagStore is null)
+    {
+        throw new InvalidOperationException(
+            "Distributed DAG store is not configured.");
+    }
+
+    var workerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
+
+    var record = await _engineServices.DagStore.GetRecordAsync(
+        executionId,
+        cancellationToken);
+
+    if (record is null)
+    {
+        throw new InvalidOperationException(
+            $"Execution '{executionId}' was not found.");
+    }
+
+    ensurePipelineName(record);
+
+    await loadContextAndSetAsync(record.ContextKey);
+
+    var resolvedPipeline = await _engineServices.PipelineExecutor.PrepareAsync(
+        record.PipelineName!,
+        cancellationToken);
+
+    if (resolvedPipeline is null)
+    {
+        throw new InvalidOperationException(
+            $"Pipeline '{record.PipelineName}' could not be resolved for execution '{executionId}'.");
+    }
+
+    var pipelineKey = CreatePipelineKey(resolvedPipeline);
+
+    var state = await _engineServices.DagStore.GetStateAsync(
+        executionId,
+        cancellationToken);
+
+    if (state is null)
+    {
+        throw new InvalidOperationException(
+            $"Execution state '{executionId}' was not found.");
+    }
+
+    var claimedSteps = await _claimService.ClaimBatchAsync(
+        executionId,
+        resolvedPipeline,
+        pipelineKey,
+        workerId,
+        maxSteps,
+        cancellationToken);
+
+    if (claimedSteps.Count == 0)
+    {
+        var latestRecord = await _engineServices.DagStore.GetRecordAsync(
+            executionId,
+            cancellationToken);
+
+        if (latestRecord?.IsTerminal == true)
         {
-            validateExecutionId(executionId);
+            return latestRecord;
+        }
 
-            ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
+        var latestState = await _engineServices.DagStore.GetStateAsync(
+            executionId,
+            cancellationToken) ?? state;
 
-            if (_engineServices.DagStore is null)
+        record.Steps = resolvedPipeline.Steps
+            .Select(x => x.Name)
+            .ToList();
+
+        var idleConvergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+            resolvedPipeline,
+            latestState,
+            _engineServices.StateWriter,
+            _engineServices.StepResolver,
+            DateTime.UtcNow,
+            cancellationToken);
+
+        AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
+            record,
+            idleConvergence,
+            latestState);
+
+        if (record.IsTerminal)
+        {
+            var idleExpectedStepKey = record.ExecutionStepKey;
+
+            if (string.IsNullOrWhiteSpace(idleExpectedStepKey))
             {
                 throw new InvalidOperationException(
-                    "Distributed DAG store is not configured.");
+                    "ExecutionStepKey must be set before persisting execution state.");
             }
-
-            var workerId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
-
-            var record = await _engineServices.DagStore.GetRecordAsync(
-                executionId,
-                cancellationToken);
-
-            if (record is null)
-            {
-                throw new InvalidOperationException(
-                    $"Execution '{executionId}' was not found.");
-            }
-
-            ensurePipelineName(record);
-
-            await loadContextAndSetAsync(record.ContextKey);
-
-            var resolvedPipeline = await _engineServices.PipelineExecutor.PrepareAsync(
-                record.PipelineName!,
-                cancellationToken);
-
-            if (resolvedPipeline is null)
-            {
-                throw new InvalidOperationException(
-                    $"Pipeline '{record.PipelineName}' could not be resolved for execution '{executionId}'.");
-            }
-
-            var pipelineKey = CreatePipelineKey(resolvedPipeline);
-
-            var state = await _engineServices.DagStore.GetStateAsync(
-                executionId,
-                cancellationToken);
-
-            if (state is null)
-            {
-                throw new InvalidOperationException(
-                    $"Execution state '{executionId}' was not found.");
-            }
-
-            var claimedSteps = await _claimService.ClaimBatchAsync(
-                executionId,
-                resolvedPipeline,
-                pipelineKey,
-                workerId,
-                maxSteps,
-                cancellationToken);
-
-            if (claimedSteps.Count == 0)
-            {
-                var latestRecord = await _engineServices.DagStore.GetRecordAsync(
-                    executionId,
-                    cancellationToken);
-
-                if (latestRecord?.IsTerminal == true)
-                {
-                    return latestRecord;
-                }
-
-                var latestState = await _engineServices.DagStore.GetStateAsync(
-                    executionId,
-                    cancellationToken) ?? state;
-
-                record.Steps = resolvedPipeline.Steps
-                    .Select(x => x.Name)
-                    .ToList();
-
-                var idleConvergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
-                    resolvedPipeline,
-                    latestState,
-                    _engineServices.StateWriter,
-                    _engineServices.StepResolver,
-                    DateTime.UtcNow,
-                    cancellationToken);
-
-                AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
-                    record,
-                    idleConvergence,
-                    latestState);
-
-                if (record.IsTerminal)
-                {
-                    var idleExpectedStepKey = record.ExecutionStepKey;
-
-                    if (string.IsNullOrWhiteSpace(idleExpectedStepKey))
-                    {
-                        throw new InvalidOperationException(
-                            "ExecutionStepKey must be set before persisting execution state.");
-                    }
-
-                    await _finalizationService.PersistDistributedConvergedRecordAsync(
-                        record,
-                        idleConvergence,
-                        idleExpectedStepKey,
-                        latestState,
-                        resolvedPipeline,
-                        buildExecutionContext,
-                        persistAsync,
-                        cancellationToken);
-
-                    return await _engineServices.DagStore.GetRecordAsync(
-                               executionId,
-                               cancellationToken)
-                           ?? record;
-                }
-
-                return record;
-            }
-
-            var maxDegreeOfParallelism = ResolveMaxDegreeOfParallelism(
-                state,
-                claimedSteps,
-                maxSteps);
-
-            var batchResult =
-                await _engineServices.StepExecutionOrchestrator.ExecuteAsync(
-                    new AiDagStepExecutionContext
-                    {
-                        ExecutionId = executionId,
-                        State = state,
-                        MaxDegreeOfParallelism = maxDegreeOfParallelism
-                    },
-                    new AiStepExecutionBatch
-                    {
-                        Steps = claimedSteps
-                    },
-                    async (claimedStep, ct) =>
-                    {
-                        return await _claimedStepExecutor.ExecuteAsync(
-                            record,
-                            state,
-                            resolvedPipeline,
-                            claimedStep,
-                            buildExecutionContext,
-                            ct);
-                    },
-                    cancellationToken);
-
-            foreach (var item in batchResult.Results)
-            {
-                var claimedStep = item.ClaimedStep;
-                var result = item.Result;
-
-                var shouldComplete =
-                    result.Success &&
-                    string.IsNullOrWhiteSpace(result.Error);
-
-                try
-                {
-                    if (shouldComplete)
-                    {
-                        var completed = await _engineServices.DagStore.TryCompleteStepAsync(
-                            executionId,
-                            claimedStep.StepName,
-                            claimedStep.ClaimToken,
-                            result,
-                            cancellationToken);
-
-                        if (!completed)
-                        {
-                            throw new InvalidOperationException(
-                                $"Failed to complete claimed step '{claimedStep.StepName}' for execution '{executionId}'.");
-                        }
-
-                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepCompleted(
-                            executionId,
-                            claimedStep.StepName);
-
-                        _engineServices.Logger.Engine.LogInformation(
-                            $"[AI DAG BATCH] Step completed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}'.");
-                    }
-                    else
-                    {
-                        var error = string.IsNullOrWhiteSpace(result.Error)
-                            ? "Step execution failed."
-                            : result.Error;
-
-                        var failed = await _engineServices.DagStore.TryFailStepAsync(
-                            executionId,
-                            claimedStep.StepName,
-                            claimedStep.ClaimToken,
-                            error,
-                            cancellationToken);
-
-                        if (!failed)
-                        {
-                            throw new InvalidOperationException(
-                                $"Failed to persist failed claimed step '{claimedStep.StepName}' for execution '{executionId}'.");
-                        }
-
-                        _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
-                            executionId,
-                            claimedStep.StepName);
-
-                        _engineServices.Logger.Engine.LogInformation(
-                            $"[AI DAG BATCH] Step failed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}', Error='{error}'.");
-                    }
-                }
-                finally
-                {
-                    await ReleaseConcurrencyLeaseAsync(
-                        executionId,
-                        pipelineKey,
-                        claimedStep.StepName,
-                        workerId,
-                        state,
-                        resolvedPipeline,
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-
-            var finalState = await _engineServices.DagStore.GetStateAsync(
-                executionId,
-                cancellationToken) ?? state;
-
-            record.Steps = resolvedPipeline.Steps
-                .Select(x => x.Name)
-                .ToList();
-
-            var convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
-                resolvedPipeline,
-                finalState,
-                _engineServices.StateWriter,
-                _engineServices.StepResolver,
-                DateTime.UtcNow,
-                cancellationToken);
-
-            AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
-                record,
-                convergence,
-                finalState);
-
-            var expectedStepKey = AiDagExecutionHelpers.GetRequiredExecutionStepKey(record);
 
             await _finalizationService.PersistDistributedConvergedRecordAsync(
                 record,
-                convergence,
-                expectedStepKey,
-                finalState,
+                idleConvergence,
+                idleExpectedStepKey,
+                latestState,
                 resolvedPipeline,
                 buildExecutionContext,
                 persistAsync,
                 cancellationToken);
-
-            if (record.IsTerminal)
-            {
-                await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
-                    record,
-                    finalState,
-                    cancellationToken);
-
-                await _lifecycleHelper.TryCleanupIfNeededAsync(
-                    record,
-                    cancellationToken);
-            }
 
             return await _engineServices.DagStore.GetRecordAsync(
                        executionId,
                        cancellationToken)
                    ?? record;
         }
+
+        return record;
+    }
+
+    var maxDegreeOfParallelism = ResolveMaxDegreeOfParallelism(
+        state,
+        claimedSteps,
+        maxSteps);
+
+    var batchResult =
+        await _engineServices.StepExecutionOrchestrator.ExecuteAsync(
+            new AiDagStepExecutionContext
+            {
+                ExecutionId = executionId,
+                State = state,
+                MaxDegreeOfParallelism = maxDegreeOfParallelism
+            },
+            new AiStepExecutionBatch
+            {
+                Steps = claimedSteps
+            },
+            async (claimedStep, ct) =>
+            {
+                return await _claimedStepExecutor.ExecuteAsync(
+                    record,
+                    state,
+                    resolvedPipeline,
+                    claimedStep,
+                    buildExecutionContext,
+                    ct);
+            },
+            cancellationToken);
+
+    foreach (var item in batchResult.Results)
+    {
+        var claimedStep = item.ClaimedStep;
+        var result = item.Result;
+
+        var shouldComplete =
+            result.Success &&
+            string.IsNullOrWhiteSpace(result.Error);
+
+        try
+        {
+            if (shouldComplete)
+            {
+                var completed = await _engineServices.DagStore.TryCompleteStepAsync(
+                    executionId,
+                    claimedStep.StepName,
+                    claimedStep.ClaimToken,
+                    result,
+                    cancellationToken);
+
+                if (!completed)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to complete claimed step '{claimedStep.StepName}' for execution '{executionId}'.");
+                }
+
+                _engineServices.ObservabilityService.Metrics.Execution.RecordStepCompleted(
+                    executionId,
+                    claimedStep.StepName);
+
+                _engineServices.Logger.Engine.LogInformation(
+                    $"[AI DAG BATCH] Step completed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}'.");
+            }
+            else
+            {
+                var error = string.IsNullOrWhiteSpace(result.Error)
+                    ? "Step execution failed."
+                    : result.Error;
+
+                var failed = await _engineServices.DagStore.TryFailStepAsync(
+                    executionId,
+                    claimedStep.StepName,
+                    claimedStep.ClaimToken,
+                    error,
+                    cancellationToken);
+
+                if (!failed)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist failed claimed step '{claimedStep.StepName}' for execution '{executionId}'.");
+                }
+
+                _engineServices.ObservabilityService.Metrics.Execution.RecordStepFailed(
+                    executionId,
+                    claimedStep.StepName);
+
+                _engineServices.Logger.Engine.LogInformation(
+                    $"[AI DAG BATCH] Step failed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}', Error='{error}'.");
+            }
+        }
+        finally
+        {
+            await ReleaseConcurrencyLeaseAsync(
+                executionId,
+                pipelineKey,
+                claimedStep.StepName,
+                workerId,
+                state,
+                resolvedPipeline,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    var finalState = await _engineServices.DagStore.GetStateAsync(
+        executionId,
+        cancellationToken) ?? state;
+
+    record.Steps = resolvedPipeline.Steps
+        .Select(x => x.Name)
+        .ToList();
+
+    var convergence = await AiDagExecutionConvergenceEvaluator.EvaluateAsync(
+        resolvedPipeline,
+        finalState,
+        _engineServices.StateWriter,
+        _engineServices.StepResolver,
+        DateTime.UtcNow,
+        cancellationToken);
+
+    AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
+        record,
+        convergence,
+        finalState);
+
+    var expectedStepKey = AiDagExecutionHelpers.GetRequiredExecutionStepKey(record);
+
+    await _finalizationService.PersistDistributedConvergedRecordAsync(
+        record,
+        convergence,
+        expectedStepKey,
+        finalState,
+        resolvedPipeline,
+        buildExecutionContext,
+        persistAsync,
+        cancellationToken);
+
+    if (record.IsTerminal)
+    {
+        await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+            record,
+            finalState,
+            cancellationToken);
+
+        await _lifecycleHelper.TryCleanupIfNeededAsync(
+            record,
+            cancellationToken);
+    }
+
+    return await _engineServices.DagStore.GetRecordAsync(
+               executionId,
+               cancellationToken)
+           ?? record;
+}
 
         /// <summary>
         /// Creates the stable pipeline key used by distributed concurrency scopes.
