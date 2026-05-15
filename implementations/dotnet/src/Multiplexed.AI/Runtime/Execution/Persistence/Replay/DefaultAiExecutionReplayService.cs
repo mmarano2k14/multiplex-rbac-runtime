@@ -39,10 +39,18 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             IAiRuntimeLogger logger,
             IAiDagExecutionStore? dagStore = null)
         {
-            _snapshotStore = snapshotStore ?? throw new ArgumentNullException(nameof(snapshotStore));
-            _executionStore = executionStore ?? throw new ArgumentNullException(nameof(executionStore));
-            _snapshotService = snapshotService ?? throw new ArgumentNullException(nameof(snapshotService));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _snapshotStore = snapshotStore
+                ?? throw new ArgumentNullException(nameof(snapshotStore));
+
+            _executionStore = executionStore
+                ?? throw new ArgumentNullException(nameof(executionStore));
+
+            _snapshotService = snapshotService
+                ?? throw new ArgumentNullException(nameof(snapshotService));
+
+            _logger = logger
+                ?? throw new ArgumentNullException(nameof(logger));
+
             _dagStore = dagStore;
         }
 
@@ -55,12 +63,16 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         {
             if (string.IsNullOrWhiteSpace(executionId))
             {
-                throw new ArgumentException("ExecutionId cannot be null or empty.", nameof(executionId));
+                throw new ArgumentException(
+                    "ExecutionId cannot be null or empty.",
+                    nameof(executionId));
             }
 
             var replayedAtUtc = DateTime.UtcNow;
 
-            var snapshot = await _snapshotStore.GetAsync(executionId, cancellationToken);
+            var snapshot = await _snapshotStore.GetAsync(
+                executionId,
+                cancellationToken).ConfigureAwait(false);
 
             if (snapshot is null)
             {
@@ -81,9 +93,12 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
-            AiExecutionSnapshotRemapper.Remap(snapshot);
+            AiExecutionSnapshotRemapper.Remap(
+                snapshot);
 
-            var validationError = ValidateSnapshot(snapshot);
+            var validationError = ValidateSnapshot(
+                snapshot);
+
             if (validationError is not null)
             {
                 _logger.Engine.ExecutionReplaySkipped(
@@ -103,21 +118,14 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
-            // -------------------------------------------------------------
-            // Check for an already existing compatible execution.
-            //
-            // IMPORTANT:
-            // - In distributed DAG mode, authoritative truth lives in IAiDagExecutionStore
-            // - In generic mode, replay compatibility is checked against IAiExecutionStore
-            // -------------------------------------------------------------
-            var existingRecord = await _executionStore.GetRecordAsync(executionId, cancellationToken);
+            var existingRecord = await GetExistingRecordAsync(
+                executionId,
+                cancellationToken).ConfigureAwait(false);
 
-            if (existingRecord is null && _dagStore is not null)
-            {
-                existingRecord = await _dagStore.GetRecordAsync(executionId, cancellationToken);
-            }
-
-            if (existingRecord is not null && IsCompatibleExistingRecord(existingRecord, snapshot.Record!))
+            if (existingRecord is not null &&
+                IsCompatibleExistingRecord(
+                    existingRecord,
+                    snapshot.Record!))
             {
                 _logger.Engine.ExecutionReplaySkipped(
                     executionId,
@@ -140,19 +148,21 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
-            AiExecutionReplayPreparation.Prepare(snapshot.Record, snapshot.State);
+            AiExecutionReplayPreparation.Prepare(
+                snapshot.Record,
+                snapshot.State);
 
-            await _executionStore.RestoreAsync(
+            await RestoreToAuthoritativeStoreAsync(
                 snapshot.Record!,
                 snapshot.State!,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             await _snapshotService.TryPersistAsync(
                 snapshot.Record!,
                 snapshot.State!,
                 snapshot.ContextKey,
                 snapshot.ContextSnapshot,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             _logger.Engine.ExecutionReplayRestored(
                 executionId,
@@ -176,10 +186,60 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         }
 
         /// <summary>
+        /// Gets an existing runtime record from the authoritative DAG store when available,
+        /// otherwise from the generic execution store.
+        /// </summary>
+        private async Task<AiExecutionRecord?> GetExistingRecordAsync(
+            string executionId,
+            CancellationToken cancellationToken)
+        {
+            if (_dagStore is not null)
+            {
+                var dagRecord = await _dagStore.GetRecordAsync(
+                    executionId,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (dagRecord is not null)
+                {
+                    return dagRecord;
+                }
+            }
+
+            return await _executionStore.GetRecordAsync(
+                executionId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Restores the snapshot into the authoritative runtime store.
+        /// </summary>
+        private async Task RestoreToAuthoritativeStoreAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken)
+        {
+            if (_dagStore is not null)
+            {
+                await _dagStore.RestoreAsync(
+                    record,
+                    state,
+                    cancellationToken).ConfigureAwait(false);
+
+                return;
+            }
+
+            await _executionStore.RestoreAsync(
+                record,
+                state,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Validates that the persisted snapshot contains the minimum data required
         /// for a safe replay into the runtime store.
         /// </summary>
-        private static string? ValidateSnapshot(AiExecutionSnapshotDocument<TContext> snapshot)
+        private static string? ValidateSnapshot(
+            AiExecutionSnapshotDocument<TContext> snapshot)
         {
             if (snapshot.Record is null)
             {
@@ -196,17 +256,26 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 return "Snapshot execution id is missing.";
             }
 
-            if (!string.Equals(snapshot.ExecutionId, snapshot.Record.ExecutionId, StringComparison.Ordinal))
+            if (!string.Equals(
+                    snapshot.ExecutionId,
+                    snapshot.Record.ExecutionId,
+                    StringComparison.Ordinal))
             {
                 return "Snapshot execution id does not match record execution id.";
             }
 
-            if (!string.Equals(snapshot.ExecutionId, snapshot.State.ExecutionId, StringComparison.Ordinal))
+            if (!string.Equals(
+                    snapshot.ExecutionId,
+                    snapshot.State.ExecutionId,
+                    StringComparison.Ordinal))
             {
                 return "Snapshot execution id does not match state execution id.";
             }
 
-            if (!string.Equals(snapshot.Record.ExecutionId, snapshot.State.ExecutionId, StringComparison.Ordinal))
+            if (!string.Equals(
+                    snapshot.Record.ExecutionId,
+                    snapshot.State.ExecutionId,
+                    StringComparison.Ordinal))
             {
                 return "Record execution id does not match state execution id.";
             }
@@ -227,17 +296,26 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             AiExecutionRecord existingRecord,
             AiExecutionRecord snapshotRecord)
         {
-            if (!string.Equals(existingRecord.ExecutionId, snapshotRecord.ExecutionId, StringComparison.Ordinal))
+            if (!string.Equals(
+                    existingRecord.ExecutionId,
+                    snapshotRecord.ExecutionId,
+                    StringComparison.Ordinal))
             {
                 return false;
             }
 
-            if (!string.Equals(existingRecord.PipelineName, snapshotRecord.PipelineName, StringComparison.Ordinal))
+            if (!string.Equals(
+                    existingRecord.PipelineName,
+                    snapshotRecord.PipelineName,
+                    StringComparison.Ordinal))
             {
                 return false;
             }
 
-            if (!string.Equals(existingRecord.ContextKey, snapshotRecord.ContextKey, StringComparison.Ordinal))
+            if (!string.Equals(
+                    existingRecord.ContextKey,
+                    snapshotRecord.ContextKey,
+                    StringComparison.Ordinal))
             {
                 return false;
             }

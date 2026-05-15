@@ -1,4 +1,5 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using System.Text.Json;
+using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -48,16 +49,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
 
             if (!record.IsTerminal)
             {
+                _engineServices.Logger.Engine.LogInformation(
+                    $"[AI SNAPSHOT] Skipped for execution '{record.ExecutionId}' because the execution is not terminal. Status='{record.Status}'.");
+
                 return;
             }
 
             if (!_engineServices.AiOptions.Value.Snapshots.Enabled)
             {
+                _engineServices.Logger.Engine.LogInformation(
+                    $"[AI SNAPSHOT] Skipped for execution '{record.ExecutionId}' because snapshots are disabled.");
+
                 return;
             }
 
             if (_engineServices.SnapshotService is null)
             {
+                _engineServices.Logger.Engine.LogWarning(
+                    $"[AI SNAPSHOT] Skipped for execution '{record.ExecutionId}' because SnapshotService is not configured. Snapshots.Enabled='{_engineServices.AiOptions.Value.Snapshots.Enabled}', Mongo.Enabled='{_engineServices.AiOptions.Value.Snapshots.Mongo.Enabled}'.");
+
                 return;
             }
 
@@ -70,13 +80,21 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     contextSnapshot = _engineServices.ContextFactory.CreateSnapshot(
                         _engineServices.Accessor.Current);
                 }
+                else
+                {
+                    _engineServices.Logger.Engine.LogInformation(
+                        $"[AI SNAPSHOT] Persisting execution '{record.ExecutionId}' without current execution context snapshot because Accessor.Current is null.");
+                }
+
+                NormalizeSnapshotStateForMongo(
+                    state);
 
                 await _engineServices.SnapshotService.TryPersistAsync(
                     record,
                     state,
                     record.ContextKey,
                     contextSnapshot,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
 
                 _engineServices.Logger.Engine.SnapshotPersisted(
                     record.ExecutionId,
@@ -89,7 +107,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             {
                 _engineServices.Logger.Engine.LogError(
                     ex,
-                    $"[AI SNAPSHOT] Failed for execution '{record.ExecutionId}'.");
+                    $"[AI SNAPSHOT] Failed for execution '{record.ExecutionId}'. Status='{record.Status}', ContextKey='{record.ContextKey}', StateExecutionId='{state.ExecutionId}'.");
+
+                throw;
             }
         }
 
@@ -149,7 +169,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             {
                 await _engineServices.CleanupService.DeleteExecutionBundleAsync(
                     record.ExecutionId,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
 
                 _engineServices.Logger.Engine.CleanupCompleted(
                     record.ExecutionId);
@@ -167,6 +187,174 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 {
                     throw;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Normalizes snapshot state values so MongoDB can serialize dictionary/object fields
+        /// that may contain System.Text.Json.JsonElement values from JSON pipeline definitions.
+        /// </summary>
+        /// <param name="state">
+        /// The execution state to normalize before snapshot persistence.
+        /// </param>
+        private static void NormalizeSnapshotStateForMongo(
+            AiExecutionState state)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (state.PipelineConfig is not null)
+            {
+                NormalizeDictionaryInPlace(
+                    state.PipelineConfig);
+            }
+
+            foreach (var step in state.Steps.Values)
+            {
+                if (step.Config is not null)
+                {
+                    NormalizeDictionaryInPlace(
+                        step.Config);
+                }
+
+                if (step.Result?.Data is not null)
+                {
+                    NormalizeDictionaryInPlace(
+                        step.Result.Data);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Normalizes a mutable dictionary in place.
+        /// </summary>
+        /// <param name="dictionary">
+        /// The dictionary to normalize.
+        /// </param>
+        private static void NormalizeDictionaryInPlace(
+            IDictionary<string, object?> dictionary)
+        {
+            ArgumentNullException.ThrowIfNull(dictionary);
+
+            var keys = dictionary.Keys.ToList();
+
+            foreach (var key in keys)
+            {
+                dictionary[key] = NormalizeValueForMongo(
+                    dictionary[key]);
+            }
+        }
+
+        /// <summary>
+        /// Converts values into MongoDB-serializable .NET values.
+        /// </summary>
+        /// <param name="value">
+        /// The value to normalize.
+        /// </param>
+        /// <returns>
+        /// A MongoDB-serializable value.
+        /// </returns>
+        private static object? NormalizeValueForMongo(
+            object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            if (value is JsonElement jsonElement)
+            {
+                return NormalizeJsonElementForMongo(
+                    jsonElement);
+            }
+
+            if (value is IDictionary<string, object?> objectDictionary)
+            {
+                NormalizeDictionaryInPlace(
+                    objectDictionary);
+
+                return objectDictionary;
+            }
+
+            if (value is IReadOnlyDictionary<string, object?> readOnlyDictionary)
+            {
+                return readOnlyDictionary.ToDictionary(
+                    pair => pair.Key,
+                    pair => NormalizeValueForMongo(pair.Value),
+                    StringComparer.Ordinal);
+            }
+
+            if (value is IEnumerable<object?> enumerable &&
+                value is not string)
+            {
+                return enumerable
+                    .Select(NormalizeValueForMongo)
+                    .ToList();
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// Converts a JsonElement into primitive, dictionary, or list values that MongoDB can serialize.
+        /// </summary>
+        /// <param name="element">
+        /// The JsonElement to normalize.
+        /// </param>
+        /// <returns>
+        /// A MongoDB-serializable value.
+        /// </returns>
+        private static object? NormalizeJsonElementForMongo(
+            JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    return element
+                        .EnumerateObject()
+                        .ToDictionary(
+                            property => property.Name,
+                            property => NormalizeJsonElementForMongo(property.Value),
+                            StringComparer.Ordinal);
+
+                case JsonValueKind.Array:
+                    return element
+                        .EnumerateArray()
+                        .Select(NormalizeJsonElementForMongo)
+                        .ToList();
+
+                case JsonValueKind.String:
+                    return element.GetString();
+
+                case JsonValueKind.Number:
+                    if (element.TryGetInt64(out var longValue))
+                    {
+                        return longValue;
+                    }
+
+                    if (element.TryGetDecimal(out var decimalValue))
+                    {
+                        return decimalValue;
+                    }
+
+                    if (element.TryGetDouble(out var doubleValue))
+                    {
+                        return doubleValue;
+                    }
+
+                    return element.GetRawText();
+
+                case JsonValueKind.True:
+                    return true;
+
+                case JsonValueKind.False:
+                    return false;
+
+                case JsonValueKind.Null:
+                case JsonValueKind.Undefined:
+                    return null;
+
+                default:
+                    return element.GetRawText();
             }
         }
     }

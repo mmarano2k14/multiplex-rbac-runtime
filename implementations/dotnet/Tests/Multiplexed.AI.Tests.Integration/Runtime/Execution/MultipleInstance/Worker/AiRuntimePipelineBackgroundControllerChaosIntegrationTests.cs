@@ -195,10 +195,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         /// <summary>
         /// Verifies that an execution created through the background controller completes,
         /// is finalized naturally, has a snapshot available, remains replay-callable after
-        /// completion, and keeps the controller RunId separate from the runtime ExecutionId namespace.
+        /// completion, and reports AlreadyExists when live record/state still exist.
         /// </summary>
         [RedisFact]
-        public async Task BackgroundController_Should_Create_Replayable_Execution_After_Completion()
+        public async Task BackgroundController_Should_Report_AlreadyExists_When_Replay_Is_Called_For_Existing_Execution()
         {
             var scenario = AiRuntimeChaosScenario.Small();
 
@@ -303,6 +303,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     TimeSpan.FromSeconds(10));
 
                 Assert.NotNull(snapshot);
+                Assert.Equal(handle.ExecutionId, snapshot.ExecutionId);
 
                 var replayResult = await replayService.ReplayAsync(
                     handle.ExecutionId!);
@@ -311,6 +312,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 _output.WriteLine(
                     $"Replay result for ExecutionId='{handle.ExecutionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+
+                Assert.False(
+                    replayResult.Restored,
+                    "Replay should not restore when the live execution record/state still exist.");
+
+                Assert.True(
+                    replayResult.AlreadyExists,
+                    "Replay should report AlreadyExists when the live execution record/state still exist.");
 
                 var recordAfterReplay = await dagStore.GetRecordAsync(
                     handle.ExecutionId!);
@@ -347,6 +356,184 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     await CleanupExecutionsAsync(
                         host.ServiceProvider,
                         new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that a completed background-controller execution can be restored from
+        /// its terminal snapshot after the live DAG record/state has been removed.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Restore_Execution_From_Snapshot_After_State_Delete()
+        {
+            var scenario = AiRuntimeChaosScenario.Small();
+
+            await using var host = await CreateChaosHostAsync(scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+            var replayService = host.ServiceProvider.GetRequiredService<IAiExecutionReplayService>();
+            var snapshotStore = host.ServiceProvider.GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-replay-restore-001",
+                            source = "background-controller-replay-restore-test"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(scenario.StepCount, final.CompletedSteps.Count);
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.RunId),
+                    "The controller RunId must be assigned.");
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.ExecutionId),
+                    "The background controller must create a runtime ExecutionId.");
+
+                Assert.False(
+                    string.Equals(
+                        handle.RunId,
+                        handle.ExecutionId,
+                        StringComparison.Ordinal),
+                    "RunId and ExecutionId must be different. RunId belongs to the controller lifecycle; ExecutionId belongs to the runtime execution namespace.");
+
+                Assert.Equal(
+                    final.ExecutionId,
+                    handle.ExecutionId);
+
+                var executionId = handle.ExecutionId!;
+
+                var snapshot = await WaitForSnapshotAfterFinalizationAsync(
+                    host.Engine,
+                    snapshotStore,
+                    executionId,
+                    TimeSpan.FromSeconds(10));
+
+                Assert.NotNull(snapshot);
+                Assert.Equal(executionId, snapshot.ExecutionId);
+
+                var recordBeforeDelete = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var stateBeforeDelete = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(recordBeforeDelete);
+                Assert.NotNull(stateBeforeDelete);
+                Assert.Equal(AiExecutionStatus.Completed, recordBeforeDelete!.Status);
+                Assert.True(recordBeforeDelete.IsTerminal);
+                Assert.Equal(scenario.StepCount, recordBeforeDelete.CompletedSteps.Count);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    stateBeforeDelete!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    stateBeforeDelete!,
+                    resolver);
+
+                await CleanupDagExecutionAsync(
+                    host.ServiceProvider,
+                    executionId);
+
+                var deletedRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var deletedState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.Null(deletedRecord);
+                Assert.Null(deletedState);
+
+                var replayResult = await replayService.ReplayAsync(
+                    executionId);
+
+                Assert.NotNull(replayResult);
+
+                _output.WriteLine(
+                    $"Replay restore result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+
+                Assert.True(
+                    replayResult.Restored,
+                    "Replay should restore the execution after the live DAG record/state has been deleted.");
+
+                Assert.False(
+                    replayResult.AlreadyExists,
+                    "Replay should not report AlreadyExists after the live DAG record/state has been deleted.");
+
+                var restoredRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var restoredState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(restoredRecord);
+                Assert.NotNull(restoredState);
+
+                Assert.Equal(executionId, restoredRecord!.ExecutionId);
+                Assert.Equal(executionId, restoredState!.ExecutionId);
+
+                Assert.Equal(AiExecutionStatus.Completed, restoredRecord.Status);
+                Assert.True(restoredRecord.IsTerminal);
+                Assert.Equal(scenario.PipelineName, restoredRecord.PipelineName);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    restoredRecord.CompletedSteps.Count);
+
+                Assert.Equal(
+                    scenario.PipelineName,
+                    restoredState.PipelineName);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    restoredState,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    restoredState,
+                    resolver);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
                 }
             }
         }
@@ -390,7 +577,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     });
 
                 Assert.NotNull(handle);
-                AssertHandleAcceptedAfterEnqueue(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
 
                 var final = await handle.Completion.WaitAsync(
                     scenario.Timeout);
@@ -398,6 +587,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.NotNull(final);
                 Assert.True(final.IsTerminal);
                 Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(scenario.StepCount, final.CompletedSteps.Count);
 
                 Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
                 Assert.Equal(final.ExecutionId, handle.ExecutionId);
@@ -447,6 +637,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 if (unresolved.Count > 0)
                 {
                     _output.WriteLine("Unresolved completed steps after terminal lifecycle:");
+
                     foreach (var item in unresolved)
                     {
                         _output.WriteLine(item);
@@ -467,6 +658,206 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     await CleanupExecutionsAsync(
                         host.ServiceProvider,
                         new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that a completed background-controller execution restored from snapshot
+        /// produces the same deterministic execution result as the original completed execution.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Restore_Execution_From_Snapshot_With_Deterministic_Result()
+        {
+            var scenario = AiRuntimeChaosScenario.Small();
+
+            await using var host = await CreateChaosHostAsync(scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+            var replayService = host.ServiceProvider.GetRequiredService<IAiExecutionReplayService>();
+            var snapshotStore = host.ServiceProvider.GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-replay-deterministic-001",
+                            source = "background-controller-replay-deterministic-test"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(scenario.StepCount, final.CompletedSteps.Count);
+
+                Assert.False(string.IsNullOrWhiteSpace(handle.RunId));
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+                Assert.NotEqual(handle.RunId, handle.ExecutionId);
+                Assert.Equal(final.ExecutionId, handle.ExecutionId);
+
+                var executionId = handle.ExecutionId!;
+
+                var snapshot = await WaitForSnapshotAfterFinalizationAsync(
+                    host.Engine,
+                    snapshotStore,
+                    executionId,
+                    TimeSpan.FromSeconds(10));
+
+                Assert.NotNull(snapshot);
+                Assert.Equal(executionId, snapshot.ExecutionId);
+
+                var recordBeforeDelete = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var stateBeforeDelete = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(recordBeforeDelete);
+                Assert.NotNull(stateBeforeDelete);
+
+                Assert.Equal(AiExecutionStatus.Completed, recordBeforeDelete!.Status);
+                Assert.True(recordBeforeDelete.IsTerminal);
+                Assert.Equal(scenario.StepCount, recordBeforeDelete.CompletedSteps.Count);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    stateBeforeDelete!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    stateBeforeDelete!,
+                    resolver);
+
+                var beforeReplayFingerprint = await CreateReplayDeterminismFingerprintAsync(
+                    scenario,
+                    executionId,
+                    recordBeforeDelete,
+                    stateBeforeDelete!,
+                    resolver);
+
+                await CleanupDagExecutionAsync(
+                    host.ServiceProvider,
+                    executionId);
+
+                var deletedRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var deletedState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.Null(deletedRecord);
+                Assert.Null(deletedState);
+
+                var replayResult = await replayService.ReplayAsync(
+                    executionId);
+
+                Assert.NotNull(replayResult);
+
+                _output.WriteLine(
+                    $"Deterministic replay result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+
+                Assert.True(
+                    replayResult.Restored,
+                    "Replay should restore the execution after the live DAG record/state has been deleted.");
+
+                Assert.False(
+                    replayResult.AlreadyExists,
+                    "Replay should not report AlreadyExists after the live DAG record/state has been deleted.");
+
+                var restoredRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var restoredState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(restoredRecord);
+                Assert.NotNull(restoredState);
+
+                Assert.Equal(AiExecutionStatus.Completed, restoredRecord!.Status);
+                Assert.True(restoredRecord.IsTerminal);
+                Assert.Equal(scenario.StepCount, restoredRecord.CompletedSteps.Count);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    restoredState!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    restoredState!,
+                    resolver);
+
+                var afterReplayFingerprint = await CreateReplayDeterminismFingerprintAsync(
+                    scenario,
+                    executionId,
+                    restoredRecord,
+                    restoredState!,
+                    resolver);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.ExecutionId,
+                    afterReplayFingerprint.ExecutionId);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.PipelineName,
+                    afterReplayFingerprint.PipelineName);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.Status,
+                    afterReplayFingerprint.Status);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.IsTerminal,
+                    afterReplayFingerprint.IsTerminal);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.CompletedSteps,
+                    afterReplayFingerprint.CompletedSteps);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.StepStatuses,
+                    afterReplayFingerprint.StepStatuses);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.RetryCounts,
+                    afterReplayFingerprint.RetryCounts);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.RequiredResolvedSteps,
+                    afterReplayFingerprint.RequiredResolvedSteps);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
                 }
             }
         }
@@ -497,7 +888,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         /// <param name="scenario">The scenario configuration.</param>
         /// <returns>The configured engine options.</returns>
         private static AiEngineOptions CreateChaosOptions(
-    AiRuntimeChaosScenario scenario)
+            AiRuntimeChaosScenario scenario)
         {
             ArgumentNullException.ThrowIfNull(scenario);
 
@@ -950,11 +1341,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         /// </summary>
         /// <param name="scenario">The scenario configuration.</param>
         /// <param name="state">The execution state.</param>
-        /// <summary>
-        /// Validates that retention/compaction/eviction did not corrupt the execution state.
-        /// </summary>
-        /// <param name="scenario">The scenario configuration.</param>
-        /// <param name="state">The execution state.</param>
         private static void AssertRetentionDidNotBreakState(
             AiRuntimeChaosScenario scenario,
             AiExecutionState state)
@@ -1104,6 +1490,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 Assert.NotEmpty(events);
             }
+        }
+
+        /// <summary>
+        /// Deletes only the live DAG execution bundle while preserving terminal snapshots.
+        /// </summary>
+        /// <param name="serviceProvider">The service provider.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        private static async Task CleanupDagExecutionAsync(
+            IServiceProvider serviceProvider,
+            string executionId)
+        {
+            ArgumentNullException.ThrowIfNull(serviceProvider);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            var dagStore = serviceProvider.GetRequiredService<IAiDagExecutionStore>();
+
+            await dagStore.DeleteExecutionBundleAsync(
+                executionId);
         }
 
         /// <summary>
@@ -1257,8 +1661,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     QueueCapacity = 32,
                     MaxDegreeOfParallelism = maxDegreeOfParallelism,
                     MaxProviderConcurrency = maxProviderConcurrency,
-                    MaxCompletedStepsInState = maxCompletedStepsInState,
                     EnableChaos = true,
+                    MaxCompletedStepsInState = maxCompletedStepsInState,
                     WorkerIdleDelay = TimeSpan.FromMilliseconds(5),
                     Timeout = TimeSpan.FromSeconds(120),
                     RequiredResolvedSteps = new[]
@@ -1463,16 +1867,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             return config;
         }
 
-
         /// <summary>
         /// Waits until a snapshot document exists for the specified execution, while giving
         /// the engine a chance to run finalization cycles after the controller completed.
         /// </summary>
-        /// <param name="engine">The DAG execution engine.</param>
-        /// <param name="snapshotStore">The snapshot store.</param>
-        /// <param name="executionId">The execution identifier.</param>
-        /// <param name="timeout">The maximum wait time.</param>
-        /// <returns>The execution snapshot document.</returns>
         private static async Task<AiExecutionSnapshotDocument<ExecutionContextSnapshot>> WaitForSnapshotAfterFinalizationAsync(
             AiDagExecutionEngine engine,
             IAiExecutionSnapshotStore<ExecutionContextSnapshot> snapshotStore,
@@ -1497,8 +1895,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 try
                 {
-                    // The execution is already terminal, but this gives the runtime a chance
-                    // to execute any pending finalization/snapshot path without deleting state.
                     await engine.ExecuteNextAsync(
                         executionId);
                 }
@@ -1514,6 +1910,116 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
             throw new TimeoutException(
                 $"Snapshot for execution '{executionId}' was not created within '{timeout}'.");
+        }
+
+        /// <summary>
+        /// Creates a deterministic fingerprint of a completed execution that can be compared
+        /// before deletion and after replay restore.
+        /// </summary>
+        private static async Task<ReplayDeterminismFingerprint> CreateReplayDeterminismFingerprintAsync(
+            AiRuntimeChaosScenario scenario,
+            string executionId,
+            AiExecutionRecord record,
+            AiExecutionState state,
+            IAiExecutionStepResolver resolver)
+        {
+            ArgumentNullException.ThrowIfNull(scenario);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            var stepStatuses = new SortedDictionary<string, string>(
+                StringComparer.Ordinal);
+
+            foreach (var step in scenario.PipelineDefinition.Steps)
+            {
+                if (string.IsNullOrWhiteSpace(step.Name))
+                {
+                    continue;
+                }
+
+                var resolvedStatus = await resolver.GetStepStatusAsync(
+                    executionId,
+                    step.Name,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(resolvedStatus);
+
+                stepStatuses[step.Name] = resolvedStatus!.Status.ToString();
+            }
+
+            var retryCounts = new SortedDictionary<string, int>(
+                StringComparer.Ordinal);
+
+            foreach (var retriedStepName in scenario.ExpectedRetriedSteps)
+            {
+                var fullStep = await resolver.GetStepAsync(
+                    executionId,
+                    retriedStepName,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(fullStep);
+                Assert.Equal(AiStepExecutionStatus.Completed, fullStep!.Status);
+
+                retryCounts[retriedStepName] =
+                    fullStep.RetryState?.RetryCount ?? 0;
+            }
+
+            var requiredResolvedSteps = new SortedDictionary<string, string>(
+                StringComparer.Ordinal);
+
+            foreach (var requiredStepName in scenario.RequiredResolvedSteps)
+            {
+                var fullStep = await resolver.GetStepAsync(
+                    executionId,
+                    requiredStepName,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(fullStep);
+
+                requiredResolvedSteps[requiredStepName] =
+                    fullStep!.Status.ToString();
+            }
+
+            return new ReplayDeterminismFingerprint
+            {
+                ExecutionId = record.ExecutionId,
+                PipelineName = record.PipelineName ?? string.Empty,
+                Status = record.Status.ToString(),
+                IsTerminal = record.IsTerminal,
+                CompletedSteps = record.CompletedSteps
+                    .OrderBy(step => step, StringComparer.Ordinal)
+                    .ToArray(),
+                StepStatuses = stepStatuses,
+                RetryCounts = retryCounts,
+                RequiredResolvedSteps = requiredResolvedSteps
+            };
+        }
+
+        /// <summary>
+        /// Stable comparable execution fingerprint used by replay determinism tests.
+        /// </summary>
+        private sealed class ReplayDeterminismFingerprint
+        {
+            public required string ExecutionId { get; init; }
+
+            public required string PipelineName { get; init; }
+
+            public required string Status { get; init; }
+
+            public required bool IsTerminal { get; init; }
+
+            public required IReadOnlyList<string> CompletedSteps { get; init; }
+
+            public required IReadOnlyDictionary<string, string> StepStatuses { get; init; }
+
+            public required IReadOnlyDictionary<string, int> RetryCounts { get; init; }
+
+            public required IReadOnlyDictionary<string, string> RequiredResolvedSteps { get; init; }
         }
     }
 
