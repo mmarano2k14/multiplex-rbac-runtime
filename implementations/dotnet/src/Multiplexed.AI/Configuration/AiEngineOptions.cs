@@ -1,4 +1,5 @@
-﻿using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
+﻿using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
+using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Instance.Worker;
 
@@ -70,9 +71,16 @@ namespace Multiplexed.AI.Configuration
         /// </remarks>
         public AiObservabilityOptions Observability { get; set; } = new();
 
+
+        /// <summary>
+        /// Gets or sets runtime pipeline background controller options.
+        /// </summary>
+        public AiRuntimePipelineBackgroundControllerOptions PipelineBackgroundController { get; set; } = new();
+
         /// <summary>
         /// Gets or sets runtime instance worker options.
         /// </summary>
+        /// 
         public AiRuntimeInstanceWorkerOptions RuntimeInstanceWorker { get; set; } = new();
 
 

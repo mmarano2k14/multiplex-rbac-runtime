@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Tracing;
@@ -12,12 +13,27 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     /// <remarks>
     /// <para>
     /// This group coordinates multiple runtime instance workers against the same
-    /// execution identifier. It starts all supplied workers, returns the first
+    /// existing execution identifier. It starts all supplied workers, returns the first
     /// terminal execution record, and cancels the remaining workers.
     /// </para>
     /// <para>
+    /// The group does not create executions, does not select pipelines, and must not be
+    /// used to repurpose an execution identifier for another workflow run.
+    /// </para>
+    /// <para>
+    /// Each execution run must have its own distinct execution identifier. The execution
+    /// identifier is the namespace for the execution record, DAG state, step states,
+    /// retention artifacts, externalized payloads, resolver indexes, snapshots, and
+    /// replay data.
+    /// </para>
+    /// <para>
+    /// Multiple runtime instance workers may safely advance the same existing execution
+    /// identifier because distributed correctness is enforced by the underlying runtime
+    /// engine and distributed DAG store.
+    /// </para>
+    /// <para>
     /// The group is an orchestration helper only. It does not perform step claiming,
-    /// retry handling, throttling, or convergence itself.
+    /// retry handling, throttling, retention, or convergence itself.
     /// </para>
     /// </remarks>
     public sealed class AiRuntimeInstanceWorkerGroup : IAiRuntimeInstanceWorkerGroup
@@ -72,12 +88,22 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         }
 
         /// <summary>
-        /// Runs the supplied workers and returns the first terminal result.
+        /// Runs the supplied workers against the same existing execution identifier
+        /// and returns the first terminal result observed by any worker.
         /// </summary>
-        /// <param name="executionId">The execution identifier.</param>
-        /// <param name="workers">The participating workers.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The terminal execution record.</returns>
+        /// <param name="executionId">
+        /// The existing execution identifier to advance. This identifier must belong
+        /// to a previously created execution run and must not be reused for another run.
+        /// </param>
+        /// <param name="workers">
+        /// The runtime instance workers participating in the execution.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The terminal execution record observed by the first completing worker.
+        /// </returns>
         private async Task<AiExecutionRecord> RunWorkerGroupInternalAsync(
             string executionId,
             IReadOnlyCollection<IAiRuntimeInstanceWorker> workers,
@@ -134,10 +160,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         }
 
         /// <summary>
-        /// Runs one worker and lets expected cancellation propagate to the group.
+        /// Runs one worker against the existing execution identifier.
         /// </summary>
         /// <param name="worker">The worker to run.</param>
-        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="executionId">
+        /// The existing execution identifier to advance.
+        /// </param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The execution record returned by the worker.</returns>
         private static async Task<AiExecutionRecord> RunWorkerSafelyAsync(

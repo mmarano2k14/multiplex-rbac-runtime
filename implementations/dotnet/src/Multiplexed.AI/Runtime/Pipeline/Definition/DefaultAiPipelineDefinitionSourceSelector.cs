@@ -52,9 +52,14 @@ namespace Multiplexed.AI.Runtime.Pipeline.Definition
             return _options.DefaultPipelineDefinitionSource switch
             {
                 "Json" => _services.GetRequiredService<JsonAiPipelineDefinitionProvider>(),
+
                 "InMemory" => _services.GetRequiredService<InMemoryAiPipelineDefinitionProvider>(),
+
+                "Runtime" => _services.GetRequiredService<IRuntimeAiPipelineDefinitionProvider>(),
+
                 "Database" => throw new NotImplementedException(
                     "Database pipeline definition provider is not yet implemented."),
+
                 _ => throw new InvalidOperationException(
                     $"Unknown pipeline definition source '{_options.DefaultPipelineDefinitionSource}'.")
             };

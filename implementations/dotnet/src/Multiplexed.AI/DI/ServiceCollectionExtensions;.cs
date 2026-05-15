@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
@@ -335,9 +336,19 @@ namespace Multiplexed.AI.DI
                     resolvedOptions.JsonPipelineDefinitionFilePath);
             });
 
+            services.TryAddSingleton<IRuntimeAiPipelineDefinitionProvider, RuntimeAiPipelineDefinitionProvider>();
+
             services.AddScoped<IAiPipelineDefinitionSourceSelector, DefaultAiPipelineDefinitionSourceSelector>();
             services.AddScoped<IAiPipelineResolver, AiPipelineResolver>();
             services.AddScoped<IAiSequentialPipelineExecutor, AiSequentialPipelineExecutor>();
+
+            services.TryAddScoped<
+                IAiRuntimePipelineRunDefinitionResolver,
+                AiRuntimePipelineRunDefinitionResolver>();
+
+            services.TryAddScoped<
+                IAiRuntimePipelineRunDefinitionPublisher,
+                AiRuntimePipelineRunDefinitionPublisher>();
 
             // ------------------------------------------------------------
             // Stores
@@ -493,16 +504,21 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<IAiConcurrencyEngine, DefaultAiConcurrencyEngine>();
 
             // ------------------------------------------------------------
-            // instance identity / runtime instance worker
+            // instance identity / runtime instance worker / background controller
             // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
+
             services.TryAddScoped<IAiRuntimeInstanceWorker, AiRuntimeInstanceWorker>();
             services.TryAddScoped<IAiRuntimeInstanceWorkerGroup, AiRuntimeInstanceWorkerGroup>();
+
+            services.TryAddSingleton<IAiRuntimePipelineBackgroundController, AiRuntimePipelineBackgroundController>();
 
             services.TryAddSingleton<IOptions<AiRuntimeInstanceWorkerOptions>>(
                 Options.Create(options.RuntimeInstanceWorker ?? new AiRuntimeInstanceWorkerOptions()));
 
+            services.TryAddSingleton<IOptions<AiRuntimePipelineBackgroundControllerOptions>>(
+                Options.Create(options.PipelineBackgroundController ?? new AiRuntimePipelineBackgroundControllerOptions()));
 
             // ------------------------------------------------------------
             // global execution engine runtime services
