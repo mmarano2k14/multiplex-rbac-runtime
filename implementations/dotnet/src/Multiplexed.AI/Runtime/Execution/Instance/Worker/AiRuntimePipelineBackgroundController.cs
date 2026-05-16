@@ -41,10 +41,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     {
         private readonly AiDagExecutionEngine _engine;
         private readonly IAiRuntimeInstanceWorker _worker;
+        private readonly IAiRuntimeInstanceWorkerGroup _workerGroup;
+        private readonly IAiRuntimeInstanceWorkerFactory _workerFactory;
         private readonly IAiRuntimePipelineRunDefinitionResolver _definitionResolver;
         private readonly IAiRuntimePipelineRunDefinitionPublisher _definitionPublisher;
         private readonly IAiRuntimeLogger _logger;
         private readonly IAiRuntimeObservability _observability;
+        
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
         private readonly SemaphoreSlim _parallelismGate;
@@ -61,6 +64,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </summary>
         /// <param name="engine">The DAG execution engine used to create executions.</param>
         /// <param name="worker">The runtime instance worker used to advance created executions.</param>
+        /// <param name="workerGroup">The runtime instance worker group used for distributed multi-instance execution.</param>
+        /// <param name="workerFactory">The runtime instance worker factory used to create distributed workers.</param>
         /// <param name="definitionResolver">The pipeline run definition resolver.</param>
         /// <param name="definitionPublisher">The pipeline run definition publisher.</param>
         /// <param name="logger">The runtime logger.</param>
@@ -69,6 +74,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         public AiRuntimePipelineBackgroundController(
             AiDagExecutionEngine engine,
             IAiRuntimeInstanceWorker worker,
+            IAiRuntimeInstanceWorkerGroup workerGroup,
+            IAiRuntimeInstanceWorkerFactory workerFactory,
             IAiRuntimePipelineRunDefinitionResolver definitionResolver,
             IAiRuntimePipelineRunDefinitionPublisher definitionPublisher,
             IAiRuntimeLogger logger,
@@ -77,6 +84,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
             _worker = worker ?? throw new ArgumentNullException(nameof(worker));
+            _workerGroup = workerGroup ?? throw new ArgumentNullException(nameof(workerGroup));
+            _workerFactory = workerFactory ?? throw new ArgumentNullException(nameof(workerFactory));
             _definitionResolver = definitionResolver ?? throw new ArgumentNullException(nameof(definitionResolver));
             _definitionPublisher = definitionPublisher ?? throw new ArgumentNullException(nameof(definitionPublisher));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -374,7 +383,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Execution created. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Pipeline='{created.PipelineName}'.");
 
-            var final = await _worker.RunExecutionAsync(
+            var final = await RunCreatedExecutionAsync(
                 created.ExecutionId,
                 cancellationToken).ConfigureAwait(false);
 
@@ -391,6 +400,35 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Run terminal. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Status='{final.Status}'.");
+        }
+
+        /// <summary>
+        /// Advances the created runtime execution using either the default single
+        /// runtime instance worker or the distributed runtime instance worker group.
+        /// </summary>
+        /// <param name="executionId">The runtime execution identifier.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The terminal execution record.</returns>
+        private async Task<AiExecutionRecord> RunCreatedExecutionAsync(
+            string executionId,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            if (!_options.Distributed.Enabled)
+            {
+                return await _worker.RunExecutionAsync(
+                    executionId,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var workers = _workerFactory.CreateWorkers(
+                _options.Distributed.WorkerCount);
+
+            return await _workerGroup.RunExecutionAsync(
+                executionId,
+                workers,
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>

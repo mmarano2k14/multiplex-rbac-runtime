@@ -861,6 +861,644 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 }
             }
         }
+        /// <summary>
+        /// Verifies that the background controller can execute a single runtime execution
+        /// through multiple distributed runtime workers sharing the same execution identifier.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Run_Distributed_Multi_Instance_When_Enabled()
+        {
+            var scenario = AiRuntimeChaosScenario.Small();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-distributed-001",
+                            source = "distributed-runtime-workers"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    final.Status);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    final.CompletedSteps.Count);
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.RunId));
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                Assert.NotEqual(
+                    handle.RunId,
+                    handle.ExecutionId);
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    final.ExecutionId);
+
+                _output.WriteLine(
+                    $"Distributed controller run completed. RunId='{handle.RunId}', HandleExecutionId='{handle.ExecutionId}', FinalExecutionId='{final.ExecutionId}'.");
+
+                var executionRecord = await dagStore.GetRecordAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(executionRecord);
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    executionRecord!.ExecutionId);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    executionRecord.Status);
+
+                Assert.True(
+                    executionRecord.IsTerminal);
+
+                var executionState = await dagStore.GetStateAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(executionState);
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    executionState!.ExecutionId);
+
+                await resolver.WarmAsync(
+                    handle.ExecutionId!,
+                    executionState,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    handle.ExecutionId!,
+                    executionState,
+                    resolver);
+
+                AssertNoStaleClaims(
+                    executionState);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+
+                Assert.NotEmpty(workerCycles);
+
+                _output.WriteLine(
+                    $"Runtime worker cycle metric count='{workerCycles.Count}'.");
+
+                foreach (var item in workerCycles.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"RuntimeInstanceId='{item.Key}', Cycles='{item.Value}'.");
+                }
+
+                Assert.True(
+                    workerCycles.Values.Sum() > 0,
+                    "Expected distributed runtime workers to record worker cycles.");
+
+                Assert.True(
+                    workerCycles.Count >= 2,
+                    "Expected multiple runtime instance workers to participate in distributed execution. " +
+                    "If this fails while ExecutionId is identical, the worker group is sharing one runtime instance identity.");
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionsAsync(
+                        host.ServiceProvider,
+                        new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that distributed runtime workers stop cleanly after terminal execution observation.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Stop_Distributed_Workers_After_Terminal_Observation()
+        {
+            var scenario = AiRuntimeChaosScenario.Small();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-distributed-stop-001",
+                            source = "distributed-runtime-workers-stop-terminal"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    final.Status);
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    final.ExecutionId);
+
+                Assert.Equal(
+                    AiRuntimeWorkerRunStatus.Completed,
+                    handle.Status);
+
+                var executionState = await dagStore.GetStateAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(executionState);
+
+                AssertNoStaleClaims(
+                    executionState!);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+
+                Assert.NotEmpty(workerCycles);
+
+                Assert.True(
+                    workerCycles.Count >= 2,
+                    "Expected multiple distributed runtime workers to record cycles before terminal observation.");
+
+                _output.WriteLine(
+                    $"Distributed terminal observation completed. ExecutionId='{handle.ExecutionId}', RuntimeWorkers='{workerCycles.Count}'.");
+
+                foreach (var item in workerCycles.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"RuntimeInstanceId='{item.Key}', Cycles='{item.Value}'.");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionsAsync(
+                        host.ServiceProvider,
+                        new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that distributed multi-runtime-instance execution preserves the same
+        /// deterministic execution shape as the default single runtime worker path.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Preserve_Deterministic_Result_With_Distributed_Workers()
+        {
+            var singleScenario = AiRuntimeChaosScenario.Small();
+            var distributedScenario = AiRuntimeChaosScenario.Small();
+
+            await using var singleHost = await CreateChaosHostAsync(
+                singleScenario);
+
+            await using var distributedHost = await CreateDistributedChaosHostAsync(
+                distributedScenario);
+
+            var singleFingerprint = await RunScenarioAndCreateCompletionFingerprintAsync(
+                singleHost,
+                singleScenario,
+                "candidate-single-deterministic-001",
+                "single-runtime-worker-deterministic");
+
+            var distributedFingerprint = await RunScenarioAndCreateCompletionFingerprintAsync(
+                distributedHost,
+                distributedScenario,
+                "candidate-distributed-deterministic-001",
+                "distributed-runtime-workers-deterministic");
+
+            Assert.Equal(
+                singleFingerprint.Status,
+                distributedFingerprint.Status);
+
+            Assert.Equal(
+                singleFingerprint.IsTerminal,
+                distributedFingerprint.IsTerminal);
+
+            Assert.Equal(
+                singleFingerprint.CompletedStepCount,
+                distributedFingerprint.CompletedStepCount);
+
+            Assert.Equal(
+                singleFingerprint.StepStatuses,
+                distributedFingerprint.StepStatuses);
+
+            Assert.Equal(
+                singleFingerprint.RetryCounts,
+                distributedFingerprint.RetryCounts);
+
+            Assert.Equal(
+                singleFingerprint.RequiredResolvedSteps,
+                distributedFingerprint.RequiredResolvedSteps);
+        }
+
+        /// <summary>
+        /// Verifies that distributed runtime workers can safely race for step claims
+        /// on the same execution identifier without leaving stale ownership metadata.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Handle_Distributed_Claim_Races_Safely()
+        {
+            var scenario = AiRuntimeChaosScenario.Chaos();
+
+            await using var host = await CreateDistributedClaimRaceHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-distributed-claim-race-001",
+                            source = "distributed-runtime-workers-claim-race"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    final.Status);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    final.CompletedSteps.Count);
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    final.ExecutionId);
+
+                var state = await dagStore.GetStateAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(state);
+
+                await resolver.WarmAsync(
+                    handle.ExecutionId!,
+                    state!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    handle.ExecutionId!,
+                    state!,
+                    resolver);
+
+                AssertNoStaleClaims(
+                    state!);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+
+                Assert.NotEmpty(workerCycles);
+
+                Assert.True(
+                    workerCycles.Count >= 2,
+                    "Expected multiple runtime instance workers to participate in claim-race execution.");
+
+                _output.WriteLine(
+                    $"Distributed claim-race execution completed. ExecutionId='{handle.ExecutionId}', RuntimeWorkers='{workerCycles.Count}', CompletedSteps='{final.CompletedSteps.Count}'.");
+
+                foreach (var item in workerCycles.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"RuntimeInstanceId='{item.Key}', Cycles='{item.Value}'.");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionsAsync(
+                        host.ServiceProvider,
+                        new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that distributed multi-runtime-instance execution remains compatible
+        /// with retry, retention, snapshot restore, and deterministic replay semantics.
+        /// </summary>
+        [RedisFact]
+        public async Task BackgroundController_Should_Work_With_Distributed_Retry_Retention_And_Replay()
+        {
+            var scenario = AiRuntimeChaosScenario.Chaos();
+
+            await using var host = await CreateDistributedClaimRaceHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+            var replayService = host.ServiceProvider.GetRequiredService<IAiExecutionReplayService>();
+            var snapshotStore = host.ServiceProvider.GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = "candidate-distributed-replay-001",
+                            source = "distributed-runtime-workers-replay"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+
+                Assert.True(
+                    final.IsTerminal);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    final.Status);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    final.CompletedSteps.Count);
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                Assert.Equal(
+                    handle.ExecutionId,
+                    final.ExecutionId);
+
+                var executionId = handle.ExecutionId!;
+
+                var recordBeforeReplay = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var stateBeforeReplay = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(recordBeforeReplay);
+                Assert.NotNull(stateBeforeReplay);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    stateBeforeReplay!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    stateBeforeReplay!,
+                    resolver);
+
+                AssertNoStaleClaims(
+                    stateBeforeReplay!);
+
+                var beforeReplayFingerprint =
+                    await CreateReplayDeterminismFingerprintAsync(
+                        scenario,
+                        executionId,
+                        recordBeforeReplay!,
+                        stateBeforeReplay!,
+                        resolver);
+
+                var snapshot = await WaitForSnapshotAfterFinalizationAsync(
+                    host.Engine,
+                    snapshotStore,
+                    executionId,
+                    TimeSpan.FromSeconds(15));
+
+                Assert.NotNull(snapshot);
+
+                Assert.Equal(
+                    executionId,
+                    snapshot.ExecutionId);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+
+                Assert.NotEmpty(workerCycles);
+
+                Assert.True(
+                    workerCycles.Count >= 2,
+                    "Expected multiple distributed runtime workers before replay.");
+
+                await CleanupDagExecutionAsync(
+                    host.ServiceProvider,
+                    executionId);
+
+                var deletedRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var deletedState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.Null(deletedRecord);
+                Assert.Null(deletedState);
+
+                var replayResult = await replayService.ReplayAsync(
+                    executionId);
+
+                Assert.NotNull(replayResult);
+
+                _output.WriteLine(
+                    $"Distributed replay result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+
+                Assert.True(
+                    replayResult.Restored,
+                    "Replay should restore the distributed execution after live DAG deletion.");
+
+                Assert.False(
+                    replayResult.AlreadyExists,
+                    "Replay should not report AlreadyExists after DAG deletion.");
+
+                var restoredRecord = await dagStore.GetRecordAsync(
+                    executionId);
+
+                var restoredState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(restoredRecord);
+                Assert.NotNull(restoredState);
+
+                Assert.Equal(
+                    executionId,
+                    restoredRecord!.ExecutionId);
+
+                Assert.Equal(
+                    executionId,
+                    restoredState!.ExecutionId);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    restoredRecord.Status);
+
+                Assert.True(
+                    restoredRecord.IsTerminal);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    restoredRecord.CompletedSteps.Count);
+
+                await resolver.WarmAsync(
+                    executionId,
+                    restoredState!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    restoredState!,
+                    resolver);
+
+                AssertNoStaleClaims(
+                    restoredState!);
+
+                var afterReplayFingerprint =
+                    await CreateReplayDeterminismFingerprintAsync(
+                        scenario,
+                        executionId,
+                        restoredRecord,
+                        restoredState!,
+                        resolver);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.Status,
+                    afterReplayFingerprint.Status);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.IsTerminal,
+                    afterReplayFingerprint.IsTerminal);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.CompletedSteps,
+                    afterReplayFingerprint.CompletedSteps);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.StepStatuses,
+                    afterReplayFingerprint.StepStatuses);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.RetryCounts,
+                    afterReplayFingerprint.RetryCounts);
+
+                Assert.Equal(
+                    beforeReplayFingerprint.RequiredResolvedSteps,
+                    afterReplayFingerprint.RequiredResolvedSteps);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
 
         /// <summary>
         /// Creates a fully configured chaos test host.
@@ -874,6 +1512,74 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
             return await AiDagExecutionEngineFixture.CreateAsync(
                 CreateChaosOptions(scenario),
+                configureServices: services =>
+                {
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(AiRuntimePipelineBackgroundControllerChaosIntegrationTests).Assembly);
+                });
+        }
+
+        /// <summary>
+        /// Creates a fully configured distributed chaos test host.
+        /// </summary>
+        /// <param name="scenario">The scenario configuration.</param>
+        /// <returns>The created distributed test host.</returns>
+        private static async Task<AiDagExecutionEngineTestHost> CreateDistributedChaosHostAsync(
+            AiRuntimeChaosScenario scenario)
+        {
+            ArgumentNullException.ThrowIfNull(scenario);
+
+            return await AiDagExecutionEngineFixture.CreateAsync(
+                CreateDistributedChaosOptions(scenario),
+                configureServices: services =>
+                {
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(AiRuntimePipelineBackgroundControllerChaosIntegrationTests).Assembly);
+                });
+        }
+
+        /// <summary>
+        /// Creates a distributed chaos test host tuned to increase distributed claim races.
+        /// </summary>
+        /// <param name="scenario">The scenario configuration.</param>
+        /// <returns>The created distributed claim-race test host.</returns>
+        private static async Task<AiDagExecutionEngineTestHost> CreateDistributedClaimRaceHostAsync(
+            AiRuntimeChaosScenario scenario)
+        {
+            ArgumentNullException.ThrowIfNull(scenario);
+
+            var options = CreateDistributedChaosOptions(
+                scenario);
+
+            options.RuntimeInstanceWorker.MaxStepsPerCycle = 1;
+
+            options.RuntimeInstanceWorker.IdleDelay =
+                TimeSpan.FromMilliseconds(1);
+
+            options.RuntimeInstanceWorker.MaxCycles = 2000;
+
+            options.PipelineBackgroundController.Distributed.WorkerCount = 5;
+
+            // ------------------------------------------------------------
+            // snapshot / replay persistence
+            // ------------------------------------------------------------
+
+            options.Snapshots.Enabled = true;
+            options.Snapshots.Mongo.Enabled = true;
+            options.Snapshots.Mongo.ConnectionString = "mongodb://localhost:27017";
+            options.Snapshots.Mongo.DatabaseName = "multiplexed_ai_tests";
+            options.Snapshots.Mongo.CollectionName =
+                $"execution_snapshots_distributed_claim_race_{Guid.NewGuid():N}";
+
+            options.Cleanup.AutoCleanupOnCompleted = false;
+            options.Cleanup.AutoCleanupOnFailed = false;
+            options.Cleanup.SuppressSnapshotIfExist = true;
+            options.Cleanup.SuppressCleanupExceptions = true;
+
+            return await AiDagExecutionEngineFixture.CreateAsync(
+                options,
                 configureServices: services =>
                 {
                     services.AddAiStepsFromAssemblies(
@@ -925,6 +1631,29 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             options.Cleanup.AutoCleanupOnFailed = false;
             options.Cleanup.SuppressSnapshotIfExist = true;
             options.Cleanup.SuppressCleanupExceptions = true;
+
+            return options;
+        }
+
+        /// <summary>
+        /// Creates distributed runtime options for the background controller chaos scenario.
+        /// </summary>
+        /// <param name="scenario">The scenario configuration.</param>
+        /// <returns>The configured engine options.</returns>
+        private static AiEngineOptions CreateDistributedChaosOptions(
+            AiRuntimeChaosScenario scenario)
+        {
+            var options = CreateChaosOptions(
+                scenario);
+
+            options.PipelineBackgroundController.Distributed =
+                new AiRuntimeDistributedExecutionOptions
+                {
+                    Enabled = true,
+                    WorkerCount = 3,
+                    StopOnFirstTerminal = true,
+                    TerminalObservationTimeout = TimeSpan.FromSeconds(30)
+                };
 
             return options;
         }
@@ -1537,6 +2266,192 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Runs a controller scenario and creates a deterministic completion fingerprint.
+        /// </summary>
+        /// <param name="host">The test host.</param>
+        /// <param name="scenario">The scenario configuration.</param>
+        /// <param name="candidateId">The candidate identifier.</param>
+        /// <param name="source">The scenario source value.</param>
+        /// <returns>The deterministic completion fingerprint.</returns>
+        private async Task<ControllerCompletionFingerprint> RunScenarioAndCreateCompletionFingerprintAsync(
+            AiDagExecutionEngineTestHost host,
+            AiRuntimeChaosScenario scenario,
+            string candidateId,
+            string source)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(scenario);
+            ArgumentException.ThrowIfNullOrWhiteSpace(candidateId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(source);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId,
+                            source
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                AssertHandleAcceptedAfterEnqueue(
+                    handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(scenario.StepCount, final.CompletedSteps.Count);
+
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+                Assert.Equal(handle.ExecutionId, final.ExecutionId);
+
+                var state = await dagStore.GetStateAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(state);
+
+                await resolver.WarmAsync(
+                    handle.ExecutionId!,
+                    state!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    handle.ExecutionId!,
+                    state!,
+                    resolver);
+
+                AssertNoStaleClaims(
+                    state!);
+
+                return await CreateControllerCompletionFingerprintAsync(
+                    scenario,
+                    handle.ExecutionId!,
+                    final,
+                    state!,
+                    resolver);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionsAsync(
+                        host.ServiceProvider,
+                        new[] { handle });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates a deterministic completion fingerprint for controller execution comparison.
+        /// </summary>
+        /// <param name="scenario">The scenario configuration.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="record">The terminal execution record.</param>
+        /// <param name="state">The execution state.</param>
+        /// <param name="resolver">The step resolver.</param>
+        /// <returns>The deterministic completion fingerprint.</returns>
+        private static async Task<ControllerCompletionFingerprint> CreateControllerCompletionFingerprintAsync(
+            AiRuntimeChaosScenario scenario,
+            string executionId,
+            AiExecutionRecord record,
+            AiExecutionState state,
+            IAiExecutionStepResolver resolver)
+        {
+            ArgumentNullException.ThrowIfNull(scenario);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(resolver);
+
+            var stepStatuses = new SortedDictionary<string, string>(
+                StringComparer.Ordinal);
+
+            foreach (var step in scenario.PipelineDefinition.Steps)
+            {
+                if (string.IsNullOrWhiteSpace(step.Name))
+                {
+                    continue;
+                }
+
+                var resolvedStatus = await resolver.GetStepStatusAsync(
+                    executionId,
+                    step.Name,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(resolvedStatus);
+
+                stepStatuses[step.Name] =
+                    resolvedStatus!.Status.ToString();
+            }
+
+            var retryCounts = new SortedDictionary<string, int>(
+                StringComparer.Ordinal);
+
+            foreach (var retriedStepName in scenario.ExpectedRetriedSteps)
+            {
+                var fullStep = await resolver.GetStepAsync(
+                    executionId,
+                    retriedStepName,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(fullStep);
+                Assert.Equal(AiStepExecutionStatus.Completed, fullStep!.Status);
+
+                retryCounts[retriedStepName] =
+                    fullStep.RetryState?.RetryCount ?? 0;
+            }
+
+            var requiredResolvedSteps = new SortedDictionary<string, string>(
+                StringComparer.Ordinal);
+
+            foreach (var requiredStepName in scenario.RequiredResolvedSteps)
+            {
+                var fullStep = await resolver.GetStepAsync(
+                    executionId,
+                    requiredStepName,
+                    state,
+                    CancellationToken.None);
+
+                Assert.NotNull(fullStep);
+
+                requiredResolvedSteps[requiredStepName] =
+                    fullStep!.Status.ToString();
+            }
+
+            return new ControllerCompletionFingerprint
+            {
+                Status = record.Status.ToString(),
+                IsTerminal = record.IsTerminal,
+                CompletedStepCount = record.CompletedSteps.Count,
+                StepStatuses = stepStatuses,
+                RetryCounts = retryCounts,
+                RequiredResolvedSteps = requiredResolvedSteps
+            };
+        }
+
+        /// <summary>
         /// Represents a parameterized runtime chaos scenario.
         /// </summary>
         private sealed class AiRuntimeChaosScenario
@@ -2014,6 +2929,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             public required bool IsTerminal { get; init; }
 
             public required IReadOnlyList<string> CompletedSteps { get; init; }
+
+            public required IReadOnlyDictionary<string, string> StepStatuses { get; init; }
+
+            public required IReadOnlyDictionary<string, int> RetryCounts { get; init; }
+
+            public required IReadOnlyDictionary<string, string> RequiredResolvedSteps { get; init; }
+        }
+
+        /// <summary>
+        /// Stable comparable execution fingerprint used by controller deterministic comparison tests.
+        /// </summary>
+        private sealed class ControllerCompletionFingerprint
+        {
+            public required string Status { get; init; }
+
+            public required bool IsTerminal { get; init; }
+
+            public required int CompletedStepCount { get; init; }
 
             public required IReadOnlyDictionary<string, string> StepStatuses { get; init; }
 

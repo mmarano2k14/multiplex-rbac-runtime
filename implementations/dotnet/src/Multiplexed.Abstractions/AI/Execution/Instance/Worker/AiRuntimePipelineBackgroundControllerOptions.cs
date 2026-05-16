@@ -59,5 +59,10 @@ namespace Multiplexed.Abstractions.AI.Execution.Instance.Worker
         /// unrelated queued runs from executing.
         /// </remarks>
         public bool StopOnFirstFailure { get; set; }
+
+        /// <summary>
+        /// Gets or sets the distributed multi-runtime-instance execution options.
+        /// </summary>
+        public AiRuntimeDistributedExecutionOptions Distributed { get; set; } = new();
     }
 }

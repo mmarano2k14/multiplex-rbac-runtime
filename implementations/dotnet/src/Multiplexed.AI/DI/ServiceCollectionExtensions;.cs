@@ -508,17 +508,20 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
 
             services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
-
-            services.TryAddScoped<IAiRuntimeInstanceWorker, AiRuntimeInstanceWorker>();
-            services.TryAddScoped<IAiRuntimeInstanceWorkerGroup, AiRuntimeInstanceWorkerGroup>();
-
-            services.TryAddSingleton<IAiRuntimePipelineBackgroundController, AiRuntimePipelineBackgroundController>();
+            services.TryAddSingleton<IAiRuntimeInstanceWorkerFactory,AiRuntimeInstanceWorkerFactory>();
+            services.TryAddTransient<IAiRuntimeInstanceWorker,AiRuntimeInstanceWorker>();
+            services.TryAddTransient<IAiRuntimeInstanceWorkerGroup,AiRuntimeInstanceWorkerGroup>();
+            services.TryAddSingleton<IAiRuntimePipelineBackgroundController,AiRuntimePipelineBackgroundController>();
 
             services.TryAddSingleton<IOptions<AiRuntimeInstanceWorkerOptions>>(
-                Options.Create(options.RuntimeInstanceWorker ?? new AiRuntimeInstanceWorkerOptions()));
+                Options.Create(
+                    options.RuntimeInstanceWorker
+                    ?? new AiRuntimeInstanceWorkerOptions()));
 
             services.TryAddSingleton<IOptions<AiRuntimePipelineBackgroundControllerOptions>>(
-                Options.Create(options.PipelineBackgroundController ?? new AiRuntimePipelineBackgroundControllerOptions()));
+                Options.Create(
+                    options.PipelineBackgroundController
+                    ?? new AiRuntimePipelineBackgroundControllerOptions()));
 
             // ------------------------------------------------------------
             // global execution engine runtime services
