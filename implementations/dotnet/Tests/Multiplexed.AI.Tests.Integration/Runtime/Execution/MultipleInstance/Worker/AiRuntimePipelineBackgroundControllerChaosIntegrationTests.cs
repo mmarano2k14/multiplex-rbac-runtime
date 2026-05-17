@@ -1333,6 +1333,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 var executionId = handle.ExecutionId!;
 
+                var snapshot = await WaitForSnapshotAfterFinalizationAsync(
+                    host.Engine,
+                    snapshotStore,
+                    executionId,
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(snapshot);
+
+                Assert.Equal(
+                    executionId,
+                    snapshot.ExecutionId);
+
                 var recordBeforeReplay = await dagStore.GetRecordAsync(
                     executionId);
 
@@ -1363,12 +1375,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                         recordBeforeReplay!,
                         stateBeforeReplay!,
                         resolver);
-
-                var snapshot = await WaitForSnapshotAfterFinalizationAsync(
-                    host.Engine,
-                    snapshotStore,
-                    executionId,
-                    TimeSpan.FromSeconds(15));
 
                 Assert.NotNull(snapshot);
 
@@ -2797,6 +2803,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
 
             var deadline = DateTime.UtcNow.Add(timeout);
+            Exception? lastException = null;
 
             while (DateTime.UtcNow < deadline)
             {
@@ -2813,18 +2820,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     await engine.ExecuteNextAsync(
                         executionId);
                 }
-                catch (InvalidOperationException)
+                catch (Exception ex)
                 {
-                    // Some engines may reject advancing an already terminal execution.
-                    // Snapshot waiting continues below.
+                    lastException = ex;
                 }
 
                 await Task.Delay(
                     TimeSpan.FromMilliseconds(50));
             }
 
+            if (lastException is not null)
+            {
+                throw new TimeoutException(
+                    $"Snapshot for execution '{executionId}' was not created within '{timeout}'. Last ExecuteNextAsync error: '{lastException.Message}'.",
+                    lastException);
+            }
+
             throw new TimeoutException(
-                $"Snapshot for execution '{executionId}' was not created within '{timeout}'.");
+                $"Snapshot for execution '{executionId}' was not created within '{timeout}'. ExecuteNextAsync did not throw.");
         }
 
         /// <summary>

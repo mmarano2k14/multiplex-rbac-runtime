@@ -1,33 +1,11 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Multiplexed.AI.Runtime.Persistence
 {
     /// <summary>
     /// Default implementation of <see cref="IAiExecutionSnapshotService{TContextSnapshot}"/>.
-    ///
-    /// RESPONSIBILITIES:
-    /// - Create a snapshot document using the snapshot factory
-    /// - Persist the snapshot using the configured snapshot store
-    ///
-    /// DESIGN:
-    /// - This service acts as a thin orchestration layer
-    /// - It centralizes snapshot persistence logic outside of the execution engine
-    /// - It ensures that snapshot persistence remains optional and non-intrusive
-    ///
-    /// RESILIENCE:
-    /// - Snapshot persistence is best-effort
-    /// - Failures are caught and should not affect execution flow
-    ///
-    /// EXTENSIBILITY:
-    /// - Can later be extended to:
-    ///   - append execution events
-    ///   - support versioned snapshots
-    ///   - integrate audit pipelines or event streams
     /// </summary>
     /// <typeparam name="TContextSnapshot">
     /// The serializable external context snapshot associated with the execution.
@@ -62,9 +40,10 @@ namespace Multiplexed.AI.Runtime.Persistence
             ArgumentNullException.ThrowIfNull(record);
             ArgumentNullException.ThrowIfNull(state);
 
-            // Only persist terminal executions
             if (!record.IsTerminal)
+            {
                 return;
+            }
 
             try
             {
@@ -74,16 +53,44 @@ namespace Multiplexed.AI.Runtime.Persistence
                     contextKey,
                     contextSnapshot);
 
-                snapshot = AiExecutionSnapshotNormalizer.Normalize(snapshot);
+                snapshot = AiExecutionSnapshotNormalizer.Normalize(
+                    snapshot);
 
-                await _store.UpsertAsync(snapshot, cancellationToken);
+                await PersistTerminalSnapshotAsync(
+                    snapshot).ConfigureAwait(false);
             }
             catch
             {
                 // INTENTIONALLY SWALLOWED
-                // Snapshot persistence must never impact execution reliability
-                // Logging can be added here if needed
+                // Snapshot persistence is best-effort and must not affect execution reliability.
             }
+        }
+
+        /// <summary>
+        /// Persists a terminal execution snapshot as a durable replay artifact.
+        /// </summary>
+        /// <param name="snapshot">The terminal execution snapshot document.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <remarks>
+        /// <para>
+        /// Terminal snapshots are replay-critical durability artifacts. They must not
+        /// be cancelled by worker-loop or worker-group cancellation after terminal
+        /// convergence has already been observed.
+        /// </para>
+        /// <para>
+        /// For this reason, terminal snapshot persistence intentionally does not use
+        /// the caller cancellation token. The service remains best-effort because any
+        /// exception is still swallowed by <see cref="TryPersistAsync"/>.
+        /// </para>
+        /// </remarks>
+        private async Task PersistTerminalSnapshotAsync(
+            AiExecutionSnapshotDocument<TContextSnapshot> snapshot)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+
+            await _store.UpsertAsync(
+                snapshot,
+                CancellationToken.None).ConfigureAwait(false);
         }
     }
 }

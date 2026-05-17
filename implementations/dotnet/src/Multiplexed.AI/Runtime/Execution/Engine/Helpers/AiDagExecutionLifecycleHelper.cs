@@ -109,7 +109,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     ex,
                     $"[AI SNAPSHOT] Failed for execution '{record.ExecutionId}'. Status='{record.Status}', ContextKey='{record.ContextKey}', StateExecutionId='{state.ExecutionId}'.");
 
-                throw;
+                // Snapshot persistence is a terminal lifecycle side effect.
+                // It must not turn an already converged terminal execution into a failed worker run.
             }
         }
 
@@ -188,6 +189,56 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// Ensures terminal lifecycle side effects are attempted for a terminal execution.
+        /// </summary>
+        /// <param name="record">
+        /// The terminal execution record.
+        /// </param>
+        /// <param name="state">
+        /// The authoritative execution state.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous operation.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method is intentionally idempotent. Distributed workers may observe the same
+        /// terminal execution concurrently and may therefore attempt terminal lifecycle work
+        /// more than once.
+        /// </para>
+        /// <para>
+        /// Snapshot persistence uses best-effort terminal durability semantics and cleanup is
+        /// controlled by cleanup options. This method centralizes terminal lifecycle ordering
+        /// so callers do not need to invoke snapshot and cleanup separately.
+        /// </para>
+        /// </remarks>
+        public async Task EnsureTerminalLifecycleAsync(
+            AiExecutionRecord record,
+            AiExecutionState state,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(state);
+
+            if (!record.IsTerminal)
+            {
+                return;
+            }
+
+            await TryPersistTerminalSnapshotAsync(
+                record,
+                state,
+                cancellationToken).ConfigureAwait(false);
+
+            await TryCleanupIfNeededAsync(
+                record,
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>

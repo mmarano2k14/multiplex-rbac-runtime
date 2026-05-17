@@ -78,7 +78,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
             if (record.IsTerminal)
             {
                 _engineServices.Logger.Engine.ExecutionAlreadyCompleted(record);
-                await _lifecycleHelper.TryCleanupIfNeededAsync(record, cancellationToken);
+
+                await _lifecycleHelper.EnsureTerminalLifecycleAsync(
+                    record,
+                    state,
+                    cancellationToken).ConfigureAwait(false);
+
                 return record;
             }
 
@@ -131,7 +136,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                     AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                         record,
                         convergence,
-                        state);
+                        state,
+                        AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                     record.TouchVersion();
                     record.RenewExecutionStepKey();
@@ -153,14 +159,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                         _engineServices.Logger.Engine.ExecutionCompleted(record);
                         _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
 
-                        await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                        await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                             record,
                             state,
-                            cancellationToken);
-
-                        await _lifecycleHelper.TryCleanupIfNeededAsync(
-                            record,
-                            cancellationToken);
+                            cancellationToken).ConfigureAwait(false);
                     }
 
                     return record;
@@ -264,7 +266,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                     AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                         record,
                         convergence,
-                        state);
+                        state,
+                        AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                     record.TouchVersion();
                     record.RenewExecutionStepKey();
@@ -286,14 +289,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                         _engineServices.Logger.Engine.ExecutionCompleted(record);
                         _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
 
-                        await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                        await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                             record,
                             state,
-                            cancellationToken);
-
-                        await _lifecycleHelper.TryCleanupIfNeededAsync(
-                            record,
-                            cancellationToken);
+                            cancellationToken).ConfigureAwait(false);
                     }
 
                     throw;
@@ -363,7 +362,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                 AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                     record,
                     convergence,
-                    state);
+                    state,
+                    AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                 record.TouchVersion();
                 record.RenewExecutionStepKey();
@@ -385,14 +385,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                     _engineServices.Logger.Engine.ExecutionCompleted(record);
                     _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(record.ExecutionId);
 
-                    await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                    await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                         record,
                         state,
-                        cancellationToken);
-
-                    await _lifecycleHelper.TryCleanupIfNeededAsync(
-                        record,
-                        cancellationToken);
+                        cancellationToken).ConfigureAwait(false);
                 }
 
                 return record;

@@ -513,6 +513,8 @@ namespace Multiplexed.AI.DI
             services.TryAddTransient<IAiRuntimeInstanceWorkerGroup,AiRuntimeInstanceWorkerGroup>();
             services.TryAddSingleton<IAiRuntimePipelineBackgroundController,AiRuntimePipelineBackgroundController>();
 
+            services.TryAddSingleton<IAiRuntimePipelineRunLifecycleHook,NoOpAiRuntimePipelineRunLifecycleHook>();
+
             services.TryAddSingleton<IOptions<AiRuntimeInstanceWorkerOptions>>(
                 Options.Create(
                     options.RuntimeInstanceWorker

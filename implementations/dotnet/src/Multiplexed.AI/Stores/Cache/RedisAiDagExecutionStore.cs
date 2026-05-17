@@ -938,7 +938,9 @@ namespace Multiplexed.AI.Stores.Cache
             var stateBlob = await _database.StringGetAsync(stateKey);
             if (stateBlob.HasValue)
             {
-                state = JsonSerializer.Deserialize<AiExecutionState>((string)stateBlob!, _jsonOptions);
+                state = JsonSerializer.Deserialize<AiExecutionState>(
+                    (string)stateBlob!,
+                    _jsonOptions);
             }
 
             var stepNames = await _database.SetMembersAsync(stepIndexKey);
@@ -975,11 +977,23 @@ namespace Multiplexed.AI.Stores.Cache
 
                 var repairedJson = RepairStepJson((string)raw!);
                 repairedJson = RepairRetryJson(repairedJson);
-                var step = JsonSerializer.Deserialize<AiStepState>(repairedJson, _jsonOptions);
+
+                var step = JsonSerializer.Deserialize<AiStepState>(
+                    repairedJson,
+                    _jsonOptions);
 
                 if (step is not null)
                 {
                     step.DependsOn ??= new List<string>();
+
+                    if (state.Steps.TryGetValue(step.StepName, out var blobStep) &&
+                        IsTerminal(blobStep.Status) &&
+                        IsNonTerminal(step.Status))
+                    {
+                        state.Steps[step.StepName] = blobStep;
+                        continue;
+                    }
+
                     state.Steps[step.StepName] = step;
                 }
             }
@@ -1032,6 +1046,63 @@ namespace Multiplexed.AI.Stores.Cache
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
             var existingStepNames = await _database.SetMembersAsync(stepIndexKey);
 
+            var record = await GetRecordAsync(
+                executionId,
+                cancellationToken);
+
+            var completedStepNames = record?.CompletedSteps is not null
+                ? record.CompletedSteps.ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+
+            var existingSteps = new Dictionary<string, AiStepState>(
+                StringComparer.Ordinal);
+
+            foreach (var stepNameValue in existingStepNames)
+            {
+                var stepName = (string?)stepNameValue;
+
+                if (string.IsNullOrWhiteSpace(stepName))
+                    continue;
+
+                var stepKey = _keyBuilder.GetDagStepKey(executionId, stepName);
+                var rawStep = await _database.StringGetAsync(stepKey);
+
+                if (!rawStep.HasValue)
+                    continue;
+
+                var repairedJson = RepairStepJson((string)rawStep!);
+                repairedJson = RepairRetryJson(repairedJson);
+
+                var existingStep = JsonSerializer.Deserialize<AiStepState>(
+                    repairedJson,
+                    _jsonOptions);
+
+                if (existingStep is not null)
+                {
+                    existingSteps[stepName] = existingStep;
+                }
+            }
+
+            foreach (var step in state.Steps.Values.ToArray())
+            {
+                if (string.IsNullOrWhiteSpace(step.StepName))
+                    continue;
+
+                if (existingSteps.TryGetValue(step.StepName, out var existingStep) &&
+                    IsTerminal(existingStep.Status) &&
+                    IsNonTerminal(step.Status))
+                {
+                    state.Steps[step.StepName] = existingStep;
+                    continue;
+                }
+
+                if (completedStepNames.Contains(step.StepName) &&
+                    IsNonTerminal(step.Status))
+                {
+                    state.Steps.Remove(step.StepName);
+                }
+            }
+
             await _database.StringSetAsync(
                 stateKey,
                 JsonSerializer.Serialize(state, _jsonOptions));
@@ -1043,13 +1114,17 @@ namespace Multiplexed.AI.Stores.Cache
                 if (string.IsNullOrWhiteSpace(stepName))
                     continue;
 
-                await _database.KeyDeleteAsync(_keyBuilder.GetDagStepKey(executionId, stepName));
+                await _database.KeyDeleteAsync(
+                    _keyBuilder.GetDagStepKey(executionId, stepName));
             }
 
             await _database.KeyDeleteAsync(stepIndexKey);
 
             foreach (var step in state.Steps.Values)
             {
+                if (string.IsNullOrWhiteSpace(step.StepName))
+                    continue;
+
                 step.DependsOn ??= new List<string>();
 
                 var stepKey = _keyBuilder.GetDagStepKey(executionId, step.StepName);
@@ -2046,6 +2121,22 @@ namespace Multiplexed.AI.Stores.Cache
         // ---------------------------------------------------------------------
         // KEY HELPERS
         // ---------------------------------------------------------------------
+
+        private static bool IsTerminal(
+            AiStepExecutionStatus status)
+        {
+            return status == AiStepExecutionStatus.Completed ||
+                   status == AiStepExecutionStatus.Failed;
+        }
+
+        private static bool IsNonTerminal(
+            AiStepExecutionStatus status)
+        {
+            return status == AiStepExecutionStatus.None ||
+                   status == AiStepExecutionStatus.Ready ||
+                   status == AiStepExecutionStatus.Running ||
+                   status == AiStepExecutionStatus.WaitingForRetry;
+        }
 
         /// <summary>
         /// Builds the Redis key prefix for all step keys belonging to one execution.

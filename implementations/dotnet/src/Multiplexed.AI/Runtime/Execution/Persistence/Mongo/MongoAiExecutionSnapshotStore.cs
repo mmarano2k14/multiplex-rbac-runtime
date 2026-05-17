@@ -118,6 +118,14 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Mongo
                     "Failed to upsert AI execution snapshot for execution {ExecutionId}.",
                     snapshot.ExecutionId);
 
+                _logger.LogError(
+                    ex,
+                    "Failed to upsert AI execution snapshot for execution {ExecutionId}. Error={Error}",
+                    snapshot.ExecutionId,
+                    ex.ToString());
+
+                Console.WriteLine(ex.ToString());
+
                 throw;
             }
         }

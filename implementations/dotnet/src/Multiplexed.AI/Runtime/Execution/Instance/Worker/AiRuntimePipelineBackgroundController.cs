@@ -45,9 +45,10 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly IAiRuntimeInstanceWorkerFactory _workerFactory;
         private readonly IAiRuntimePipelineRunDefinitionResolver _definitionResolver;
         private readonly IAiRuntimePipelineRunDefinitionPublisher _definitionPublisher;
+        private readonly IAiRuntimePipelineRunLifecycleHook _runLifecycleHook;
         private readonly IAiRuntimeLogger _logger;
         private readonly IAiRuntimeObservability _observability;
-        
+
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
         private readonly SemaphoreSlim _parallelismGate;
@@ -68,6 +69,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// <param name="workerFactory">The runtime instance worker factory used to create distributed workers.</param>
         /// <param name="definitionResolver">The pipeline run definition resolver.</param>
         /// <param name="definitionPublisher">The pipeline run definition publisher.</param>
+        /// <param name="runLifecycleHook">The pipeline run lifecycle hook.</param>
         /// <param name="logger">The runtime logger.</param>
         /// <param name="observability">The runtime observability facade.</param>
         /// <param name="options">The controller options.</param>
@@ -78,6 +80,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             IAiRuntimeInstanceWorkerFactory workerFactory,
             IAiRuntimePipelineRunDefinitionResolver definitionResolver,
             IAiRuntimePipelineRunDefinitionPublisher definitionPublisher,
+            IAiRuntimePipelineRunLifecycleHook runLifecycleHook,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
             IOptions<AiRuntimePipelineBackgroundControllerOptions> options)
@@ -88,6 +91,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _workerFactory = workerFactory ?? throw new ArgumentNullException(nameof(workerFactory));
             _definitionResolver = definitionResolver ?? throw new ArgumentNullException(nameof(definitionResolver));
             _definitionPublisher = definitionPublisher ?? throw new ArgumentNullException(nameof(definitionPublisher));
+            _runLifecycleHook = runLifecycleHook ?? throw new ArgumentNullException(nameof(runLifecycleHook));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -396,10 +400,45 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 handle.MarkFailed();
             }
 
+            await InvokeRunFinalizedAsync(
+                queuedRun,
+                final,
+                cancellationToken).ConfigureAwait(false);
+
             queuedRun.CompletionSource.TrySetResult(final);
 
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Run terminal. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Status='{final.Status}'.");
+        }
+
+        /// <summary>
+        /// Invokes the optional run lifecycle hook after a queued run has reached
+        /// its terminal runtime result.
+        /// </summary>
+        /// <param name="queuedRun">The queued pipeline run.</param>
+        /// <param name="final">The final execution record.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task InvokeRunFinalizedAsync(
+            AiRuntimeQueuedPipelineRun queuedRun,
+            AiExecutionRecord final,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(queuedRun);
+            ArgumentNullException.ThrowIfNull(final);
+
+            if (string.IsNullOrWhiteSpace(final.ExecutionId))
+            {
+                return;
+            }
+
+            await _runLifecycleHook.OnFinalizedAsync(
+                new AiRuntimePipelineRunFinalizedContext
+                {
+                    RunId = queuedRun.Handle.RunId,
+                    ExecutionId = final.ExecutionId,
+                    Record = final
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>

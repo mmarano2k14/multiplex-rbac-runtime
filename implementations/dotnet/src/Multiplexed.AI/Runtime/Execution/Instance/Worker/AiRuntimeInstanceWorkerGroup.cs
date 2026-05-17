@@ -17,6 +17,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     /// terminal execution record, and cancels the remaining workers.
     /// </para>
     /// <para>
+    /// Before returning a terminal result, the group gives the worker that observed
+    /// terminal execution one final non-cancelled execution pass. This allows terminal
+    /// lifecycle work such as finalization, cleanup coordination, retention completion,
+    /// and snapshot persistence to complete before the group returns.
+    /// </para>
+    /// <para>
     /// The group does not create executions, does not select pipelines, and must not be
     /// used to repurpose an execution identifier for another workflow run.
     /// </para>
@@ -89,7 +95,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
         /// <summary>
         /// Runs the supplied workers against the same existing execution identifier
-        /// and returns the first terminal result observed by any worker.
+        /// and returns the first fully finalized terminal result observed by any worker.
         /// </summary>
         /// <param name="executionId">
         /// The existing execution identifier to advance. This identifier must belong
@@ -102,7 +108,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// The cancellation token.
         /// </param>
         /// <returns>
-        /// The terminal execution record observed by the first completing worker.
+        /// The finalized terminal execution record observed by the winning worker.
         /// </returns>
         private async Task<AiExecutionRecord> RunWorkerGroupInternalAsync(
             string executionId,
@@ -113,10 +119,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             var workerTasks = workers
-                .Select(worker => RunWorkerSafelyAsync(
+                .Select(worker => new WorkerGroupTask(
                     worker,
-                    executionId,
-                    linkedCancellation.Token))
+                    RunWorkerSafelyAsync(
+                        worker,
+                        executionId,
+                        linkedCancellation.Token)))
                 .ToList();
 
             _logger.Engine.LogInformation(
@@ -126,24 +134,31 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 while (workerTasks.Count > 0)
                 {
-                    var completedTask = await Task.WhenAny(workerTasks)
-                        .ConfigureAwait(false);
+                    var completedTask = await Task.WhenAny(
+                        workerTasks.Select(item => item.Task)).ConfigureAwait(false);
 
-                    workerTasks.Remove(completedTask);
+                    var completedWorkerTask = workerTasks.Single(item =>
+                        ReferenceEquals(item.Task, completedTask));
 
-                    var result = await completedTask.ConfigureAwait(false);
+                    workerTasks.Remove(completedWorkerTask);
+
+                    var result = await completedWorkerTask.Task.ConfigureAwait(false);
 
                     if (result.IsTerminal)
                     {
                         _logger.Engine.LogInformation(
                             $"[AI WORKER GROUP] Terminal execution observed. ExecutionId='{executionId}', Status='{result.Status}'.");
 
+                        var finalized = await FinalizeTerminalObservationAsync(
+                            completedWorkerTask.Worker,
+                            executionId).ConfigureAwait(false);
+
                         await linkedCancellation.CancelAsync().ConfigureAwait(false);
 
-                        await ObserveRemainingWorkersAsync(workerTasks)
-                            .ConfigureAwait(false);
+                        await ObserveRemainingWorkersAsync(
+                            workerTasks.Select(item => item.Task).ToList()).ConfigureAwait(false);
 
-                        return result;
+                        return finalized;
                     }
                 }
 
@@ -157,6 +172,51 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Runs one final non-cancelled execution pass after terminal observation.
+        /// </summary>
+        /// <param name="worker">
+        /// The worker that observed terminal execution.
+        /// </param>
+        /// <param name="executionId">
+        /// The existing execution identifier to finalize.
+        /// </param>
+        /// <returns>
+        /// The finalized terminal execution record.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This pass intentionally does not use the worker group cancellation token.
+        /// Once a terminal record has been observed, the group must not cancel terminal
+        /// lifecycle work that may be required for durable snapshots, retention completion,
+        /// cleanup coordination, and replay safety.
+        /// </para>
+        /// <para>
+        /// Distributed correctness still remains in the underlying runtime engine and
+        /// DAG store. This method only gives the winning worker one additional chance
+        /// to drive terminal lifecycle completion before the group returns.
+        /// </para>
+        /// </remarks>
+        private async Task<AiExecutionRecord> FinalizeTerminalObservationAsync(
+            IAiRuntimeInstanceWorker worker,
+            string executionId)
+        {
+            ArgumentNullException.ThrowIfNull(worker);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            _logger.Engine.LogInformation(
+                $"[AI WORKER GROUP] Running terminal finalization pass. ExecutionId='{executionId}'.");
+
+            var finalized = await worker.RunExecutionAsync(
+                executionId,
+                CancellationToken.None).ConfigureAwait(false);
+
+            _logger.Engine.LogInformation(
+                $"[AI WORKER GROUP] Terminal finalization pass completed. ExecutionId='{executionId}', Status='{finalized.Status}'.");
+
+            return finalized;
         }
 
         /// <summary>
@@ -199,5 +259,18 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 }
             }
         }
+
+        /// <summary>
+        /// Represents a runtime worker and the task currently advancing an execution.
+        /// </summary>
+        /// <param name="Worker">
+        /// The runtime instance worker.
+        /// </param>
+        /// <param name="Task">
+        /// The worker execution task.
+        /// </param>
+        private sealed record WorkerGroupTask(
+            IAiRuntimeInstanceWorker Worker,
+            Task<AiExecutionRecord> Task);
     }
 }

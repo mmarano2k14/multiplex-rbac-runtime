@@ -147,9 +147,19 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
             {
                 _engineServices.Logger.Engine.ExecutionAlreadyCompleted(record);
 
-                await _lifecycleHelper.TryCleanupIfNeededAsync(
+                var terminalState = await _engineServices.DagStore.GetStateAsync(
+                    executionId,
+                    CancellationToken.None).ConfigureAwait(false)
+                    ?? new AiExecutionState
+                    {
+                        ExecutionId = executionId,
+                        PipelineName = record.PipelineName
+                    };
+
+                await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                     record,
-                    cancellationToken).ConfigureAwait(false);
+                    terminalState,
+                    CancellationToken.None).ConfigureAwait(false);
 
                 return record;
             }
@@ -222,7 +232,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                     AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                         record,
                         convergence,
-                        state);
+                        state,
+                        AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                     var expectedStepKey = AiDagExecutionHelpers.GetRequiredExecutionStepKey(record);
 
@@ -243,13 +254,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(
                             record.ExecutionId);
 
-                        await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                        await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                             record,
                             state,
-                            cancellationToken).ConfigureAwait(false);
-
-                        await _lifecycleHelper.TryCleanupIfNeededAsync(
-                            record,
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -349,7 +356,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                             record,
                             convergence,
-                            failedState);
+                            failedState,
+                            AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                         var expectedStepKey = record.ExecutionStepKey;
 
@@ -376,15 +384,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                             _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(
                                 record.ExecutionId);
 
-                            await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                            await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                                 record,
                                 failedState,
                                 cancellationToken).ConfigureAwait(false);
                         }
-
-                        await _lifecycleHelper.TryCleanupIfNeededAsync(
-                            record,
-                            cancellationToken).ConfigureAwait(false);
 
                         throw;
                     }
@@ -537,7 +541,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                     AiDagExecutionRecordFinalizer.ApplyConvergenceToRecord(
                         record,
                         finalConvergence,
-                        finalState);
+                        finalState,
+                        AiDagExecutionHelpers.GetDeclaredStepNames(resolvedPipeline));
 
                     if (record.Status == AiExecutionStatus.Failed)
                     {
@@ -570,13 +575,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                         _engineServices.ObservabilityService.Metrics.Execution.RecordExecutionCompleted(
                             record.ExecutionId);
 
-                        await _lifecycleHelper.TryPersistTerminalSnapshotAsync(
+                        await _lifecycleHelper.EnsureTerminalLifecycleAsync(
                             record,
                             finalState,
-                            cancellationToken).ConfigureAwait(false);
-
-                        await _lifecycleHelper.TryCleanupIfNeededAsync(
-                            record,
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -646,13 +647,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
         /// still recovers capacity after lease expiration.
         /// </remarks>
         private async Task ReleaseConcurrencyLeaseAsync(
-    string executionId,
-    string pipelineKey,
-    string stepName,
-    string workerId,
-    AiExecutionState state,
-    ResolvedAiPipeline pipeline,
-    CancellationToken cancellationToken)
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            AiExecutionState state,
+            ResolvedAiPipeline pipeline,
+            CancellationToken cancellationToken)
         {
             if (!state.Steps.TryGetValue(stepName, out var stepState))
             {
@@ -695,5 +696,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                 concurrencyAdmission.Definition,
                 cancellationToken).ConfigureAwait(false);
         }
+
     }
 }

@@ -313,5 +313,23 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             };
         }
 
+        /// <summary>
+        /// Gets the declared step names from the resolved pipeline.
+        /// </summary>
+        /// <param name="pipeline">The resolved pipeline.</param>
+        /// <returns>The declared pipeline step names.</returns>
+        public static IReadOnlyCollection<string> GetDeclaredStepNames(
+            ResolvedAiPipeline pipeline)
+        {
+            ArgumentNullException.ThrowIfNull(pipeline);
+
+            return pipeline.Steps
+                .Select(step => step.Name)
+                .Where(stepName => !string.IsNullOrWhiteSpace(stepName))
+                .Select(stepName => stepName!)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
     }
 }

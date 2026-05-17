@@ -157,7 +157,6 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (archived is null)
             {
-                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 
@@ -170,7 +169,6 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (step is null)
             {
-                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 
@@ -267,7 +265,6 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (archived is null)
             {
-                _stepCache[cacheKey] = MissingStepMarker;
                 return null;
             }
 
