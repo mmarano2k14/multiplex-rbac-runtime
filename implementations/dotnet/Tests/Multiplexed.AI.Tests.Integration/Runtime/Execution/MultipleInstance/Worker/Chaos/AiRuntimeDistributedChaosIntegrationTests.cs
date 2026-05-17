@@ -109,6 +109,160 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Verifies that selected evicted and compacted steps can still be reconstructed
+        /// after aggressive retention without regressing to default step state.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Reconstruct_All_Evicted_Steps_After_Aggressive_Retention()
+        {
+            var scenario = DistributedChaosScenario.Steps500AggressiveRetention();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var reloadedState = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.DoesNotContain(
+                    reloadedState!.Steps.Values,
+                    step =>
+                        scenario.FingerprintStepNames.Contains(step.StepName, StringComparer.Ordinal) &&
+                        step.Status == AiStepExecutionStatus.None);
+
+                Assert.NotNull(reloadedState);
+
+                var record = await dagStore.GetRecordAsync(executionId);
+
+                Assert.NotNull(record);
+
+                Assert.Equal(
+                    AiExecutionStatus.Completed,
+                    record!.Status);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    record.CompletedSteps.Count);
+
+                Assert.True(
+                    reloadedState!.Steps.Count < scenario.StepCount,
+                    $"Expected hot state to be smaller than total steps after aggressive retention. HotState='{reloadedState.Steps.Count}', Total='{scenario.StepCount}'.");
+
+
+                foreach (var stepName in scenario.ExpectedRetriedSteps)
+                {
+                    var retriedStep = await resolver.GetStepAsync(
+                        executionId,
+                        stepName,
+                        reloadedState!,
+                        CancellationToken.None);
+
+                    Assert.NotNull(retriedStep);
+
+                    Assert.Equal(
+                        AiStepExecutionStatus.Completed,
+                        retriedStep!.Status);
+
+                    Assert.True(
+                        retriedStep.RetryState?.RetryCount >= 1,
+                        $"Expected retried step '{stepName}' to have RetryCount >= 1, but was '{retriedStep.RetryState?.RetryCount ?? 0}'.");
+                }
+
+                await resolver.WarmAsync(
+                    executionId,
+                    reloadedState!,
+                    CancellationToken.None);
+
+                foreach (var stepName in scenario.FingerprintStepNames)
+                {
+                    var resolved = await resolver.GetStepAsync(
+                        executionId,
+                        stepName,
+                        reloadedState!,
+                        CancellationToken.None);
+
+                    Assert.NotNull(resolved);
+
+                    Assert.True(
+                        resolved!.Status == AiStepExecutionStatus.Completed,
+                        $"Expected reconstructed step '{stepName}' to be Completed, but was '{resolved.Status}'.");
+
+                    Assert.NotNull(
+                        resolved.Result);
+                }
+
+                for (var iteration = 1; iteration <= 10; iteration++)
+                {
+                    var iterationState = await dagStore.GetStateAsync(
+                        executionId);
+
+                    Assert.NotNull(iterationState);
+
+                    foreach (var stepName in scenario.FingerprintStepNames)
+                    {
+                        var resolved = await resolver.GetStepAsync(
+                            executionId,
+                            stepName,
+                            iterationState!,
+                            CancellationToken.None);
+
+                        Assert.NotNull(resolved);
+
+                        Assert.Equal(
+                            AiStepExecutionStatus.Completed,
+                            resolved!.Status);
+                    }
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
         /// Runs the distributed chaos scenario end-to-end.
         /// </summary>
         /// <param name="scenario">The distributed chaos scenario.</param>
