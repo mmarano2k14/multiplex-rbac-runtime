@@ -1,12 +1,10 @@
-# Multiplex AI Runtime
-A Multiplexed, Deterministic Execution Layer for Multi-Tenant AI Systems  
-
-Distributed • State-Driven • Fault-Tolerant • Observable
+# Deterministic Distributed AI Runtime
+A policy-driven .NET runtime for deterministic DAG execution, distributed workers, Redis Lua coordination, retries, throttling, retention, replay, and observability.
 ---
 
-This repository provides a **reference implementation of a multiplexed, deterministic AI runtime**, demonstrating how to build **distributed, observable, and fault-tolerant execution systems for production-grade AI workloads**.
+This repository provides a **reference implementation of a multiplexed, deterministic distributed AI runtime**, demonstrating how to build **observable, fault-tolerant, replayable, and multi-runtime-instance execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.7-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.4.8-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---
@@ -1907,7 +1905,7 @@ This makes throttling and policy decisions visible through logs, tracing, and te
 
 ---
 
-#### Summary
+### Summary
 
 The Concurrency Engine provides:
 
@@ -2080,25 +2078,30 @@ This means the runtime can safely launch multiple executions side by side, while
 
 ### Current Scope
 
-The current API validates **multiple isolated executions**, not distributed co-execution of one shared execution.
+The runtime now supports two background execution modes:
+
+```text
+single runtime-instance execution
+distributed multi-runtime-instance execution
+```
+In single runtime-instance mode, one runtime worker advances one execution.
+
+In distributed multi-runtime-instance mode, multiple runtime workers can safely advance the same ExecutionId through Redis-backed DAG coordination.
 
 Current behavior:
 
-- each submitted controller run receives a unique `RunId`
-- each runtime execution receives a unique `ExecutionId`
-- each `ExecutionId` owns its own DAG record and state
-- each execution can complete independently
-- each execution can be snapshotted independently
-- each execution can be replayed independently
-- `RunId` and `ExecutionId` are strictly separated
+- each submitted controller run receives a unique RunId
+- each runtime execution receives a unique ExecutionId
+- each ExecutionId owns its own DAG record and state
+- the background controller can run in single-instance mode
+- the background controller can run in distributed multi-runtime-instance mode
+- multiple workers can cooperate on the same execution
+- workers claim DAG steps atomically through Redis coordination
+- terminal snapshot and cleanup lifecycle is idempotent
+- retention, replay, and resolver reconstruction remain valid under distributed execution
+- RunId and ExecutionId are strictly separated
 
-Not yet covered by this feature:
-
-- several runtime instances advancing the same `ExecutionId`
-- multiple workers competing for the same execution's steps across processes
-- distributed worker-group orchestration for one shared execution
-
-Those are future distributed multi-instance scenarios.
+This means the runtime can execute either many isolated executions or one shared execution advanced by multiple runtime workers, depending on controller configuration.
 
 ---
 
@@ -2437,47 +2440,62 @@ The current multi-run isolated execution API is validated through integration te
 
 ---
 
-### Current Boundary and Future Direction
+### Current Boundary
 
-The current feature should be understood as:
+The current runtime supports both execution models:
 
 ```text
+Model 1:
 multiple isolated executions
-same runtime/controller API
-unique ExecutionId per execution
+unique ExecutionId per run
 safe snapshot/replay per execution
 ```
-
-The future distributed direction is:
-
 ```text
+Model 2:
 one ExecutionId
 multiple runtime instances
 shared distributed DAG execution
-workers competing for the same execution's steps
+workers competing safely for the same execution's steps
 ```
 
-That future capability should be documented separately when it is implemented and fully validated.
+The distributed model relies on:
+
+- Redis-backed DAG state
+- atomic step claiming
+- lease-based ownership
+- deterministic convergence
+- bounded batch execution
+- idempotent terminal lifecycle handling
+- archive-backed resolver reconstruction after retention
+
+This makes distributed runtime-instance execution a validated runtime capability, not only a future direction.
 
 ---
 
 ### Summary
 
-The multi-run isolated execution API turns the runtime from a single execution primitive into a controller-driven execution layer capable of safely launching and tracking many independent DAG executions.
+The background controller now turns the runtime into a configurable execution layer capable of operating in two modes:
+
+- **single runtime-instance mode**, where one worker advances an execution
+- **distributed multi-runtime-instance mode**, where multiple workers safely advance the same execution
 
 It provides:
 
 - clear `RunId` / `ExecutionId` separation
 - unique execution identity
 - isolated DAG state per execution
-- safe parallel run submission
+- distributed shared-execution support
+- Redis-backed atomic step coordination
+- bounded batch execution
+- retry-safe multi-worker execution
 - terminal snapshot support
-- idempotent replay
-- restore-from-snapshot behavior
+- idempotent terminal lifecycle handling
+- bounded hot state through retention
+- archive-backed resolver reconstruction
 - deterministic replay validation
 - metrics and tracing coverage for background executions
 
-This is an important step toward production runtime orchestration, while keeping the current scope precise: **multiple isolated executions today, distributed shared-execution across runtime instances later**.
+This is a major step toward production-grade distributed AI execution infrastructure.
 
 ---
 

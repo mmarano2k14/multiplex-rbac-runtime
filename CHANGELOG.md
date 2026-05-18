@@ -6,6 +6,113 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.4.8] - 2026-05-18 - Distributed Runtime Instances / Aggressive Retention Stabilization
+
+### Added
+
+- Added distributed runtime-instance execution support for background pipeline runs.
+- Added support for running pipeline executions in two runtime modes:
+  - single runtime-instance mode
+  - distributed multi-runtime-instance mode
+- Added distributed worker-group execution so multiple runtime workers can safely advance the same execution.
+- Added configurable distributed runtime worker count for background-controller execution.
+- Added runtime-instance worker factory support for creating isolated runtime workers.
+- Added terminal run lifecycle hook support for observing finalized background pipeline runs.
+- Added distributed chaos validation for:
+  - 500-step DAG executions
+  - 30 distributed runtime workers
+  - bounded batch execution
+  - retryable flaky steps
+  - distributed concurrency
+  - aggressive compaction
+  - aggressive eviction
+  - snapshot persistence
+  - replay reconstruction
+  - resolver consistency
+  - repeated state reload validation
+- Added long-running aggressive distributed chaos stress validation, skipped by default, for repeated stability testing.
+- Added reconstruction validation ensuring evicted and compacted steps remain resolvable after aggressive retention.
+- Added retry preservation validation ensuring retried steps remain completed and retain retry metadata after aggressive retention and replay.
+- Added repeated reload validation to verify deterministic `GetStateAsync(...)` and resolver behavior after terminal retention.
+- Added validation that hot state may be empty after terminal eviction when archive index and resolver reconstruction remain valid.
+
+### Changed
+
+- Hardened terminal lifecycle handling across:
+  - local DAG execution
+  - distributed DAG execution
+  - batch DAG execution
+- Added centralized terminal lifecycle orchestration through `EnsureTerminalLifecycleAsync(...)`.
+- Updated local, distributed, and batch runners to consistently execute terminal lifecycle side effects through the lifecycle helper.
+- Improved terminal snapshot lifecycle reliability by ensuring terminal paths attempt snapshot persistence and cleanup consistently.
+- Made terminal lifecycle side effects idempotent for distributed workers that may observe the same terminal execution concurrently.
+- Hardened distributed state reconstruction to prevent logically completed steps from reappearing in hot state as default `None` steps.
+- Updated `GetStateAsync(...)` reconstruction semantics so stale `None` hot-state entries for logically completed steps are removed during state reload.
+- Updated distributed state reconstruction so terminal hot-state consistency is preserved across:
+  - state blob reload
+  - indexed step-key overlay
+  - aggressive retention
+  - replay reconstruction
+- Updated retention tests to reflect the correct retention model:
+  - hot state is a bounded mutable window
+  - archive index and payload resolver are authoritative for evicted terminal steps
+  - a fully evicted terminal hot state can be valid
+- Updated hybrid retention tests to validate bounded hot state instead of requiring hot state to remain non-empty.
+- Improved resolver-oriented retention validation for archived steps after eviction.
+- Stabilized aggressive retention behavior under repeated distributed reload and replay scenarios.
+
+### Fixed
+
+- Fixed intermittent terminal snapshot availability issues in distributed background execution.
+- Fixed terminal lifecycle paths that could return terminal records without consistently attempting snapshot persistence.
+- Fixed snapshot lifecycle races across local, distributed, and batch DAG runners.
+- Fixed hot-state regression where a logically completed step could be reconstructed as `Status=None`.
+- Fixed stale hot-state resurrection after aggressive eviction.
+- Fixed distributed replay/reload scenarios where completed logical history remained correct but hot state could contain invalid default step entries.
+- Fixed retention/reconstruction inconsistency between:
+  - persisted completed-step history
+  - hot execution state
+  - archive index
+  - payload-backed resolver
+- Fixed aggressive retention instability where completed steps could become visible in hot state as non-terminal/default steps.
+- Fixed hybrid retention test assumptions that required hot state to remain non-empty even when steps were correctly evicted and archived.
+
+### Validated
+
+- Validated both runtime execution modes:
+  - non-distributed single runtime-instance execution
+  - distributed multi-runtime-instance execution
+- Validated repeated aggressive distributed chaos execution with:
+  - 500 DAG steps
+  - 30 distributed workers
+  - retries
+  - distributed concurrency
+  - compaction
+  - eviction
+  - snapshot persistence
+  - replay reconstruction
+  - resolver consistency
+- Validated long-running aggressive chaos execution across repeated iterations.
+- Validated that completed logical history remains stable while hot state remains bounded or fully evicted.
+- Validated that archived steps remain resolvable through the archive index and payload resolver.
+- Validated retry metadata survives aggressive retention, eviction, and reconstruction.
+- Validated repeated `GetStateAsync(...)` reloads remain deterministic after aggressive retention.
+- Validated full test suite stability after distributed runtime-instance and retention reconstruction changes.
+
+### Notes
+
+- Implemented on branch `feature/distributed-runtime-instances`.
+- Runtime execution can now operate in both single-instance and distributed multi-runtime-instance modes.
+- `RunId` remains the controller/job lifecycle identifier.
+- `ExecutionId` remains the durable runtime namespace for DAG records, state, snapshots, replay, payloads, and resolver indexes.
+- Hot state is a bounded mutable execution window, not the authoritative long-term history.
+- `CompletedSteps` is the durable logical completion history.
+- Archive index and payload resolver are authoritative for evicted terminal step reconstruction.
+- A terminal execution may have an empty hot state when retention has safely archived and evicted all terminal steps.
+- Terminal lifecycle side effects must remain idempotent because multiple workers may observe terminal convergence concurrently.
+
+---
+
 ## [1.0.4.7] - 2026-05-15 - Background Controller / Batch DAG / Snapshot Replay Hardening
 
 ### Added
