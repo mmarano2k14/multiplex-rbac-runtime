@@ -39,6 +39,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         /// Verifies that a real DAG execution can complete with config-driven Hybrid retention enabled,
         /// and that at least one archived step remains resolvable after eviction.
         /// </summary>
+        /// <remarks>
+        /// A fully evicted terminal hot state is valid when archived steps remain indexed
+        /// and resolvable through the execution step resolver.
+        /// </remarks>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_With_Config_Driven_Hybrid_Retention_And_Archived_Steps_Resolvable()
         {
@@ -76,10 +80,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                     CancellationToken.None);
 
                 Assert.NotNull(finalState);
-                Assert.NotEmpty(finalState!.Steps);
 
                 Assert.True(
-                    finalState.Steps.Count <= MaxCompletedStepsInState,
+                    finalState!.Steps.Count <= MaxCompletedStepsInState,
                     $"Hot state should be bounded. Actual={finalState.Steps.Count}, Max={MaxCompletedStepsInState}");
 
                 var archivedEntries = await indexStore.GetByExecutionAsync(
@@ -133,8 +136,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         /// </summary>
         /// <remarks>
         /// This intentionally does not call ExecuteAllAsync a second time on a terminal execution.
-        /// Terminal idempotence is validated through persisted record, bounded state, archive index,
+        /// Terminal idempotence is validated through persisted record, bounded hot state, archive index,
         /// and resolver visibility.
+        ///
+        /// IMPORTANT:
+        /// A fully evicted terminal hot state is valid. The resolver and archive index are the
+        /// authoritative recovery path for evicted steps.
         /// </remarks>
         [Fact]
         public async Task Terminal_Retention_State_Should_Remain_Stable_And_Archived_Steps_Resolvable()
@@ -179,10 +186,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                     CancellationToken.None);
 
                 Assert.NotNull(reloadedState);
-                Assert.NotEmpty(reloadedState!.Steps);
 
                 Assert.True(
-                    reloadedState.Steps.Count <= MaxCompletedStepsInState,
+                    reloadedState!.Steps.Count <= MaxCompletedStepsInState,
                     $"Hot state should remain bounded. Actual={reloadedState.Steps.Count}, Max={MaxCompletedStepsInState}");
 
                 var archivedEntries = await indexStore.GetByExecutionAsync(

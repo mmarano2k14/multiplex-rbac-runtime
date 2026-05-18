@@ -91,6 +91,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         /// intermittent retention, snapshot, replay, and hot-state regression failures.
         /// </summary>
         [RedisFact(Skip = "Long-running stress validation test.")]
+        //[RedisFact]
         public async Task DistributedChaos_Should_Run_500_Steps_With_Aggressive_Retention_Eviction_Repeatedly()
         {
             const int iterations = 20;

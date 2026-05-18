@@ -129,7 +129,17 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (state.Steps.TryGetValue(stepName, out var hotStep))
             {
-                return hotStep;
+                if (hotStep.Status != AiStepExecutionStatus.None)
+                {
+                    return hotStep;
+                }
+
+                var archivedStep = await TryResolveArchivedStepAsync(
+                    executionId,
+                    stepName,
+                    cancellationToken).ConfigureAwait(false);
+
+                return archivedStep ?? hotStep;
             }
 
             var cacheKey = BuildCacheKey(executionId, stepName);
@@ -285,6 +295,66 @@ namespace Multiplexed.AI.Runtime.Execution
             string stepName)
         {
             return $"{executionId}:{stepName}";
+        }
+
+        private async Task<AiStepState?> TryResolveArchivedStepAsync(
+            string executionId,
+            string stepName,
+            CancellationToken cancellationToken)
+        {
+            var cacheKey = BuildCacheKey(executionId, stepName);
+
+            if (_stepCache.TryGetValue(cacheKey, out var cachedStep))
+            {
+                return ReferenceEquals(cachedStep, MissingStepMarker)
+                    ? null
+                    : (AiStepState)cachedStep;
+            }
+
+            if (!_indexCache.TryGetValue(cacheKey, out var archived))
+            {
+                archived = await _indexStore.GetAsync(
+                        executionId,
+                        stepName,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (archived is not null)
+                {
+                    _indexCache[cacheKey] = archived;
+                }
+            }
+
+            if (archived is null)
+            {
+                return null;
+            }
+
+            var step = await _stepPayloadStore.LoadStepAsync(
+                    executionId,
+                    stepName,
+                    archived.Payload,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (step is null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(step.StepName))
+            {
+                step.StepName = archived.StepName;
+            }
+
+            if (step.Status == AiStepExecutionStatus.None)
+            {
+                step.Status = archived.Status;
+            }
+
+            _stepCache[cacheKey] = step;
+
+            return step;
         }
     }
 }

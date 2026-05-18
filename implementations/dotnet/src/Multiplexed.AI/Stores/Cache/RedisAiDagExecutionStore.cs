@@ -933,6 +933,14 @@ namespace Multiplexed.AI.Stores.Cache
             var stateKey = GetStateBlobKey(executionId);
             var stepIndexKey = _keyBuilder.GetDagStepIdsKey(executionId);
 
+            var record = await GetRecordAsync(
+                executionId,
+                cancellationToken);
+
+            var completedStepNames = record?.CompletedSteps is not null
+                ? record.CompletedSteps.ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+
             AiExecutionState? state = null;
 
             var stateBlob = await _database.StringGetAsync(stateKey);
@@ -950,6 +958,10 @@ namespace Multiplexed.AI.Stores.Cache
                 if (state is not null)
                 {
                     state.ExecutionId = executionId;
+
+                    RemoveStaleCompletedNoneSteps(
+                        state,
+                        completedStepNames);
                 }
 
                 return state;
@@ -997,6 +1009,10 @@ namespace Multiplexed.AI.Stores.Cache
                     state.Steps[step.StepName] = step;
                 }
             }
+
+            RemoveStaleCompletedNoneSteps(
+                state,
+                completedStepNames);
 
             if (state.Steps.Count == 0)
             {
@@ -1095,12 +1111,14 @@ namespace Multiplexed.AI.Stores.Cache
                     state.Steps[step.StepName] = existingStep;
                     continue;
                 }
-
+                /*
                 if (completedStepNames.Contains(step.StepName) &&
                     IsNonTerminal(step.Status))
                 {
                     state.Steps.Remove(step.StepName);
                 }
+                */
+
             }
 
             await _database.StringSetAsync(
@@ -2374,6 +2392,40 @@ namespace Multiplexed.AI.Stores.Cache
             }
 
             writer.WriteEndObject();
+        }
+
+        /// <summary>
+        /// Removes stale default hot-state entries for logically completed steps.
+        /// </summary>
+        /// <param name="state">The reconstructed execution state.</param>
+        /// <param name="completedStepNames">The logical completed-step history from the execution record.</param>
+        private static void RemoveStaleCompletedNoneSteps(
+            AiExecutionState state,
+            IReadOnlySet<string> completedStepNames)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentNullException.ThrowIfNull(completedStepNames);
+
+            if (state.Steps.Count == 0)
+            {
+                return;
+            }
+
+            var staleStepNames = state.Steps.Values
+                .Where(step =>
+                    !string.IsNullOrWhiteSpace(step.StepName) &&
+                    completedStepNames.Contains(step.StepName) &&
+                    step.Status == AiStepExecutionStatus.None &&
+                    step.Result is null &&
+                    step.CompletedAtUtc is null)
+                .Select(step => step.StepName)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            foreach (var stepName in staleStepNames)
+            {
+                state.Steps.Remove(stepName);
+            }
         }
 
     }
