@@ -7,7 +7,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
-using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
@@ -54,7 +54,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             _keyBuilder = new TestAiExecutionKeyBuilder(_testPrefix);
             var metrics = MetricsFactory.Create();
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
-            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics, normalizers);
+            IRedisDagStoreServices services = new RedisDagStoreServices(
+                _multiplexer,
+                _keyBuilder,
+                logger,
+                metrics,
+                normalizers);
+            _store = new RedisAiDagExecutionStore(services);
         }
 
         public async Task DisposeAsync()
@@ -1394,7 +1400,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var logger = new NoopLogger();
             var metrics = MetricsFactory.Create();
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
-            return new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics, normalizers);
+            IRedisDagStoreServices services = new RedisDagStoreServices(
+                _multiplexer,
+                _keyBuilder,
+                logger,
+                metrics,
+                normalizers);
+            return new RedisAiDagExecutionStore(services);
         }
 
         private async Task CleanupDagExecutionAsync(string executionId)

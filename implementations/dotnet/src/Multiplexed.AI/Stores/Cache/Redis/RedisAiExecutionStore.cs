@@ -2,7 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using StackExchange.Redis;
 
-namespace Multiplexed.AI.Stores.Cache
+namespace Multiplexed.AI.Stores.Cache.Redis
 {
     /// <summary>
     /// Redis-backed implementation of <see cref="IAiExecutionStore"/>.

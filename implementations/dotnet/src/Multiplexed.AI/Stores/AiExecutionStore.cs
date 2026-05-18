@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.AI.Runtime.Execution;
-using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Stores.Memory;
 
 namespace Multiplexed.AI.Stores

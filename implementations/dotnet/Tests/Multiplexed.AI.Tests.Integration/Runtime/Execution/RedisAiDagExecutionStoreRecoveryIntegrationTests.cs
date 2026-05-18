@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.Abstractions.AI.Steps;
@@ -7,12 +8,13 @@ using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
-using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using StackExchange.Redis;
 using System.Data.Common;
 using System.Reflection.PortableExecutable;
 using Xunit;
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory.Database;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 {
@@ -54,7 +56,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             _keyBuilder = new TestAiExecutionKeyBuilder(_testPrefix);
             var metrics = MetricsFactory.Create();
             var normalizers = new DefaultAiStepResultNormalizerPipeline([new RagStepResultNormalizer()]);
-            _store = new RedisAiDagExecutionStore(_multiplexer, _keyBuilder, logger, metrics, normalizers);
+            IRedisDagStoreServices services = new RedisDagStoreServices(
+                _multiplexer,
+                _keyBuilder,
+                logger,
+                metrics,
+                normalizers);
+            _store = new RedisAiDagExecutionStore(services);
         }
 
         /// <summary>

@@ -81,7 +81,7 @@ using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Tracing;
 using Multiplexed.AI.Stores;
-using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.Realtime.Context;
 using System.Reflection;
@@ -356,7 +356,10 @@ namespace Multiplexed.AI.DI
 
             services.AddSingleton<MemoryAiExecutionStore>();
             services.AddSingleton<RedisAiExecutionStore>();
+
+            services.AddSingleton<IRedisDagStoreServices, RedisDagStoreServices>();
             services.AddSingleton<IAiDagExecutionStore, RedisAiDagExecutionStore>();
+
             services.AddSingleton<IAiExecutionStore, AiExecutionStore>();
             services.AddSingleton<IAiExecutionKeyBuilder, AiExecutionKeyBuilder>();
 

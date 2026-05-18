@@ -19,6 +19,7 @@ using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Steps;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;

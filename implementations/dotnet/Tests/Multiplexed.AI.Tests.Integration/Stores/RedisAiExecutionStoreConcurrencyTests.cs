@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.State;
-using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
 using StackExchange.Redis;
