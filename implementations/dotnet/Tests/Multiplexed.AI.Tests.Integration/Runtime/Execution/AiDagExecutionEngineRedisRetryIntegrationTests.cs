@@ -17,6 +17,7 @@ using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache;
+using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Helpers;
@@ -546,12 +547,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             var normalizers = new DefaultAiStepResultNormalizerPipeline(
                 [new RagStepResultNormalizer()]);
 
+            IRedisDagStoreServices services = new RedisDagStoreServices(
+             _connection,
+             keyBuilder,
+             logger,
+             metrics,
+             normalizers);
+
             return new RedisAiDagExecutionStore(
-                _connection,
-                keyBuilder,
-                logger,
-                metrics,
-                normalizers);
+                services);
         }
 
         /// <summary>

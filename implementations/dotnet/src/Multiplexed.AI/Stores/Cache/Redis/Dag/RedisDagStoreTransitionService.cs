@@ -1,0 +1,329 @@
+﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Runtime.Execution.Engine.Models;
+using Multiplexed.AI.Stores.Cache.Redis.Helpers;
+using Multiplexed.AI.Stores.Cache.Redis.Lua;
+using StackExchange.Redis;
+using System.Text.Json;
+
+namespace Multiplexed.AI.Stores.Cache.Redis.Dag
+{
+    /// <summary>
+    /// Handles Redis DAG step transition operations such as completion, failure, and execution finalization.
+    /// </summary>
+    /// <remarks>
+    /// This service owns transition-related Redis Lua execution paths.
+    /// It does not perform step claiming, timeout recovery, or state persistence.
+    /// </remarks>
+    public sealed class RedisDagStoreTransitionService
+    {
+        private readonly IRedisDagStoreServices _services;
+        private LoadedLuaScript _completeLoadedScript;
+        private LoadedLuaScript _failLoadedScript;
+        private LoadedLuaScript _finalizeLoadedScript;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RedisDagStoreTransitionService"/> class.
+        /// </summary>
+        /// <param name="services">The shared Redis DAG store services.</param>
+        public RedisDagStoreTransitionService(IRedisDagStoreServices services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+
+            _services = services;
+
+            _completeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.CompletePreparedScript);
+            _failLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FailPreparedScript);
+            _finalizeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FinalizeScript);
+        }
+
+        /// <summary>
+        /// Completes a claimed step atomically.
+        ///
+        /// Completion is accepted only when:
+        /// - the step exists
+        /// - the step is Running
+        /// - the claim token matches the current owner
+        ///
+        /// IMPORTANT:
+        /// - nowUnix is expressed in milliseconds
+        /// - the running lease is cleared atomically with completion
+        /// </summary>
+        /// <param name="executionId">The unique execution identifier.</param>
+        /// <param name="stepName">The step name to complete.</param>
+        /// <param name="claimToken">The claim token that owns the running step.</param>
+        /// <param name="result">The step result to persist.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns><c>true</c> when the step was completed; otherwise <c>false</c>.</returns>
+        public async Task<bool> TryCompleteStepAsync(
+            string executionId,
+            string stepName,
+            string claimToken,
+            AiStepResult result,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            if (string.IsNullOrWhiteSpace(stepName))
+                throw new ArgumentException("Step name cannot be null or empty.", nameof(stepName));
+
+            if (string.IsNullOrWhiteSpace(claimToken))
+                throw new ArgumentException("Claim token cannot be null or empty.", nameof(claimToken));
+
+            ArgumentNullException.ThrowIfNull(result);
+
+            var stepKey = _services.KeyBuilder.GetDagStepKey(executionId, stepName);
+            var nowUnix = RedisDagStoreHelper.NowMs();
+            var resultJson = JsonSerializer.Serialize(result, _services.JsonOptions);
+
+            try
+            {
+                return await ExecuteCompleteAsync(stepKey, claimToken, nowUnix, resultJson);
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _completeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.CompletePreparedScript);
+
+                return await ExecuteCompleteAsync(stepKey, claimToken, nowUnix, resultJson);
+            }
+        }
+
+        /// <summary>
+        /// Fails a claimed step atomically.
+        ///
+        /// Failure is accepted only when:
+        /// - the step exists
+        /// - the step is Running
+        /// - the claim token matches the current owner
+        ///
+        /// IMPORTANT:
+        /// This method is retry-aware. A successful failure mutation may result in:
+        /// - WaitingForRetry
+        /// - Failed
+        /// depending on RetryState.RetryCount / Retry.MaxRetries.
+        ///
+        /// - nowUnix is expressed in milliseconds
+        /// - the running lease is cleared atomically with failure handling
+        /// </summary>
+        /// <param name="executionId">The unique execution identifier.</param>
+        /// <param name="stepName">The step name to fail.</param>
+        /// <param name="claimToken">The claim token that owns the running step.</param>
+        /// <param name="error">The failure message to persist.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns><c>true</c> when the failure transition was accepted; otherwise <c>false</c>.</returns>
+        public async Task<bool> TryFailStepAsync(
+            string executionId,
+            string stepName,
+            string claimToken,
+            string? error,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(executionId));
+
+            if (string.IsNullOrWhiteSpace(stepName))
+                throw new ArgumentException("Step name cannot be null or empty.", nameof(stepName));
+
+            if (string.IsNullOrWhiteSpace(claimToken))
+                throw new ArgumentException("Claim token cannot be null or empty.", nameof(claimToken));
+
+            var stepKey = _services.KeyBuilder.GetDagStepKey(executionId, stepName);
+            var nowUnix = RedisDagStoreHelper.NowMs();
+
+            try
+            {
+                return await ExecuteFailAsync(
+                    stepKey,
+                    claimToken,
+                    nowUnix,
+                    error ?? string.Empty);
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _failLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FailPreparedScript);
+
+                return await ExecuteFailAsync(
+                    stepKey,
+                    claimToken,
+                    nowUnix,
+                    error ?? string.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Attempts to atomically finalize the global execution record using Redis Lua.
+        ///
+        /// BEHAVIOR:
+        /// - validates optimistic execution key
+        /// - refuses to finalize if the record is already terminal
+        /// - persists terminal status and completion metadata atomically
+        ///
+        /// IMPORTANT:
+        /// This method is terminal-only. Non-terminal statuses must never be passed here.
+        /// </summary>
+        /// <param name="request">The execution finalization request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns><c>true</c> when finalization succeeded; otherwise <c>false</c>.</returns>
+        public async Task<bool> TryFinalizeExecutionAsync(
+            AiDagExecutionFinalizationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            if (string.IsNullOrWhiteSpace(request.ExecutionId))
+                throw new ArgumentException("Execution id cannot be null or empty.", nameof(request));
+
+            if (string.IsNullOrWhiteSpace(request.ExpectedExecutionStepKey))
+                throw new ArgumentException("Expected execution step key cannot be null or empty.", nameof(request));
+
+            if (request.Status is not AiExecutionStatus.Completed
+                and not AiExecutionStatus.Failed
+                and not AiExecutionStatus.Cancelled)
+            {
+                throw new ArgumentException(
+                    "Only terminal execution statuses are allowed for finalization.",
+                    nameof(request));
+            }
+
+            var key = _services.KeyBuilder.GetExecutionRecordKey(request.ExecutionId);
+
+            var completedAtUtc = request.CompletedAtUtc == default
+                ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                : new DateTimeOffset(request.CompletedAtUtc).ToUnixTimeMilliseconds();
+
+            var completedStepsJson = JsonSerializer.Serialize(
+                request.CompletedSteps ?? Array.Empty<string>(),
+                _services.JsonOptions);
+
+            _services.Metrics.Execution.RecordFinalizeAttempt(request.ExecutionId);
+
+            _services.Logger.Engine.LogInformation(
+                $"[AI DAG STORE] Finalization attempt. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+
+            try
+            {
+                var result = await _finalizeLoadedScript.EvaluateAsync(
+                    _services.Database,
+                    new
+                    {
+                        recordKey = (RedisKey)key,
+                        expectedExecutionStepKey = (RedisValue)request.ExpectedExecutionStepKey,
+                        status = (RedisValue)request.Status.ToString(),
+                        completedAtUtc = (RedisValue)completedAtUtc,
+                        completedStepsJson = (RedisValue)completedStepsJson,
+                        newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
+                    });
+
+                var success = (int)result! == 1;
+
+                if (success)
+                {
+                    _services.Metrics.Execution.RecordFinalizeSuccess(request.ExecutionId);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization succeeded. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+                else
+                {
+                    _services.Metrics.Execution.RecordFinalizeConflict(request.ExecutionId);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization skipped or race lost. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+
+                return success;
+            }
+            catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _finalizeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FinalizeScript);
+
+                var result = await _finalizeLoadedScript.EvaluateAsync(
+                    _services.Database,
+                    new
+                    {
+                        recordKey = (RedisKey)key,
+                        expectedExecutionStepKey = (RedisValue)request.ExpectedExecutionStepKey,
+                        status = (RedisValue)request.Status.ToString(),
+                        completedAtUtc = (RedisValue)completedAtUtc,
+                        completedStepsJson = (RedisValue)completedStepsJson,
+                        newExecutionStepKey = (RedisValue)Guid.NewGuid().ToString("N")
+                    });
+
+                var success = (int)result! == 1;
+
+                if (success)
+                {
+                    _services.Metrics.Execution.RecordFinalizeSuccess(request.ExecutionId);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization succeeded after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+                else
+                {
+                    _services.Metrics.Execution.RecordFinalizeConflict(request.ExecutionId);
+
+                    _services.Logger.Engine.LogInformation(
+                        $"[AI DAG STORE] Finalization skipped or race lost after NOSCRIPT reload. ExecutionId='{request.ExecutionId}', Status='{request.Status}', WorkerId='{request.WorkerId}'.");
+                }
+
+                return success;
+            }
+        }
+
+        /// <summary>
+        /// Executes the prepared step completion Lua script.
+        /// </summary>
+        /// <param name="stepKey">The Redis key of the step to complete.</param>
+        /// <param name="claimToken">The claim token that owns the running step.</param>
+        /// <param name="nowUnix">The current UTC timestamp expressed in Unix milliseconds.</param>
+        /// <param name="resultJson">The serialized step result.</param>
+        /// <returns><c>true</c> when the completion mutation succeeded; otherwise <c>false</c>.</returns>
+        private async Task<bool> ExecuteCompleteAsync(
+           string stepKey,
+           string claimToken,
+           long nowUnix,
+           string resultJson)
+        {
+            var result = await _completeLoadedScript.EvaluateAsync(
+                _services.Database,
+                new
+                {
+                    stepKey = (RedisKey)stepKey,
+                    claimToken = (RedisValue)claimToken,
+                    nowUnix = (RedisValue)nowUnix,
+                    resultJson = (RedisValue)resultJson
+                });
+
+            return (int)result! == 1;
+        }
+
+        /// <summary>
+        /// Executes the prepared step failure Lua script.
+        /// </summary>
+        /// <param name="stepKey">The Redis key of the step to fail.</param>
+        /// <param name="claimToken">The claim token that owns the running step.</param>
+        /// <param name="nowUnix">The current UTC timestamp expressed in Unix milliseconds.</param>
+        /// <param name="error">The failure message.</param>
+        /// <returns><c>true</c> when the failure mutation succeeded; otherwise <c>false</c>.</returns>
+        private async Task<bool> ExecuteFailAsync(
+            string stepKey,
+            string claimToken,
+            long nowUnix,
+            string error)
+        {
+            var result = await _failLoadedScript.EvaluateAsync(
+                _services.Database,
+                new
+                {
+                    stepKey = (RedisKey)stepKey,
+                    claimToken = (RedisValue)claimToken,
+                    nowUnix = (RedisValue)nowUnix,
+                    error = (RedisValue)error
+                });
+
+            return (int)result! == 1;
+        }
+    }
+}

@@ -4,7 +4,7 @@ A policy-driven .NET runtime for deterministic DAG execution, distributed worker
 
 This repository provides a **reference implementation of a multiplexed, deterministic distributed AI runtime**, demonstrating how to build **observable, fault-tolerant, replayable, and multi-runtime-instance execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.8-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.4.9-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---

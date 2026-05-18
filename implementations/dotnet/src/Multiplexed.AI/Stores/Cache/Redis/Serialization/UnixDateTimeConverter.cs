@@ -2,29 +2,23 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Multiplexed.AI.Stores
+namespace Multiplexed.AI.Stores.Cache.Redis.Serialization
 {
     /// <summary>
-    /// Serializes nullable <see cref="DateTime"/> as Unix time in milliseconds.
+    /// Serializes <see cref="DateTime"/> as Unix time in milliseconds.
     ///
     /// Backward-compatible read behavior:
-    /// - accepts null
     /// - accepts unix milliseconds as JSON number
     /// - accepts unix milliseconds as JSON string
     /// - accepts ISO-8601 date string
     /// </summary>
-    public sealed class NullableUnixDateTimeConverter : JsonConverter<DateTime?>
+    public sealed class UnixDateTimeConverter : JsonConverter<DateTime>
     {
-        public override DateTime? Read(
+        public override DateTime Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
             JsonSerializerOptions options)
         {
-            if (reader.TokenType == JsonTokenType.Null)
-            {
-                return null;
-            }
-
             if (reader.TokenType == JsonTokenType.Number)
             {
                 var milliseconds = reader.GetInt64();
@@ -37,7 +31,7 @@ namespace Multiplexed.AI.Stores
 
                 if (string.IsNullOrWhiteSpace(raw))
                 {
-                    return null;
+                    throw new JsonException("DateTime string value was null or empty.");
                 }
 
                 if (long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var milliseconds))
@@ -54,27 +48,21 @@ namespace Multiplexed.AI.Stores
                     return DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
                 }
 
-                throw new JsonException($"Unable to parse nullable DateTime value '{raw}'.");
+                throw new JsonException($"Unable to parse DateTime value '{raw}'.");
             }
 
             throw new JsonException(
-                $"Unsupported token type '{reader.TokenType}' for nullable DateTime.");
+                $"Unsupported token type '{reader.TokenType}' for DateTime.");
         }
 
         public override void Write(
             Utf8JsonWriter writer,
-            DateTime? value,
+            DateTime value,
             JsonSerializerOptions options)
         {
-            if (!value.HasValue)
-            {
-                writer.WriteNullValue();
-                return;
-            }
-
-            var utc = value.Value.Kind == DateTimeKind.Utc
-                ? value.Value
-                : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
+            var utc = value.Kind == DateTimeKind.Utc
+                ? value
+                : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
             var milliseconds = new DateTimeOffset(utc).ToUnixTimeMilliseconds();
             writer.WriteNumberValue(milliseconds);

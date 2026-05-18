@@ -6,6 +6,55 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.4.9] - 2026-05-18 - Redis DAG Store Refactor / Service Decomposition
+
+### Added
+- Added `IRedisDagStoreServices` shared service contract.
+- Added `RedisDagStoreServices` composition wrapper for Redis DAG store dependencies.
+- Added specialized Redis DAG store services:
+  - `RedisDagStoreStateReader`
+  - `RedisDagStoreStateWriter`
+  - `RedisDagStoreClaimService`
+  - `RedisDagStoreTransitionService`
+  - `RedisDagStoreRecoveryService`
+  - `RedisDagStoreHelper`
+- Added centralized helper utilities for:
+  - Redis script loading
+  - Redis server resolution
+  - DAG key generation
+  - status helpers
+  - unix timestamp generation
+
+### Changed
+- Refactored `RedisAiDagExecutionStore` into a thin orchestration facade.
+- Moved distributed DAG logic into dedicated service boundaries:
+  - state reads
+  - state writes
+  - claim orchestration
+  - transition handling
+  - recovery flows
+- Moved Lua script ownership to domain-specific services.
+- Centralized Redis Lua loading through `RedisDagStoreHelper`.
+- Simplified `RedisAiDagExecutionStore` constructor using shared service composition.
+- Improved XML documentation consistency across Redis DAG store services.
+- Reduced internal coupling and improved maintainability/testability.
+
+### Architecture
+- Redis DAG execution store now follows a modular distributed service architecture:
+  - facade + specialized execution services
+- Improved separation of concerns for:
+  - distributed claims
+  - retry-aware transitions
+  - recovery orchestration
+  - distributed state persistence
+- Prepared the runtime for future:
+  - distributed orchestration improvements
+  - observability extensions
+  - runtime diagnostics
+  - service-level testing
+
+---
+
 ## [1.0.4.8] - 2026-05-18 - Distributed Runtime Instances / Aggressive Retention Stabilization
 
 ### Added
