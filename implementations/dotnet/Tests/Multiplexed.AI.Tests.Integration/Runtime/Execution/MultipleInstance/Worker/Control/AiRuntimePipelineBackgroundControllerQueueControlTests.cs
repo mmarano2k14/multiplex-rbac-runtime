@@ -170,6 +170,113 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Verifies that a queued run can be cancelled before execution creation starts.
+        /// </summary>
+        [RedisFact]
+        public async Task CancelQueuedRunAsync_WhenRunIsStillQueued_ShouldCancelWithoutCreatingExecution()
+        {
+            var pipelineName = $"queue-control-cancel-queued-{Guid.NewGuid():N}";
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                await controller.PauseQueueAsync(
+                        reason: "pause queue before cancelling queued run",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = pipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(pipelineName),
+                        Input = new
+                        {
+                            source = "queue-control-cancel-queued-test"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(handle);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, handle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var cancelled = await controller.CancelQueuedRunAsync(
+                        handle.RunId,
+                        reason: "cancel queued run from integration test",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                Assert.True(cancelled);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Cancelled, handle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                await controller.ResumeQueueAsync(
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var final = await handle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(5));
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Cancelled, final.Status);
+
+                Assert.Equal(
+                    handle.RunId,
+                    final.ExecutionId);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Cancelled, handle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that cancelling an unknown queued run returns false.
+        /// </summary>
+        [RedisFact]
+        public async Task CancelQueuedRunAsync_WhenRunIdDoesNotExist_ShouldReturnFalse()
+        {
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            try
+            {
+                var cancelled = await controller.CancelQueuedRunAsync(
+                        runId: $"missing-run-{Guid.NewGuid():N}",
+                        reason: "missing run",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                Assert.False(cancelled);
+            }
+            finally
+            {
+                await controller.StopAsync();
+            }
+        }
+
+        /// <summary>
         /// Creates a fully configured test host for queue-control tests.
         /// </summary>
         /// <returns>The created test host.</returns>

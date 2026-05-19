@@ -93,5 +93,34 @@
         Task ResumeQueueAsync(
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to cancel a queued run before it starts execution.
+        /// </summary>
+        /// <param name="runId">
+        /// The controller run identifier.
+        /// </param>
+        /// <param name="reason">
+        /// The optional cancellation reason.
+        /// </param>
+        /// <param name="requestedBy">
+        /// The optional identity requesting cancellation.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> if the queued run was cancelled; otherwise, <c>false</c>.
+        /// </returns>
+        /// <remarks>
+        /// This operation targets controller-level queued runs. If the run has already started
+        /// and has a durable execution identifier, execution-level cancellation should be handled
+        /// through the execution control service.
+        /// </remarks>
+        Task<bool> CancelQueuedRunAsync(
+            string runId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
     }
 }

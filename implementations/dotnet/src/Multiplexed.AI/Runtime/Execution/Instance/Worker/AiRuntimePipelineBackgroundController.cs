@@ -36,6 +36,11 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     /// This is controller-level parallelism only. Distributed step-level concurrency
     /// remains controlled by the runtime concurrency engine and Redis gate.
     /// </para>
+    /// <para>
+    /// Queue-level control is intentionally separate from execution-level control.
+    /// Pausing the queue prevents new queued runs from starting but does not pause
+    /// already running executions.
+    /// </para>
     /// </remarks>
     public sealed class AiRuntimePipelineBackgroundController : IAiRuntimePipelineBackgroundController
     {
@@ -53,6 +58,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
         private readonly SemaphoreSlim _parallelismGate;
         private readonly ConcurrentDictionary<string, Task> _activeRuns = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, AiRuntimeQueuedPipelineRun> _queuedRuns =
+            new(StringComparer.Ordinal);
         private readonly object _sync = new();
 
         private CancellationTokenSource? _controllerCancellation;
@@ -237,9 +244,22 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 handle,
                 completionSource);
 
-            await _queue.Writer.WriteAsync(
-                queuedRun,
-                cancellationToken).ConfigureAwait(false);
+            _queuedRuns[runId] = queuedRun;
+
+            try
+            {
+                await _queue.Writer.WriteAsync(
+                    queuedRun,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                _queuedRuns.TryRemove(
+                    runId,
+                    out _);
+
+                throw;
+            }
 
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Run queued. RunId='{runId}', Pipeline='{request.PipelineName}'.");
@@ -298,6 +318,42 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             return Task.CompletedTask;
         }
 
+        /// <inheritdoc />
+        public Task<bool> CancelQueuedRunAsync(
+            string runId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!_queuedRuns.TryRemove(runId, out var queuedRun))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (queuedRun.Handle.Status != AiRuntimeWorkerRunStatus.Queued)
+            {
+                return Task.FromResult(false);
+            }
+
+            queuedRun.Handle.MarkCancelled();
+
+            queuedRun.CompletionSource.TrySetResult(
+                new AiExecutionRecord
+                {
+                    ExecutionId = runId,
+                    Status = AiExecutionStatus.Cancelled,
+                    CompletedAtUtc = DateTime.UtcNow
+                });
+
+            _logger.Engine.LogInformation(
+                $"[AI PIPELINE CONTROLLER] Queued run cancelled. RunId='{runId}', Pipeline='{queuedRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+
+            return Task.FromResult(true);
+        }
+
         /// <summary>
         /// Runs the main background controller loop.
         /// </summary>
@@ -312,13 +368,34 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 await foreach (var queuedRun in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
                 {
+                    if (queuedRun.Handle.Status == AiRuntimeWorkerRunStatus.Cancelled)
+                    {
+                        _queuedRuns.TryRemove(
+                            queuedRun.Handle.RunId,
+                            out _);
+
+                        continue;
+                    }
 
                     await WaitWhileQueuePausedAsync(
-                        queuedRun,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                            queuedRun,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (queuedRun.Handle.Status == AiRuntimeWorkerRunStatus.Cancelled)
+                    {
+                        _queuedRuns.TryRemove(
+                            queuedRun.Handle.RunId,
+                            out _);
+
+                        continue;
+                    }
 
                     await _parallelismGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                    _queuedRuns.TryRemove(
+                        queuedRun.Handle.RunId,
+                        out _);
 
                     var task = ProcessQueuedRunAsync(
                         queuedRun,
@@ -456,6 +533,10 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             if (final.Status == AiExecutionStatus.Completed)
             {
                 handle.MarkCompleted();
+            }
+            else if (final.Status == AiExecutionStatus.Cancelled)
+            {
+                handle.MarkCancelled();
             }
             else
             {
@@ -623,6 +704,18 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </summary>
         private void CancelQueuedRuns()
         {
+            foreach (var queuedRun in _queuedRuns.Values)
+            {
+                queuedRun.Handle.MarkCancelled();
+
+                queuedRun.CompletionSource.TrySetCanceled();
+
+                _logger.Engine.LogInformation(
+                    $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
+            }
+
+            _queuedRuns.Clear();
+
             while (_queue.Reader.TryRead(out var queuedRun))
             {
                 queuedRun.Handle.MarkCancelled();
