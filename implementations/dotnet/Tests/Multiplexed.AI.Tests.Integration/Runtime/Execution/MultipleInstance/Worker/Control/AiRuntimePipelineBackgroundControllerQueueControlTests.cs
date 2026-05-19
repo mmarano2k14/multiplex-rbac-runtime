@@ -277,6 +277,88 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Verifies that cancelling a running controller run delegates cancellation to execution control.
+        /// </summary>
+        [RedisFact]
+        public async Task CancelRunAsync_WhenRunIsRunning_ShouldCancelDurableExecution()
+        {
+            var pipelineName = $"queue-control-cancel-running-{Guid.NewGuid():N}";
+            var signalKey = $"queue-control-cancel-running-{Guid.NewGuid():N}";
+
+            QueueControlDelayStepSignalRegistry.Create(signalKey);
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = pipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(
+                            pipelineName,
+                            signalKey,
+                            delayMs: 300),
+                        Input = new
+                        {
+                            source = "queue-control-cancel-running-test"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(handle);
+
+                await QueueControlDelayStepSignalRegistry.WaitForStartedAsync(
+                    signalKey,
+                    TimeSpan.FromSeconds(15));
+
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var cancelled = await controller.CancelRunAsync(
+                        handle.RunId,
+                        reason: "cancel running run from integration test",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                Assert.True(cancelled);
+
+                var final = await handle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Cancelled, final.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Cancelled, handle.Status);
+                Assert.Equal(handle.ExecutionId, final.ExecutionId);
+
+                var persistedRecord = await dagStore.GetRecordAsync(
+                    handle.ExecutionId!);
+
+                Assert.NotNull(persistedRecord);
+                Assert.Equal(AiExecutionStatus.Cancelled, persistedRecord!.Status);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+
+                QueueControlDelayStepSignalRegistry.Remove(signalKey);
+            }
+        }
+
+        /// <summary>
         /// Creates a fully configured test host for queue-control tests.
         /// </summary>
         /// <returns>The created test host.</returns>

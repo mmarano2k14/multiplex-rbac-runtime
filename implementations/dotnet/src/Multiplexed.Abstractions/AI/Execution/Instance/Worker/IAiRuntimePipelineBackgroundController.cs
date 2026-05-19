@@ -122,5 +122,34 @@
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to cancel a pipeline run by run identifier.
+        /// </summary>
+        /// <param name="runId">
+        /// The controller run identifier.
+        /// </param>
+        /// <param name="reason">
+        /// The optional cancellation reason.
+        /// </param>
+        /// <param name="requestedBy">
+        /// The optional identity requesting cancellation.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> if the run cancellation request was accepted; otherwise, <c>false</c>.
+        /// </returns>
+        /// <remarks>
+        /// If the run is still queued, it is cancelled before execution creation. If the run
+        /// is already running and has a durable execution identifier, cancellation is delegated
+        /// to the execution control service.
+        /// </remarks>
+        Task<bool> CancelRunAsync(
+            string runId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
     }
 }

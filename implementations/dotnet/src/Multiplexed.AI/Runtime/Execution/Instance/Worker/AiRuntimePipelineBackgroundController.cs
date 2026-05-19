@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
@@ -53,13 +54,14 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly IAiRuntimePipelineRunLifecycleHook _runLifecycleHook;
         private readonly IAiRuntimeLogger _logger;
         private readonly IAiRuntimeObservability _observability;
+        private readonly IAiExecutionControlService _executionControlService;
 
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
         private readonly SemaphoreSlim _parallelismGate;
         private readonly ConcurrentDictionary<string, Task> _activeRuns = new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, AiRuntimeQueuedPipelineRun> _queuedRuns =
-            new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, AiRuntimeQueuedPipelineRun> _queuedRuns = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, AiRuntimeQueuedPipelineRun> _runningRuns = new(StringComparer.Ordinal);
         private readonly object _sync = new();
 
         private CancellationTokenSource? _controllerCancellation;
@@ -93,6 +95,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             IAiRuntimePipelineRunDefinitionResolver definitionResolver,
             IAiRuntimePipelineRunDefinitionPublisher definitionPublisher,
             IAiRuntimePipelineRunLifecycleHook runLifecycleHook,
+            IAiExecutionControlService executionControlService,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
             IOptions<AiRuntimePipelineBackgroundControllerOptions> options)
@@ -104,6 +107,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _definitionResolver = definitionResolver ?? throw new ArgumentNullException(nameof(definitionResolver));
             _definitionPublisher = definitionPublisher ?? throw new ArgumentNullException(nameof(definitionPublisher));
             _runLifecycleHook = runLifecycleHook ?? throw new ArgumentNullException(nameof(runLifecycleHook));
+            _executionControlService = executionControlService ?? throw new ArgumentNullException(nameof(executionControlService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -354,6 +358,54 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             return Task.FromResult(true);
         }
 
+
+        /// <inheritdoc />
+        public async Task<bool> CancelRunAsync(
+            string runId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var queuedCancelled = await CancelQueuedRunAsync(
+                    runId,
+                    reason,
+                    requestedBy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (queuedCancelled)
+            {
+                return true;
+            }
+
+            if (!_runningRuns.TryGetValue(runId, out var runningRun))
+            {
+                return false;
+            }
+
+            var executionId = runningRun.Handle.ExecutionId;
+
+            if (string.IsNullOrWhiteSpace(executionId))
+            {
+                return false;
+            }
+
+            await _executionControlService.CancelExecutionAsync(
+                    executionId,
+                    reason ?? "Running pipeline run cancellation requested.",
+                    requestedBy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            _logger.Engine.LogInformation(
+                $"[AI PIPELINE CONTROLLER] Running run cancellation requested. RunId='{runId}', ExecutionId='{executionId}', Pipeline='{runningRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+
+            return true;
+        }
+
         /// <summary>
         /// Runs the main background controller loop.
         /// </summary>
@@ -397,6 +449,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         queuedRun.Handle.RunId,
                         out _);
 
+                    _runningRuns[queuedRun.Handle.RunId] = queuedRun;
+
                     var task = ProcessQueuedRunAsync(
                         queuedRun,
                         cancellationToken);
@@ -409,6 +463,10 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         completed =>
                         {
                             _activeRuns.TryRemove(
+                                queuedRun.Handle.RunId,
+                                out _);
+
+                            _runningRuns.TryRemove(
                                 queuedRun.Handle.RunId,
                                 out _);
 
@@ -704,8 +762,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </summary>
         private void CancelQueuedRuns()
         {
-            foreach (var queuedRun in _queuedRuns.Values)
+            foreach (var item in _queuedRuns.ToArray())
             {
+                if (!_queuedRuns.TryRemove(item.Key, out var queuedRun))
+                {
+                    continue;
+                }
+
                 queuedRun.Handle.MarkCancelled();
 
                 queuedRun.CompletionSource.TrySetCanceled();
@@ -714,10 +777,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
             }
 
-            _queuedRuns.Clear();
-
             while (_queue.Reader.TryRead(out var queuedRun))
             {
+                if (queuedRun.Handle.Status == AiRuntimeWorkerRunStatus.Cancelled)
+                {
+                    continue;
+                }
+
                 queuedRun.Handle.MarkCancelled();
 
                 queuedRun.CompletionSource.TrySetCanceled();
