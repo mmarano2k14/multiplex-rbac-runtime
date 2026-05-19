@@ -14,6 +14,16 @@ namespace Multiplexed.Abstractions.AI.Execution.Control
     public interface IAiExecutionControlStore
     {
         /// <summary>
+        /// Attempts to create the control state only if no state already exists for the execution.
+        /// </summary>
+        /// <param name="state">The initial control state to create.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns><c>true</c> if the state was created; otherwise, <c>false</c>.</returns>
+        Task<bool> TryCreateAsync(
+            AiExecutionControlState state,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Gets the current control state for an execution.
         /// </summary>
         /// <param name="executionId">The durable execution identifier.</param>

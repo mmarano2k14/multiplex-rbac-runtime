@@ -46,6 +46,40 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Control
         }
 
         /// <inheritdoc />
+        public async Task<bool> TryCreateAsync(
+            AiExecutionControlState state,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(state.ExecutionId))
+            {
+                throw new ArgumentException("Execution control state must have a valid execution id.", nameof(state));
+            }
+
+            if (state.Version <= 0)
+            {
+                state.Version = 1;
+            }
+
+            state.UpdatedAtUtc = DateTime.UtcNow;
+
+            var key = _keyBuilder.BuildExecutionControlKey(state.ExecutionId);
+            var payload = JsonSerializer.Serialize(state, _jsonOptions);
+
+            var created = await _database.StringSetAsync(
+                    key,
+                    payload,
+                    expiry: null,
+                    when: When.NotExists)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return created;
+        }
+
         /// <inheritdoc />
         public async Task<AiExecutionControlState?> GetAsync(
             string executionId,
