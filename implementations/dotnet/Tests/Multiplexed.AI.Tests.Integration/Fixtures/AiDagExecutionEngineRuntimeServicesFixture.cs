@@ -190,5 +190,23 @@ namespace Multiplexed.AI.Tests.Integration.Fixtures
                 UpdatedAtUtc = DateTime.UtcNow
             };
         }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> MarkRunningAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                new AiExecutionControlState
+                {
+                    ExecutionId = executionId,
+                    Status = AiExecutionControlStatus.Running,
+                    PendingAction = AiExecutionControlAction.None,
+                    RequestedBy = requestedBy,
+                    Version = 1,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+        }
     }
 }

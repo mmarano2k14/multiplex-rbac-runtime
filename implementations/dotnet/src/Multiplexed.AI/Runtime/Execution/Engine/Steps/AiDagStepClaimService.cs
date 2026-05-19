@@ -824,6 +824,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             if (decision.CanContinue)
             {
+                if (decision.Status == AiExecutionControlStatus.Resuming)
+                {
+                    await MarkRunningIfExecutionIsResumingAsync(
+                            executionId,
+                            workerId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 return true;
             }
 
@@ -891,6 +900,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             {
                 _services.Logger.Engine.LogInformation(
                     $"[AI DAG] Execution pause completed after active work drained. ExecutionId='{executionId}', WorkerId='{workerId}', ControlStatus='{paused.Status}'.");
+            }
+        }
+
+        /// <summary>
+        /// Marks an execution as effectively running when a runtime worker observes that a resuming execution may advance.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="workerId">The runtime worker identifier observing the resumed state.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        private async Task MarkRunningIfExecutionIsResumingAsync(
+            string executionId,
+            string workerId,
+            CancellationToken cancellationToken)
+        {
+            var running = await _services.ExecutionControlService
+                .MarkRunningAsync(
+                    executionId,
+                    requestedBy: workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (running.Status == AiExecutionControlStatus.Running)
+            {
+                _services.Logger.Engine.LogInformation(
+                    $"[AI DAG] Execution resumed and marked as running. ExecutionId='{executionId}', WorkerId='{workerId}', ControlStatus='{running.Status}'.");
             }
         }
     }

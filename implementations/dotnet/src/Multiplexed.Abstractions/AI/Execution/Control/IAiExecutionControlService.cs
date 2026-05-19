@@ -116,5 +116,23 @@ namespace Multiplexed.Abstractions.AI.Execution.Control
             string executionId,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Marks a resuming execution as effectively running after the runtime observes that work may advance again.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity confirming the running state.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>The updated control state.</returns>
+        /// <remarks>
+        /// This method is intended for runtime integration. Resume and human-input submission move
+        /// the execution into <see cref="AiExecutionControlStatus.Resuming"/>. Once a runtime
+        /// worker observes that the execution can advance again, it may normalize the control
+        /// state back to <see cref="AiExecutionControlStatus.Running"/>.
+        /// </remarks>
+        Task<AiExecutionControlState> MarkRunningAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
     }
 }

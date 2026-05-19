@@ -146,9 +146,17 @@ namespace Multiplexed.AI.Runtime.Execution.Control
 
             return state.Status switch
             {
-                AiExecutionControlStatus.None => AiExecutionControlDecision.Continue(),
-                AiExecutionControlStatus.Running => AiExecutionControlDecision.Continue(),
-                AiExecutionControlStatus.Resuming => AiExecutionControlDecision.Continue(),
+                AiExecutionControlStatus.None => AiExecutionControlDecision.Continue(
+                    AiExecutionControlStatus.Running,
+                    state.Reason),
+
+                AiExecutionControlStatus.Running => AiExecutionControlDecision.Continue(
+                    state.Status,
+                    state.Reason),
+
+                AiExecutionControlStatus.Resuming => AiExecutionControlDecision.Continue(
+                    state.Status,
+                    state.Reason),
 
                 AiExecutionControlStatus.Pausing => AiExecutionControlDecision.StopClaiming(
                     state.Status,
@@ -187,6 +195,20 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return ApplyTransitionAsync(
                 executionId,
                 existing => ApplyMarkPaused(existing, executionId, requestedBy),
+                cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> MarkRunningAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateExecutionId(executionId);
+
+            return ApplyTransitionAsync(
+                executionId,
+                existing => ApplyMarkRunning(existing, executionId, requestedBy),
                 cancellationToken);
         }
 
@@ -393,6 +415,45 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             state.PendingAction = AiExecutionControlAction.SubmitInput;
             state.RequestedBy = submittedBy;
             state.InputReceivedAtUtc = DateTime.UtcNow;
+
+            return state;
+        }
+
+        /// <summary>
+        /// Applies an effective running transition after a paused, waiting, or resuming execution is allowed to advance again.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity confirming the running state.</param>
+        /// <returns>The updated control state.</returns>
+        private static AiExecutionControlState ApplyMarkRunning(
+            AiExecutionControlState? existing,
+            string executionId,
+            string? requestedBy)
+        {
+            var state = CloneOrCreate(existing, executionId);
+
+            if (state.Status is AiExecutionControlStatus.Cancelled or AiExecutionControlStatus.Cancelling)
+            {
+                return state;
+            }
+
+            if (state.Status == AiExecutionControlStatus.Running &&
+                state.PendingAction == AiExecutionControlAction.None)
+            {
+                return state;
+            }
+
+            if (state.Status != AiExecutionControlStatus.Resuming &&
+                state.PendingAction != AiExecutionControlAction.Resume &&
+                state.PendingAction != AiExecutionControlAction.SubmitInput)
+            {
+                return state;
+            }
+
+            state.Status = AiExecutionControlStatus.Running;
+            state.PendingAction = AiExecutionControlAction.None;
+            state.RequestedBy = requestedBy ?? state.RequestedBy;
 
             return state;
         }

@@ -41,13 +41,27 @@
         /// <returns>A control decision that allows work to continue.</returns>
         public static AiExecutionControlDecision Continue()
         {
+            return Continue(AiExecutionControlStatus.Running);
+        }
+
+        /// <summary>
+        /// Creates a decision that allows execution to continue with the specified control status.
+        /// </summary>
+        /// <param name="status">The control status that allows execution to continue.</param>
+        /// <param name="reason">The optional reason associated with the decision.</param>
+        /// <returns>A control decision that allows work to continue.</returns>
+        public static AiExecutionControlDecision Continue(
+            AiExecutionControlStatus status,
+            string? reason = null)
+        {
             return new AiExecutionControlDecision
             {
                 CanContinue = true,
                 ShouldStopClaiming = false,
                 ShouldCancel = false,
                 IsWaitingForInput = false,
-                Status = AiExecutionControlStatus.Running
+                Status = status,
+                Reason = reason
             };
         }
 

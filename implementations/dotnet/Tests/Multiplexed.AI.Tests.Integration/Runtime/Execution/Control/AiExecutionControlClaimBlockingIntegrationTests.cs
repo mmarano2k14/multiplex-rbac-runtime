@@ -319,12 +319,22 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Control
                 var executedRecord = await host.Engine.ExecuteNextAsync(created.ExecutionId)
                     .ConfigureAwait(false);
 
+                var runningState = await controlStore.GetAsync(
+                        created.ExecutionId)
+                    .ConfigureAwait(false);
+
                 var state = await dagStore.GetStateAsync(
                         created.ExecutionId)
                     .ConfigureAwait(false);
 
                 Assert.NotNull(executedRecord);
                 Assert.Contains("start", executedRecord.CompletedSteps);
+
+                Assert.NotNull(runningState);
+                Assert.Equal(AiExecutionControlStatus.Running, runningState!.Status);
+                Assert.Equal(AiExecutionControlAction.None, runningState.PendingAction);
+                Assert.False(string.IsNullOrWhiteSpace(runningState.RequestedBy));
+                Assert.NotNull(runningState.ResumeRequestedAtUtc);
 
                 Assert.NotNull(state);
                 Assert.Equal(
@@ -408,12 +418,24 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Control
                 var executedRecord = await host.Engine.ExecuteNextAsync(created.ExecutionId)
                     .ConfigureAwait(false);
 
+                var runningState = await controlStore.GetAsync(
+                        created.ExecutionId)
+                    .ConfigureAwait(false);
+
                 var state = await dagStore.GetStateAsync(
                         created.ExecutionId)
                     .ConfigureAwait(false);
 
                 Assert.NotNull(executedRecord);
                 Assert.Contains("start", executedRecord.CompletedSteps);
+
+                Assert.NotNull(runningState);
+                Assert.Equal(AiExecutionControlStatus.Running, runningState!.Status);
+                Assert.Equal(AiExecutionControlAction.None, runningState.PendingAction);
+                Assert.False(string.IsNullOrWhiteSpace(runningState.RequestedBy));
+                Assert.NotNull(runningState.InputReceivedAtUtc);
+                Assert.True(runningState.Input.ContainsKey("approved"));
+                Assert.True(runningState.Input.ContainsKey("comment"));
 
                 Assert.NotNull(state);
                 Assert.Equal(
