@@ -53,5 +53,45 @@
         ValueTask<AiRuntimeWorkerRunHandle> EnqueueAsync(
             AiRuntimePipelineRunRequest request,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Pauses the controller queue so accepted runs remain queued and no new queued run starts.
+        /// </summary>
+        /// <param name="reason">
+        /// The optional reason for pausing the queue.
+        /// </param>
+        /// <param name="requestedBy">
+        /// The optional identity requesting the queue pause.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous pause operation.
+        /// </returns>
+        /// <remarks>
+        /// Pausing the controller queue does not pause already running executions. It only prevents
+        /// queued runs from being started by the background controller until the queue is resumed.
+        /// </remarks>
+        Task PauseQueueAsync(
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resumes the controller queue so queued runs may start again.
+        /// </summary>
+        /// <param name="requestedBy">
+        /// The optional identity requesting the queue resume.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous resume operation.
+        /// </returns>
+        Task ResumeQueueAsync(
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
     }
 }

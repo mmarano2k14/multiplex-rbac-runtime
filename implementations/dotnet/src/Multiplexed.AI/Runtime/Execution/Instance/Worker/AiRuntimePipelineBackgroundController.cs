@@ -60,6 +60,11 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private bool _started;
         private bool _stopped;
 
+        private volatile bool _queuePaused;
+        private string? _queuePauseReason;
+        private string? _queuePauseRequestedBy;
+        private DateTime? _queuePausedAtUtc;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="AiRuntimePipelineBackgroundController"/> class.
         /// </summary>
@@ -242,6 +247,57 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             return handle;
         }
 
+        /// <inheritdoc />
+        public Task PauseQueueAsync(
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_stopped)
+            {
+                throw new InvalidOperationException(
+                    "The runtime pipeline background controller has been stopped and cannot be paused.");
+            }
+
+            _queuePaused = true;
+            _queuePauseReason = reason;
+            _queuePauseRequestedBy = requestedBy;
+            _queuePausedAtUtc = DateTime.UtcNow;
+
+            _logger.Engine.LogInformation(
+                $"[AI PIPELINE CONTROLLER] Queue paused. Reason='{reason}', RequestedBy='{requestedBy}'.");
+
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public Task ResumeQueueAsync(
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_stopped)
+            {
+                throw new InvalidOperationException(
+                    "The runtime pipeline background controller has been stopped and cannot be resumed.");
+            }
+
+            var pausedSince = _queuePausedAtUtc;
+
+            _queuePaused = false;
+            _queuePauseReason = null;
+            _queuePauseRequestedBy = requestedBy;
+            _queuePausedAtUtc = null;
+
+            _logger.Engine.LogInformation(
+                $"[AI PIPELINE CONTROLLER] Queue resumed. RequestedBy='{requestedBy}', PausedSinceUtc='{pausedSince:O}'.");
+
+            return Task.CompletedTask;
+        }
+
         /// <summary>
         /// Runs the main background controller loop.
         /// </summary>
@@ -256,6 +312,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 await foreach (var queuedRun in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
                 {
+
+                    await WaitWhileQueuePausedAsync(
+                        queuedRun,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                     await _parallelismGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
                     var task = ProcessQueuedRunAsync(
@@ -569,6 +631,50 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
                 _logger.Engine.LogInformation(
                     $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
+            }
+        }
+
+        /// <summary>
+        /// Waits while the controller queue is paused before allowing a queued run to start.
+        /// </summary>
+        /// <param name="queuedRun">
+        /// The queued pipeline run waiting to start.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The controller cancellation token.
+        /// </param>
+        /// <returns>
+        /// A task representing the asynchronous wait operation.
+        /// </returns>
+        /// <remarks>
+        /// The queued run has already been read from the channel, but it has not acquired a
+        /// parallelism slot and has not started execution creation. Its public handle therefore
+        /// remains queued until the controller queue resumes.
+        /// </remarks>
+        private async Task WaitWhileQueuePausedAsync(
+            AiRuntimeQueuedPipelineRun queuedRun,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(queuedRun);
+
+            var logged = false;
+
+            while (_queuePaused)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!logged)
+                {
+                    _logger.Engine.LogInformation(
+                        $"[AI PIPELINE CONTROLLER] Queued run is waiting because the controller queue is paused. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}', Reason='{_queuePauseReason}', RequestedBy='{_queuePauseRequestedBy}', PausedAtUtc='{_queuePausedAtUtc:O}'.");
+
+                    logged = true;
+                }
+
+                await Task.Delay(
+                        TimeSpan.FromMilliseconds(25),
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
     }

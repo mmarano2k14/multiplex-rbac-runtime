@@ -1,0 +1,428 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
+using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
+using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.AI.Configuration;
+using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.Runtime;
+using Multiplexed.AI.Runtime.Execution.Context;
+using Multiplexed.AI.Runtime.Execution.Instance.Worker;
+using Multiplexed.AI.Stores;
+using Multiplexed.AI.Tests.Integration.Fixtures;
+using Multiplexed.AI.Tests.Integration.Infrastructure;
+using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
+using Xunit;
+
+namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Worker.Control
+{
+    /// <summary>
+    /// Integration tests for controller-level queue pause and resume behavior.
+    /// </summary>
+    /// <remarks>
+    /// These tests validate layer 1 control-plane behavior. Queue control affects
+    /// queued runs before execution creation and is intentionally separate from
+    /// execution-level control state such as pause, resume, cancellation, and
+    /// waiting for human input.
+    /// </remarks>
+    [Collection("redis")]
+    public sealed class AiRuntimePipelineBackgroundControllerQueueControlTests
+    {
+        /// <summary>
+        /// Verifies that pausing the controller queue prevents a queued run from starting
+        /// until the queue is resumed.
+        /// </summary>
+        [RedisFact]
+        public async Task PauseQueueAsync_WhenRunIsQueued_ShouldPreventRunFromStartingUntilResume()
+        {
+            var pipelineName = $"queue-control-pause-resume-{Guid.NewGuid():N}";
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                await controller.PauseQueueAsync(
+                        reason: "integration test queue pause",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = pipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(pipelineName),
+                        Input = new
+                        {
+                            source = "queue-control-test"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(handle);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, handle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                await Task.Delay(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, handle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                await controller.ResumeQueueAsync(
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var final = await handle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, handle.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies that pausing the controller queue does not stop an already running execution.
+        /// </summary>
+        [RedisFact]
+        public async Task PauseQueueAsync_WhenRunIsAlreadyRunning_ShouldAllowRunningExecutionToComplete()
+        {
+            var pipelineName = $"queue-control-running-{Guid.NewGuid():N}";
+            var signalKey = $"queue-control-running-{Guid.NewGuid():N}";
+
+            QueueControlDelayStepSignalRegistry.Create(signalKey);
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = pipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(
+                            pipelineName,
+                            signalKey,
+                            delayMs: 300),
+                        Input = new
+                        {
+                            source = "queue-control-running-test"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(handle);
+
+                await QueueControlDelayStepSignalRegistry.WaitForStartedAsync(
+                    signalKey,
+                    TimeSpan.FromSeconds(15));
+
+                await controller.PauseQueueAsync(
+                        reason: "pause after run has started",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var final = await handle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, handle.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+
+                QueueControlDelayStepSignalRegistry.Remove(signalKey);
+            }
+        }
+
+        /// <summary>
+        /// Creates a fully configured test host for queue-control tests.
+        /// </summary>
+        /// <returns>The created test host.</returns>
+        private static async Task<AiDagExecutionEngineTestHost> CreateHostAsync()
+        {
+            return await AiDagExecutionEngineFixture.CreateAsync(
+                CreateOptions(),
+                configureServices: services =>
+                {
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(AiRuntimePipelineBackgroundControllerQueueControlTests).Assembly);
+                });
+        }
+
+        /// <summary>
+        /// Creates runtime options for queue-control tests.
+        /// </summary>
+        /// <returns>The configured AI engine options.</returns>
+        private static AiEngineOptions CreateOptions()
+        {
+            var options = new AiEngineOptions
+            {
+                DefaultPipelineDefinitionSource = "Runtime",
+                RuntimeInstanceWorker = new AiRuntimeInstanceWorkerOptions
+                {
+                    MaxStepsPerCycle = 1,
+                    IdleDelay = TimeSpan.FromMilliseconds(1),
+                    MaxCycles = 1000,
+                    IgnoreConcurrencyConflicts = true
+                },
+                PipelineBackgroundController = new AiRuntimePipelineBackgroundControllerOptions
+                {
+                    MaxConcurrentRuns = 1,
+                    QueueCapacity = 8,
+                    RejectEnqueueWhenStopped = false,
+                    StopOnFirstFailure = false,
+                    Distributed = new AiRuntimeDistributedExecutionOptions
+                    {
+                        Enabled = true,
+                        WorkerCount = 1,
+                        StopOnFirstTerminal = true,
+                        TerminalObservationTimeout = TimeSpan.FromSeconds(30)
+                    }
+                }
+            };
+
+            options.Snapshots.Enabled = false;
+
+            options.Cleanup.AutoCleanupOnCompleted = false;
+            options.Cleanup.AutoCleanupOnFailed = false;
+            options.Cleanup.SuppressCleanupExceptions = true;
+
+            return options;
+        }
+
+        /// <summary>
+        /// Creates a queue-control pipeline definition.
+        /// </summary>
+        /// <param name="pipelineName">The pipeline name.</param>
+        /// <param name="signalKey">The optional signal key for the delay step.</param>
+        /// <param name="delayMs">The delay in milliseconds.</param>
+        /// <returns>The pipeline definition.</returns>
+        private static AiPipelineDefinition CreatePipelineDefinition(
+            string pipelineName,
+            string? signalKey = null,
+            int delayMs = 1)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+
+            var stepKey = string.IsNullOrWhiteSpace(signalKey)
+                ? "hello-world"
+                : "queue-control.delay";
+
+            var config = new Dictionary<string, object?>
+            {
+                ["delayMs"] = delayMs
+            };
+
+            if (!string.IsNullOrWhiteSpace(signalKey))
+            {
+                config["signalKey"] = signalKey;
+            }
+
+            return new AiPipelineDefinition
+            {
+                Name = pipelineName,
+                Version = "1.0.0",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps = new[]
+                {
+                    new AiPipelineStepDefinition
+                    {
+                        Name = "queue-control-step",
+                        StepKey = stepKey,
+                        Order = 1,
+                        Config = config
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// Deletes the live DAG execution bundle for the specified execution.
+        /// </summary>
+        /// <param name="serviceProvider">The service provider.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        private static async Task CleanupExecutionAsync(
+            IServiceProvider serviceProvider,
+            string executionId)
+        {
+            ArgumentNullException.ThrowIfNull(serviceProvider);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            var dagStore = serviceProvider.GetRequiredService<IAiDagExecutionStore>();
+
+            await dagStore.DeleteExecutionBundleAsync(
+                executionId);
+        }
+    }
+
+    /// <summary>
+    /// Signal registry used by queue-control delay test steps.
+    /// </summary>
+    internal static class QueueControlDelayStepSignalRegistry
+    {
+        private static readonly Dictionary<string, TaskCompletionSource<bool>> StartedSignals =
+            new(StringComparer.Ordinal);
+
+        private static readonly object Sync = new();
+
+        /// <summary>
+        /// Creates a signal entry for the specified key.
+        /// </summary>
+        /// <param name="signalKey">The signal key.</param>
+        public static void Create(
+            string signalKey)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(signalKey);
+
+            lock (Sync)
+            {
+                StartedSignals[signalKey] = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        /// <summary>
+        /// Marks the controlled step as started.
+        /// </summary>
+        /// <param name="signalKey">The signal key.</param>
+        public static void MarkStarted(
+            string signalKey)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(signalKey);
+
+            lock (Sync)
+            {
+                if (StartedSignals.TryGetValue(signalKey, out var signal))
+                {
+                    signal.TrySetResult(true);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits until the controlled step has started.
+        /// </summary>
+        /// <param name="signalKey">The signal key.</param>
+        /// <param name="timeout">The timeout.</param>
+        public static async Task WaitForStartedAsync(
+            string signalKey,
+            TimeSpan timeout)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(signalKey);
+
+            TaskCompletionSource<bool> signal;
+
+            lock (Sync)
+            {
+                if (!StartedSignals.TryGetValue(signalKey, out signal!))
+                {
+                    throw new InvalidOperationException(
+                        $"No queue-control delay signal was registered for key '{signalKey}'.");
+                }
+            }
+
+            await signal.Task.WaitAsync(timeout);
+        }
+
+        /// <summary>
+        /// Removes the signal entry for the specified key.
+        /// </summary>
+        /// <param name="signalKey">The signal key.</param>
+        public static void Remove(
+            string signalKey)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(signalKey);
+
+            lock (Sync)
+            {
+                StartedSignals.Remove(signalKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Controlled delay step used by queue-control integration tests.
+    /// </summary>
+    [AiStep("queue-control.delay")]
+    public sealed class QueueControlDelayStep : IAiStep
+    {
+        /// <inheritdoc />
+        public string Name => "queue-control.delay";
+
+        /// <inheritdoc />
+        public async Task<AiStepResult> ExecuteAsync(
+            AiStepExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            var helper = context.GetHelper();
+
+            var signalKey = await helper.GetConfigAsync<string>(
+                "signalKey",
+                cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(signalKey))
+            {
+                throw new InvalidOperationException(
+                    "Missing required config value 'signalKey'.");
+            }
+
+            var delayMs = await helper.GetConfigAsync<int?>(
+                "delayMs",
+                cancellationToken).ConfigureAwait(false) ?? 300;
+
+            QueueControlDelayStepSignalRegistry.MarkStarted(
+                signalKey);
+
+            await Task.Delay(
+                delayMs,
+                cancellationToken).ConfigureAwait(false);
+
+            return AiStepResult.Ok(
+                output: "Queue-control delay step completed.",
+                data: helper.ToDictionary(new
+                {
+                    signalKey,
+                    delayMs,
+                    context.Record.ExecutionId
+                }));
+        }
+    }
+}
