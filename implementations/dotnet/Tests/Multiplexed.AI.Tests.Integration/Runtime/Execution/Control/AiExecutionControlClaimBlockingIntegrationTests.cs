@@ -262,6 +262,82 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Control
         }
 
         /// <summary>
+        /// Verifies that a paused execution can resume and continue claiming ready DAG work.
+        /// </summary>
+        [RedisFact]
+        public async Task ExecuteNextAsync_WhenExecutionIsPausedThenResumed_ShouldClaimAndExecuteReadyStep()
+        {
+            await using var host = await AiDagExecutionEngineFixture.CreateAsync(
+                CreateOptions(),
+                mongoConnectionString: "mongodb://localhost:27017",
+                mongoDatabaseName: "multiplexed_ai_tests",
+                redisConnectionString: "localhost:6379");
+
+            var created = await host.Engine.CreateAsync("dag-parallel-basic", "Marco");
+
+            try
+            {
+                var controlService = host.ServiceProvider.GetRequiredService<IAiExecutionControlService>();
+                var controlStore = host.ServiceProvider.GetRequiredService<IAiExecutionControlStore>();
+                var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+
+                await controlService.PauseExecutionAsync(
+                        created.ExecutionId,
+                        reason: "test pause before resume",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var blockedRecord = await host.Engine.ExecuteNextAsync(created.ExecutionId)
+                    .ConfigureAwait(false);
+
+                var pausedState = await controlStore.GetAsync(
+                        created.ExecutionId)
+                    .ConfigureAwait(false);
+
+                Assert.NotNull(blockedRecord);
+                Assert.Empty(blockedRecord.CompletedSteps);
+
+                Assert.NotNull(pausedState);
+                Assert.Equal(AiExecutionControlStatus.Paused, pausedState!.Status);
+                Assert.Equal(AiExecutionControlAction.None, pausedState.PendingAction);
+                Assert.NotNull(pausedState.PausedAtUtc);
+
+                await controlService.ResumeExecutionAsync(
+                        created.ExecutionId,
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var resumedState = await controlStore.GetAsync(
+                        created.ExecutionId)
+                    .ConfigureAwait(false);
+
+                Assert.NotNull(resumedState);
+                Assert.Equal(AiExecutionControlStatus.Resuming, resumedState!.Status);
+                Assert.Equal(AiExecutionControlAction.Resume, resumedState.PendingAction);
+                Assert.NotNull(resumedState.ResumeRequestedAtUtc);
+
+                var executedRecord = await host.Engine.ExecuteNextAsync(created.ExecutionId)
+                    .ConfigureAwait(false);
+
+                var state = await dagStore.GetStateAsync(
+                        created.ExecutionId)
+                    .ConfigureAwait(false);
+
+                Assert.NotNull(executedRecord);
+                Assert.Contains("start", executedRecord.CompletedSteps);
+
+                Assert.NotNull(state);
+                Assert.Equal(
+                    AiStepExecutionStatus.Completed,
+                    state!.Steps["start"].Status);
+            }
+            finally
+            {
+                await CleanupExecutionAsync(created.ExecutionId).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
         /// Creates runtime options for the basic Redis DAG pipeline scenario.
         /// </summary>
         /// <returns>The configured AI engine options.</returns>
