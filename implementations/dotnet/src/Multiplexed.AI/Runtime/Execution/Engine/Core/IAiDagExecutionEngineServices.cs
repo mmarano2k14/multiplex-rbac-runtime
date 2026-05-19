@@ -181,5 +181,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// Gets the execution control gate used to decide whether an execution may advance.
         /// </summary>
         IAiExecutionControlGate ExecutionControlGate { get; }
+
+        /// <summary>
+        /// Gets the execution control service used to apply durable control transitions.
+        /// </summary>
+        IAiExecutionControlService ExecutionControlService { get; }
     }
 }

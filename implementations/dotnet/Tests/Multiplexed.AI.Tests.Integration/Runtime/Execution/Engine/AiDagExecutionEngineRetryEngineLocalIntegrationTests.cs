@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
@@ -253,6 +254,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
 
             var runtimeInstanceIdentity = new TestAiRuntimeInstanceIdentity("test-runtime-instance");
 
+            var executionControlGate = new NoOpAiExecutionControlGate();
+            var executionControlService = new NoOpAiExecutionControlService();
+
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
@@ -265,6 +269,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiDagStepExecutionOrchestrator)] = stepExecutionOrchestrator,
                 [typeof(IAiConcurrencyGate)] = concurrencyGate,
                 [typeof(IAiRuntimeInstanceIdentity)] = runtimeInstanceIdentity,
+                [typeof(IAiExecutionControlGate)] = executionControlGate,
+                [typeof(IAiExecutionControlService)] = executionControlService,
             });
 
             
@@ -288,6 +294,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 policyFactory,
                 concurrencyGate,
                 stepExecutionOrchestrator,
+                executionControlGate,                
+                executionControlService,   
                 null);
 
             var runtimeServices =  AiDagExecutionEngineRuntimeServicesFixture.Create(engineServices);

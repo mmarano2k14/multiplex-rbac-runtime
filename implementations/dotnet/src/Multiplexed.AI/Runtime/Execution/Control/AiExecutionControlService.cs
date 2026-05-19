@@ -176,6 +176,20 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             };
         }
 
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> MarkPausedAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateExecutionId(executionId);
+
+            return ApplyTransitionAsync(
+                executionId,
+                existing => ApplyMarkPaused(existing, executionId, requestedBy),
+                cancellationToken);
+        }
+
         private async Task<AiExecutionControlState> ApplyTransitionAsync(
             string executionId,
             Func<AiExecutionControlState?, AiExecutionControlState> transition,
@@ -244,6 +258,44 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             state.Reason = reason;
             state.RequestedBy = requestedBy;
             state.PauseRequestedAtUtc ??= DateTime.UtcNow;
+
+            return state;
+        }
+
+        /// <summary>
+        /// Applies an effective paused transition after active claimed work has drained.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity confirming the paused state.</param>
+        /// <returns>The updated control state.</returns>
+        private static AiExecutionControlState ApplyMarkPaused(
+            AiExecutionControlState? existing,
+            string executionId,
+            string? requestedBy)
+        {
+            var state = CloneOrCreate(existing, executionId);
+
+            if (state.Status is AiExecutionControlStatus.Cancelled or AiExecutionControlStatus.Cancelling)
+            {
+                return state;
+            }
+
+            if (state.Status == AiExecutionControlStatus.Paused)
+            {
+                return state;
+            }
+
+            if (state.Status != AiExecutionControlStatus.Pausing &&
+                state.PendingAction != AiExecutionControlAction.Pause)
+            {
+                return state;
+            }
+
+            state.Status = AiExecutionControlStatus.Paused;
+            state.PendingAction = AiExecutionControlAction.None;
+            state.RequestedBy = requestedBy ?? state.RequestedBy;
+            state.PausedAtUtc ??= DateTime.UtcNow;
 
             return state;
         }

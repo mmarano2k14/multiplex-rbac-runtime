@@ -1,4 +1,5 @@
-﻿using Multiplexed.AI.Runtime.Execution.Engine.Batch;
+﻿using Multiplexed.Abstractions.AI.Execution.Control;
+using Multiplexed.AI.Runtime.Execution.Engine.Batch;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Creation;
 using Multiplexed.AI.Runtime.Execution.Engine.Distributed;
@@ -78,6 +79,116 @@ namespace Multiplexed.AI.Tests.Integration.Fixtures
                 retentionCoordinator,
                 finalizationService,
                 lifecycleHelper);
+        }
+    }
+
+    /// <summary>
+    /// No-op execution control gate used by local DAG engine tests.
+    /// </summary>
+    public sealed class NoOpAiExecutionControlGate : IAiExecutionControlGate
+    {
+        /// <inheritdoc />
+        public Task<AiExecutionControlDecision> CheckBeforeAdvanceAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                AiExecutionControlDecision.Continue());
+        }
+    }
+
+    /// <summary>
+    /// No-op execution control service used by local DAG engine tests.
+    /// </summary>
+    public sealed class NoOpAiExecutionControlService : IAiExecutionControlService
+    {
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> PauseExecutionAsync(
+            string executionId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> MarkPausedAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> ResumeExecutionAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> CancelExecutionAsync(
+            string executionId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> MarkWaitingForInputAsync(
+            string executionId,
+            string waitingKey,
+            string? waitingStepName = null,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlState> SubmitHumanInputAsync(
+            string executionId,
+            string waitingKey,
+            IReadOnlyDictionary<string, object?> input,
+            string? submittedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                CreateRunningState(executionId));
+        }
+
+        /// <inheritdoc />
+        public Task<AiExecutionControlDecision> CheckCanAdvanceAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                AiExecutionControlDecision.Continue());
+        }
+
+        private static AiExecutionControlState CreateRunningState(
+            string executionId)
+        {
+            return new AiExecutionControlState
+            {
+                ExecutionId = executionId,
+                Status = AiExecutionControlStatus.Running,
+                PendingAction = AiExecutionControlAction.None,
+                Version = 1,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
         }
     }
 }

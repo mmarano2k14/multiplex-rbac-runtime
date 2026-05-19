@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
@@ -826,10 +827,71 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 return true;
             }
 
+            if (decision.Status == AiExecutionControlStatus.Pausing)
+            {
+                await MarkPausedIfExecutionHasDrainedAsync(
+                        executionId,
+                        workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             _services.Logger.Engine.LogInformation(
                 $"[AI DAG] Execution advancement blocked by control state. ExecutionId='{executionId}', WorkerId='{workerId}', Status='{decision.Status}', StopClaiming='{decision.ShouldStopClaiming}', ShouldCancel='{decision.ShouldCancel}', WaitingForInput='{decision.IsWaitingForInput}', Reason='{decision.Reason}'.");
 
             return false;
+        }
+
+        /// <summary>
+        /// Marks an execution as effectively paused when no active claimed or running work remains.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="workerId">The runtime worker identifier observing the drained state.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        private async Task MarkPausedIfExecutionHasDrainedAsync(
+            string executionId,
+            string workerId,
+            CancellationToken cancellationToken)
+        {
+            if (_services.DagStore is null)
+            {
+                return;
+            }
+
+            var state = await _services.DagStore.GetStateAsync(
+                    executionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (state is null)
+            {
+                return;
+            }
+
+            var hasActiveWork = state.Steps.Values.Any(step =>
+                step.Status == AiStepExecutionStatus.Running ||
+                !string.IsNullOrWhiteSpace(step.ClaimedBy) ||
+                !string.IsNullOrWhiteSpace(step.ClaimToken) ||
+                step.ClaimedAtUtc.HasValue ||
+                step.LeaseExpiresAtUtc.HasValue);
+
+            if (hasActiveWork)
+            {
+                return;
+            }
+
+            var paused = await _services.ExecutionControlService
+                .MarkPausedAsync(
+                    executionId,
+                    requestedBy: workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (paused.Status == AiExecutionControlStatus.Paused)
+            {
+                _services.Logger.Engine.LogInformation(
+                    $"[AI DAG] Execution pause completed after active work drained. ExecutionId='{executionId}', WorkerId='{workerId}', ControlStatus='{paused.Status}'.");
+            }
         }
     }
 }

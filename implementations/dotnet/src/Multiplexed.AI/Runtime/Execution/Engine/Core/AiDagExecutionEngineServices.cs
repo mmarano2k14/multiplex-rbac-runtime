@@ -51,6 +51,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             IAiConcurrencyGate concurrencyGate,
             IAiDagStepExecutionOrchestrator stepExecutionOrchestrator,
             IAiExecutionControlGate executionControlGate,
+            IAiExecutionControlService executionControlService,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
         {
@@ -71,10 +72,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             ObservabilityService = observabilityService ?? throw new ArgumentNullException(nameof(observabilityService));
             PolicyEngineFactory = policyEngineFactory ?? throw new ArgumentNullException(nameof(policyEngineFactory));
             ConcurrencyGate = concurrencyGate ?? throw new ArgumentNullException(nameof(concurrencyGate));
+            StepExecutionOrchestrator = stepExecutionOrchestrator ?? throw new ArgumentNullException(nameof(stepExecutionOrchestrator));
             ExecutionControlGate = executionControlGate ?? throw new ArgumentNullException(nameof(executionControlGate));
-
-            StepExecutionOrchestrator = stepExecutionOrchestrator
-                ?? throw new ArgumentNullException(nameof(stepExecutionOrchestrator));
+            ExecutionControlService = executionControlService ?? throw new ArgumentNullException(nameof(executionControlService));
+            
 
             DagStore = dagStore;
             SnapshotService = snapshotService;
@@ -140,6 +141,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// <inheritdoc />
         public IAiDagStepExecutionOrchestrator StepExecutionOrchestrator { get; }
 
+        /// <inheritdoc />
         public IAiExecutionControlGate ExecutionControlGate { get; }
+
+        /// <inheritdoc />
+        public IAiExecutionControlService ExecutionControlService { get; }
     }
 }

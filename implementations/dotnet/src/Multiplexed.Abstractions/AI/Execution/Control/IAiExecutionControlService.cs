@@ -98,5 +98,23 @@ namespace Multiplexed.Abstractions.AI.Execution.Control
         Task<AiExecutionControlDecision> CheckCanAdvanceAsync(
             string executionId,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Marks a pausing execution as effectively paused after active claimed work has drained.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity confirming the paused state.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>The updated control state.</returns>
+        /// <remarks>
+        /// This method is intended for runtime integration. A pause request first enters
+        /// <see cref="AiExecutionControlStatus.Pausing"/> so already claimed work can finish
+        /// safely. Once the runtime observes that no active work remains, it may transition
+        /// the control state to <see cref="AiExecutionControlStatus.Paused"/>.
+        /// </remarks>
+        Task<AiExecutionControlState> MarkPausedAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
     }
 }
