@@ -21,7 +21,7 @@
             end
 
             local decoded = cjson.decode(current)
-            local currentVersion = decoded['Version']
+            local currentVersion = decoded['version']
 
             if currentVersion ~= tonumber(ARGV[1]) then
                 return 0
