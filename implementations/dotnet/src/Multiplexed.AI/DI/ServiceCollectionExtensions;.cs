@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
@@ -45,6 +46,7 @@ using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Context;
+using Multiplexed.AI.Runtime.Execution.Control;
 using Multiplexed.AI.Runtime.Execution.Engine.Batch;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Creation;
@@ -82,6 +84,7 @@ using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Tracing;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache.Redis;
+using Multiplexed.AI.Stores.Cache.Redis.Control;
 using Multiplexed.AI.Stores.Memory;
 using Multiplexed.Realtime.Context;
 using System.Reflection;
@@ -527,6 +530,15 @@ namespace Multiplexed.AI.DI
                 Options.Create(
                     options.PipelineBackgroundController
                     ?? new AiRuntimePipelineBackgroundControllerOptions()));
+
+            // ------------------------------------------------------------
+            // execution control store and key builder
+            // ------------------------------------------------------------
+
+            services.TryAddSingleton<RedisExecutionControlKeyBuilder>();
+            services.TryAddSingleton<IAiExecutionControlStore, RedisAiExecutionControlStore>();
+            services.TryAddSingleton<IAiExecutionControlService, AiExecutionControlService>();
+            services.TryAddSingleton<IAiExecutionControlGate, AiExecutionControlGate>();
 
             // ------------------------------------------------------------
             // global execution engine runtime services
