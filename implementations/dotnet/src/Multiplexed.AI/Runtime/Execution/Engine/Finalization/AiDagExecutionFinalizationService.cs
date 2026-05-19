@@ -12,6 +12,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
     /// <summary>
     /// Coordinates distributed execution convergence persistence and terminal finalization.
     /// </summary>
+    /// <remarks>
+    /// This service is responsible for persisting converged execution records in a
+    /// distributed-safe manner. It also applies durable execution control state before
+    /// terminal finalization so that cancellation requests take precedence over normal
+    /// DAG completion.
+    /// </remarks>
     public sealed class AiDagExecutionFinalizationService
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
@@ -26,6 +32,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <param name="retentionCoordinator">
         /// The retention coordinator.
         /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="engineServices"/> or <paramref name="retentionCoordinator"/> is null.
+        /// </exception>
         public AiDagExecutionFinalizationService(
             IAiDagExecutionEngineServices engineServices,
             AiDagRetentionCoordinator retentionCoordinator)
@@ -64,6 +73,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <param name="cancellationToken">
         /// The cancellation token.
         /// </param>
+        /// <returns>
+        /// A task representing the asynchronous persistence operation.
+        /// </returns>
         public async Task PersistDistributedConvergedRecordAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -101,8 +113,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
             if (convergence.IsTerminal)
             {
+                var finalStatus = await ResolveFinalStatusAsync(
+                        record.ExecutionId,
+                        convergence.Status,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 _engineServices.Logger.Engine.LogInformation(
-                    $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{convergence.Status}', ExpectedStepKey='{expectedStepKey}'.");
+                    $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{finalStatus}', ExpectedStepKey='{expectedStepKey}'.");
 
                 var retentionStep = resolvedPipeline.Steps.FirstOrDefault()
                     ?? throw new InvalidOperationException(
@@ -127,7 +145,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 {
                     ExecutionId = record.ExecutionId,
                     ExpectedExecutionStepKey = expectedStepKey,
-                    Status = convergence.Status,
+                    Status = finalStatus,
                     CompletedAtUtc = utcNow,
                     CompletedSteps = completedSteps,
                     CurrentStep = string.Empty,
@@ -149,7 +167,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                                 cancellationToken);
 
                             trace.SetTag("finalized", result);
-                            trace.SetTag("status", convergence.Status.ToString());
+                            trace.SetTag("status", finalStatus.ToString());
                             trace.SetTag("workerId", _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId);
                             trace.SetTag("expectedStepKey", expectedStepKey);
                             trace.SetTag("completedSteps", completedSteps.Count);
@@ -161,7 +179,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 {
                     _engineServices.Logger.Engine.FinalizationRaceLost(
                         record.ExecutionId,
-                        convergence.Status);
+                        finalStatus);
 
                     var refreshed = await _engineServices.DagStore.GetRecordAsync(
                         record.ExecutionId,
@@ -179,7 +197,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
                 _engineServices.Logger.Engine.FinalizationSucceeded(
                     record.ExecutionId,
-                    convergence.Status);
+                    finalStatus);
 
                 var updated = await _engineServices.DagStore.GetRecordAsync(
                     record.ExecutionId,
@@ -201,6 +219,51 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
             await _engineServices.DagStore.SaveRecordAsync(
                 record,
                 cancellationToken);
+        }
+
+        /// <summary>
+        /// Resolves the terminal execution status by applying durable execution control state.
+        /// </summary>
+        /// <param name="executionId">
+        /// The durable execution identifier.
+        /// </param>
+        /// <param name="convergedStatus">
+        /// The status produced by DAG convergence.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The final terminal status that should be persisted.
+        /// </returns>
+        /// <remarks>
+        /// Cancellation control has precedence over normal completion. This prevents an
+        /// execution that has received a distributed cancellation request from converging
+        /// as completed simply because already-claimed work finished safely.
+        /// </remarks>
+        private async Task<AiExecutionStatus> ResolveFinalStatusAsync(
+            string executionId,
+            AiExecutionStatus convergedStatus,
+            CancellationToken cancellationToken)
+        {
+            if (convergedStatus == AiExecutionStatus.Cancelled)
+            {
+                return AiExecutionStatus.Cancelled;
+            }
+
+            var decision = await _engineServices.ExecutionControlGate
+                .CheckBeforeAdvanceAsync(executionId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!decision.ShouldCancel)
+            {
+                return convergedStatus;
+            }
+
+            _engineServices.Logger.Engine.LogInformation(
+                $"[AI DAG] Final status overridden by execution control cancellation. ExecutionId='{executionId}', ConvergedStatus='{convergedStatus}', ControlStatus='{decision.Status}', Reason='{decision.Reason}'.");
+
+            return AiExecutionStatus.Cancelled;
         }
     }
 }
