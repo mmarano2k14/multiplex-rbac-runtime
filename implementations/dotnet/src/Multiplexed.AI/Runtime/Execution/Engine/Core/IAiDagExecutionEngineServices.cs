@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Execution.Context;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
@@ -175,5 +176,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// runtime execution capacity before a DAG step is claimed.
         /// </summary>
         IAiConcurrencyGate ConcurrencyGate { get; }
+
+        /// <summary>
+        /// Gets the execution control gate used to decide whether an execution may advance.
+        /// </summary>
+        IAiExecutionControlGate ExecutionControlGate { get; }
     }
 }

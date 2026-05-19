@@ -115,6 +115,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 throw new InvalidOperationException("Distributed DAG store is not configured.");
             }
 
+            if (!await CanAdvanceExecutionAsync(executionId, workerId, cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
             var recoveredCount = await RecoverTimedOutStepsAsync(
                     executionId,
                     workerId,
@@ -798,6 +803,33 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         return result;
                     })
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Determines whether the execution is currently allowed to claim or advance work.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="workerId">The runtime worker identifier.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns><c>true</c> when the execution may advance; otherwise, <c>false</c>.</returns>
+        private async Task<bool> CanAdvanceExecutionAsync(
+            string executionId,
+            string workerId,
+            CancellationToken cancellationToken)
+        {
+            var decision = await _services.ExecutionControlGate
+                .CheckBeforeAdvanceAsync(executionId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (decision.CanContinue)
+            {
+                return true;
+            }
+
+            _services.Logger.Engine.LogInformation(
+                $"[AI DAG] Execution advancement blocked by control state. ExecutionId='{executionId}', WorkerId='{workerId}', Status='{decision.Status}', StopClaiming='{decision.ShouldStopClaiming}', ShouldCancel='{decision.ShouldCancel}', WaitingForInput='{decision.IsWaitingForInput}', Reason='{decision.Reason}'.");
+
+            return false;
         }
     }
 }
