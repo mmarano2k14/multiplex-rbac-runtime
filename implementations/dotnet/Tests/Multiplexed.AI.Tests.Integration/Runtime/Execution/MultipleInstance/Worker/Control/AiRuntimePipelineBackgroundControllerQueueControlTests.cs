@@ -359,6 +359,212 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Verifies that a new run can be added while the controller is already processing another run.
+        /// </summary>
+        [RedisFact]
+        public async Task EnqueueAsync_WhenControllerIsRunning_ShouldHotAddRunToQueue()
+        {
+            var firstPipelineName = $"queue-control-hot-add-first-{Guid.NewGuid():N}";
+            var secondPipelineName = $"queue-control-hot-add-second-{Guid.NewGuid():N}";
+            var firstSignalKey = $"queue-control-hot-add-first-{Guid.NewGuid():N}";
+
+            QueueControlDelayStepSignalRegistry.Create(firstSignalKey);
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? firstHandle = null;
+            AiRuntimeWorkerRunHandle? secondHandle = null;
+
+            try
+            {
+                firstHandle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = firstPipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(
+                            firstPipelineName,
+                            firstSignalKey,
+                            delayMs: 300),
+                        Input = new
+                        {
+                            source = "queue-control-hot-add-first"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(firstHandle);
+
+                await QueueControlDelayStepSignalRegistry.WaitForStartedAsync(
+                    firstSignalKey,
+                    TimeSpan.FromSeconds(15));
+
+                secondHandle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = secondPipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(secondPipelineName),
+                        Input = new
+                        {
+                            source = "queue-control-hot-add-second"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(secondHandle);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, secondHandle.Status);
+                Assert.True(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
+
+                var firstFinal = await firstHandle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                var secondFinal = await secondHandle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(firstFinal);
+                Assert.NotNull(secondFinal);
+
+                Assert.Equal(AiExecutionStatus.Completed, firstFinal.Status);
+                Assert.Equal(AiExecutionStatus.Completed, secondFinal.Status);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, firstHandle.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, secondHandle.Status);
+
+                Assert.False(string.IsNullOrWhiteSpace(firstHandle.ExecutionId));
+                Assert.False(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
+                Assert.NotEqual(firstHandle.ExecutionId, secondHandle.ExecutionId);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(firstHandle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        firstHandle.ExecutionId);
+                }
+
+                if (!string.IsNullOrWhiteSpace(secondHandle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        secondHandle.ExecutionId);
+                }
+
+                QueueControlDelayStepSignalRegistry.Remove(firstSignalKey);
+            }
+        }
+
+        /// <summary>
+        /// Verifies that runs can be added while the controller queue is paused and start after resume.
+        /// </summary>
+        [RedisFact]
+        public async Task EnqueueAsync_WhenQueueIsPaused_ShouldHotAddRunAndStartAfterResume()
+        {
+            var firstPipelineName = $"queue-control-hot-add-paused-first-{Guid.NewGuid():N}";
+            var secondPipelineName = $"queue-control-hot-add-paused-second-{Guid.NewGuid():N}";
+
+            await using var host = await CreateHostAsync();
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? firstHandle = null;
+            AiRuntimeWorkerRunHandle? secondHandle = null;
+
+            try
+            {
+                await controller.PauseQueueAsync(
+                        reason: "pause before hot adding queued runs",
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                firstHandle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = firstPipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(firstPipelineName),
+                        Input = new
+                        {
+                            source = "queue-control-hot-add-paused-first"
+                        }
+                    }).ConfigureAwait(false);
+
+                secondHandle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = secondPipelineName,
+                        PipelineDefinition = CreatePipelineDefinition(secondPipelineName),
+                        Input = new
+                        {
+                            source = "queue-control-hot-add-paused-second"
+                        }
+                    }).ConfigureAwait(false);
+
+                Assert.NotNull(firstHandle);
+                Assert.NotNull(secondHandle);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, firstHandle.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, secondHandle.Status);
+
+                Assert.True(string.IsNullOrWhiteSpace(firstHandle.ExecutionId));
+                Assert.True(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
+
+                await Task.Delay(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, firstHandle.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Queued, secondHandle.Status);
+
+                Assert.True(string.IsNullOrWhiteSpace(firstHandle.ExecutionId));
+                Assert.True(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
+
+                await controller.ResumeQueueAsync(
+                        requestedBy: "integration-test")
+                    .ConfigureAwait(false);
+
+                var firstFinal = await firstHandle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                var secondFinal = await secondHandle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(30));
+
+                Assert.NotNull(firstFinal);
+                Assert.NotNull(secondFinal);
+
+                Assert.Equal(AiExecutionStatus.Completed, firstFinal.Status);
+                Assert.Equal(AiExecutionStatus.Completed, secondFinal.Status);
+
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, firstHandle.Status);
+                Assert.Equal(AiRuntimeWorkerRunStatus.Completed, secondHandle.Status);
+
+                Assert.False(string.IsNullOrWhiteSpace(firstHandle.ExecutionId));
+                Assert.False(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
+                Assert.NotEqual(firstHandle.ExecutionId, secondHandle.ExecutionId);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(firstHandle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        firstHandle.ExecutionId);
+                }
+
+                if (!string.IsNullOrWhiteSpace(secondHandle?.ExecutionId))
+                {
+                    await CleanupExecutionAsync(
+                        host.ServiceProvider,
+                        secondHandle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
         /// Creates a fully configured test host for queue-control tests.
         /// </summary>
         /// <returns>The created test host.</returns>
