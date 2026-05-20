@@ -102,7 +102,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Control
             Assert.True(decision.CanContinue);
             Assert.False(decision.ShouldStopClaiming);
             Assert.False(decision.ShouldCancel);
-            Assert.Equal(AiExecutionControlStatus.Running, decision.Status);
+            Assert.Equal(AiExecutionControlStatus.Resuming, decision.Status);
 
             await _store.DeleteAsync(executionId).ConfigureAwait(false);
         }
