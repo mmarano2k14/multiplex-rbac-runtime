@@ -14,6 +14,19 @@ This repository provides a reference implementation of a distributed, state-driv
 
 ---
 
+## Latest Updates
+
+The latest major updates focused on turning the runtime from a DAG executor into a controllable distributed execution platform.
+
+| Area | Summary |
+|---|---|
+| Distributed multi-runtime-instance execution | Added foundations for multiple runtime instances and workers to coordinate through shared Redis-backed execution state. |
+| Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
+| Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
+| Documentation restructure | Completed Phase 0 V1 with a shorter README, preserved runtime internals, documentation index, roadmap, enterprise readiness matrix, ecosystem comparison, and focused runtime documentation under `docs/ai/`. |
+
+For detailed changes, see [`CHANGELOG.md`](./CHANGELOG.md) and [`docs/index.md`](docs/index.md).
+
 ## Overview
 
 Deterministic AI Runtime is a .NET runtime for executing complex AI workflows as controlled, observable, recoverable, and replayable distributed executions.
