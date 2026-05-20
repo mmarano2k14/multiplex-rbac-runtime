@@ -11,6 +11,7 @@ The project is under active development. Some capabilities are implemented and v
 | Status | Meaning |
 |---|---|
 | Completed / Implemented | Already built in the runtime. |
+| Completed (V1) | First complete version delivered; future refinements may continue. |
 | Current | Current active documentation or engineering phase. |
 | Planned | Identified future work. |
 | Foundation available | Core building blocks exist, but the public API or production polish is not complete. |
@@ -29,6 +30,11 @@ The following capabilities are already implemented or available as runtime found
 | Distributed workers | Implemented |
 | Multi-runtime-instance execution foundations | Implemented |
 | Deterministic convergence | Implemented |
+| Context resolution and helper layer | Foundation available |
+| Input binding resolution | Foundation available |
+| Previous step output resolution | Foundation available |
+| Payload resolver and rehydration | Implemented |
+| Provider/model/operation context | Implemented |
 | Retry and recovery | Implemented |
 | Policy-driven retry | Implemented |
 | Retention and compaction | Implemented |
@@ -55,31 +61,41 @@ The following capabilities are already implemented or available as runtime found
 
 ## Phase 0 — Documentation Restructure
 
-**Status:** Current
+**Status:** Completed (V1)
 
 Goal: make the repository readable, credible, and easy to navigate without losing technical depth.
 
-Tasks:
+Completed V1 work:
 
-- preserve the current README as `docs/runtime-internals.md`
-- replace the root `README.md` with a shorter project entry page
-- create `docs/index.md`
-- create `docs/enterprise-readiness.md`
-- create `docs/roadmap.md`
-- progressively extract specialized documents from `runtime-internals.md`
+- preserved the original technical README as `docs/runtime-internals.md`
+- replaced the root `README.md` with a shorter project entry page
+- created `docs/index.md`
+- created `docs/enterprise-readiness.md`
+- created `docs/roadmap.md`
+- created focused AI runtime documentation under `docs/ai/`
+- added architecture documentation centered around the context resolution and helper layer
+- added a documentation map linking strategic, technical, and roadmap documents
+- preserved the original technical depth while making the repository easier to navigate
 
-Planned follow-up documents:
+Focused AI runtime documentation created in V1:
 
-- `architecture-overview.md`
-- `distributed-execution.md`
-- `execution-control-state.md`
-- `runtime-queue-control.md`
-- `retry-and-recovery.md`
-- `retention-and-compaction.md`
-- `distributed-concurrency-throttling.md`
-- `replay-and-audit.md`
-- `observability.md`
-- `testing-strategy.md`
+- `docs/ai/architecture-overview.md`
+- `docs/ai/distributed-execution.md`
+- `docs/ai/execution-control-state.md`
+- `docs/ai/runtime-queue-control.md`
+- `docs/ai/retry-and-recovery.md`
+- `docs/ai/retention-and-compaction.md`
+- `docs/ai/distributed-concurrency-throttling.md`
+- `docs/ai/replay-and-audit.md`
+- `docs/ai/observability.md`
+- `docs/ai/testing-strategy.md`
+- `docs/ai/config-driven-runtime.md`
+- `docs/ai/policy-driven-execution.md`
+- `docs/ai/context-resolution-and-helpers.md`
+- `docs/ai/step-plugins.md`
+- `docs/ai/rag-pipelines.md`
+
+Future documentation refinement may continue, but the first documentation restructure is complete.
 
 ---
 
@@ -99,6 +115,7 @@ The demo should show:
 - pause/resume/cancel
 - human-in-the-loop
 - bounded state through retention
+- context resolution across inputs, step outputs, payloads, providers, and policies
 - replay from snapshot
 - deterministic convergence proof
 
@@ -119,6 +136,7 @@ Possible scenarios:
 - compliance decision pipeline
 - multi-provider RAG workflow
 - human approval workflow with audit trail
+- policy-driven provider/model governance workflow
 
 The sample should show how the runtime applies to real business processes, not only synthetic tests.
 
@@ -137,6 +155,7 @@ Dashboard capabilities may include:
 - step status inspection
 - retry timeline
 - retention and compaction events
+- resolver and context-resolution diagnostics
 - concurrency admission decisions
 - provider/model throttling status
 - replay and snapshot visibility
@@ -179,6 +198,7 @@ Possible work:
 - SDK-friendly abstractions
 - clearer controller APIs
 - better examples
+- public helper/context resolver documentation
 - CLI or developer utilities
 
 The runtime internals should remain powerful, but the external entry points should become simpler.
@@ -195,11 +215,13 @@ A durable decision ledger may record:
 
 - policy decisions
 - retry decisions
+- retention decisions
 - concurrency admission decisions
 - control actions
 - human input submissions
 - replay actions
 - finalization decisions
+- context-resolution failures or important resolver decisions where audit-relevant
 
 This would improve auditability, compliance, and debugging.
 
@@ -220,6 +242,7 @@ Possible features:
 - replay validation report
 - replay safety rules
 - replay access control
+- replay-safe context resolution rules
 
 Current replay foundations already exist, but this phase would formalize the API and documentation.
 
@@ -240,9 +263,10 @@ Possible capabilities:
 - provider fallback policies
 - per-tenant limits
 - observability for provider usage
+- provider/model/operation context-based cost reporting
 - policy-driven cost controls
 
-This extends the existing distributed throttling and policy model into AI cost governance.
+This extends the existing distributed throttling, context resolution, and policy model into AI cost governance.
 
 ---
 
@@ -256,6 +280,7 @@ Potential topics:
 
 - AI orchestration as a distributed systems problem
 - deterministic convergence for AI workflows
+- context resolution as the connective tissue of AI execution runtimes
 - Redis Lua coordination for distributed AI execution
 - retry and recovery without hidden local loops
 - policy-driven throttling for AI providers
@@ -278,6 +303,8 @@ All roadmap work should respect these principles:
 - preserve Redis atomic coordination for distributed safety
 - separate hot state from durable payloads
 - preserve replayability
+- keep context resolution explicit and testable
+- avoid scattering context-building logic across the engine
 - maintain clear documentation
 - avoid overclaiming maturity
 - distinguish implemented features from foundations and planned work
@@ -289,7 +316,9 @@ All roadmap work should respect these principles:
 The current priority is:
 
 ```text
-Phase 0 — README Review and Documentation Restructure
+Phase 1 — Enterprise Demo
 ```
 
-Before adding more public demos, articles, or APIs, the repository must be readable, navigable, and credible from the first page.
+Phase 0 documentation restructure is complete as V1.
+
+Next work should focus on demonstrating the runtime’s enterprise execution guarantees clearly, using the new documentation structure as the foundation.

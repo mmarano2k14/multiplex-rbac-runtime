@@ -2,7 +2,7 @@
 
 A deterministic AI execution runtime for production-grade AI workloads.
 
-This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, and observability.
+This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, and observability.
 
 [![Version](https://img.shields.io/badge/Version-1.0.5.0-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
@@ -36,6 +36,7 @@ It provides a state-driven execution layer where:
 - Redis stores hot execution state
 - Redis Lua scripts enforce atomic coordination
 - MongoDB stores durable payloads and snapshots
+- context helpers resolve inputs, payloads, provider metadata, and policy context
 - policies control retry, retention, and concurrency
 - execution can be paused, resumed, cancelled, or blocked for human input
 
@@ -56,6 +57,7 @@ Once AI moves to production, the hard problem becomes execution:
 - How do you control retries?
 - How do you throttle providers and models?
 - How do you keep memory bounded?
+- How do you resolve context safely across steps, payloads, providers, and policies?
 - How do you pause, resume, or cancel safely?
 - How do you support human-in-the-loop workflows?
 - How do you prove deterministic convergence?
@@ -76,6 +78,8 @@ They become distributed execution systems with:
 - retries
 - external providers
 - large payloads
+- compacted or externalized state
+- context resolution across previous step outputs
 - failure recovery
 - operational controls
 - audit and replay requirements
@@ -89,10 +93,11 @@ Without a real execution runtime, these systems often become fragile:
 - corrupted execution progress
 - unbounded memory growth
 - unclear ownership
+- inconsistent input/context reconstruction
 - poor observability
 - impossible replay
 
-This project explores what an AI execution runtime should look like when reliability, determinism, and distributed coordination are treated as first-class design requirements.
+This project explores what an AI execution runtime should look like when reliability, determinism, context resolution, and distributed coordination are treated as first-class design requirements.
 
 ---
 
@@ -105,6 +110,7 @@ This project explores what an AI execution runtime should look like when reliabi
 | Redis Lua atomic coordination | Implemented | Critical transitions use Lua-backed atomic operations. |
 | Distributed workers | Implemented | Workers can claim and execute steps safely. |
 | Multi-runtime-instance execution foundations | Implemented | Runtime instances can coordinate through shared Redis-backed execution state. |
+| Context resolution and helpers | Foundation available | Input bindings, previous step outputs, provider metadata, policy context, and payload rehydration are resolved through helper layers. |
 | Deterministic convergence | Implemented | Final state is derived from state transitions, not worker ordering. |
 | Retry and recovery | Implemented | Retry state, waiting windows, and stale running-step recovery are separated. |
 | Retention and compaction | Implemented | Hot state can be compacted/evicted while payloads remain resolvable. |
@@ -130,6 +136,17 @@ Runtime Orchestration Layer
         |
         v
 Pipeline Definition + DAG Resolution
+        |
+        v
+Context Resolution and Helper Layer
+        |
+        +--> Input binding resolution
+        +--> Previous step output resolution
+        +--> Payload rehydration
+        +--> Provider / model / operation context
+        +--> Policy context
+        +--> Concurrency context
+        +--> RAG retrieval / merge / compose context
         |
         v
 DAG Execution Engine
@@ -169,6 +186,7 @@ The runtime is intentionally split into layers:
 
 - orchestration starts and manages executions
 - DAG state determines what can run
+- context helpers resolve inputs, payloads, metadata, and policy context
 - Redis coordinates distributed workers
 - policies control runtime behavior
 - workers execute claimed steps
@@ -188,6 +206,7 @@ The project is designed around production questions that enterprise AI systems m
 | How do you replay a workflow? | Terminal snapshots and replay restoration provide replay foundations. |
 | How do you audit an AI decision? | Execution state, step results, retry metadata, snapshots, and observability provide audit foundations. |
 | How do you limit concurrency? | Distributed Redis ZSET leases and policy-driven throttling enforce limits. |
+| How do you resolve execution context safely? | Context helpers resolve inputs, step outputs, payload references, provider metadata, and policy context consistently. |
 | How do you pause/resume/cancel safely? | Execution control state blocks new claims and coordinates deterministic finalization. |
 | How do you control human-in-the-loop? | WaitingForInput and SubmitHumanInput are supported through durable control state. |
 | How do you keep memory/state bounded? | Retention, compaction, eviction, and payload externalization control hot state size. |
@@ -263,6 +282,28 @@ This allows multiple workers or runtime instances to cooperate safely without di
 
 ---
 
+## Context Resolution and Runtime Helpers
+
+The runtime includes a helper layer that connects declarative configuration to concrete execution behavior.
+
+This layer resolves:
+
+- input bindings from execution state
+- previous step outputs
+- compacted or externalized payloads
+- provider, providerKey, model, and operation metadata
+- retry policy context
+- retention policy context
+- concurrency context
+- RAG retrieval, merge, and compose context
+- replay-safe comparison data
+
+This keeps the DAG engine focused on orchestration and prevents plugins, policies, and providers from manually reconstructing raw execution state.
+
+For details, see [`docs/ai/context-resolution-and-helpers.md`](docs/ai/context-resolution-and-helpers.md).
+
+---
+
 ## Observability, Replay, and Audit Foundations
 
 The runtime includes foundations for production visibility and replayability:
@@ -272,6 +313,7 @@ The runtime includes foundations for production visibility and replayability:
 - retention metrics
 - resolver metrics
 - storage metrics
+- context resolution diagnostics
 - concurrency admission diagnostics
 - trace recording foundations
 - terminal snapshots
@@ -293,6 +335,7 @@ The strongest areas today are:
 - deterministic DAG execution
 - Redis-backed distributed state
 - Redis Lua atomic coordination
+- context resolution and helper foundations
 - retry/recovery semantics
 - retention/compaction
 - distributed concurrency and throttling
@@ -320,15 +363,15 @@ The roadmap is organized into phases.
 | Phase | Focus | Status |
 |---|---|---|
 | Completed | Core runtime foundations already implemented | In progress / validated by tests |
-| Phase 0 | README review and documentation restructure | Current |
+| Phase 0 | README review and documentation restructure | Completed (V1) |
 | Phase 1 | Enterprise demo | Planned |
 | Phase 2 | Real enterprise sample | Planned |
 | Phase 3 | Observability dashboard | Planned |
 | Phase 4 | Kubernetes deployment | Planned |
 | Phase 5 | Public API / SDK polish | Planned |
-| Phase 6 | Durable decision ledger | Planned |
-| Phase 7 | Official replay API | Planned |
-| Phase 8 | Cost and provider governance | Planned |
+| Phase 6 | Durable Decision Ledger | Planned |
+| Phase 7 | Official Replay API | Planned |
+| Phase 8 | Cost and Provider Governance | Planned |
 | Phase 9 | Articles and public positioning | Planned |
 
 For the detailed roadmap, see [`docs/roadmap.md`](docs/roadmap.md).
@@ -344,20 +387,25 @@ The full documentation map is available here:
 - [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md) — Enterprise readiness matrix.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
 
-Planned documentation files:
+Focused AI runtime documentation:
 
-- `docs/architecture-overview.md`
-- `docs/distributed-execution.md`
-- `docs/execution-control-state.md`
-- `docs/runtime-queue-control.md`
-- `docs/retry-and-recovery.md`
-- `docs/retention-and-compaction.md`
-- `docs/distributed-concurrency-throttling.md`
-- `docs/replay-and-audit.md`
-- `docs/observability.md`
-- `docs/testing-strategy.md`
+- [`docs/ai/architecture-overview.md`](docs/ai/architecture-overview.md)
+- [`docs/ai/distributed-execution.md`](docs/ai/distributed-execution.md)
+- [`docs/ai/execution-control-state.md`](docs/ai/execution-control-state.md)
+- [`docs/ai/runtime-queue-control.md`](docs/ai/runtime-queue-control.md)
+- [`docs/ai/retry-and-recovery.md`](docs/ai/retry-and-recovery.md)
+- [`docs/ai/retention-and-compaction.md`](docs/ai/retention-and-compaction.md)
+- [`docs/ai/distributed-concurrency-throttling.md`](docs/ai/distributed-concurrency-throttling.md)
+- [`docs/ai/replay-and-audit.md`](docs/ai/replay-and-audit.md)
+- [`docs/ai/observability.md`](docs/ai/observability.md)
+- [`docs/ai/testing-strategy.md`](docs/ai/testing-strategy.md)
+- [`docs/ai/config-driven-runtime.md`](docs/ai/config-driven-runtime.md)
+- [`docs/ai/policy-driven-execution.md`](docs/ai/policy-driven-execution.md)
+- [`docs/ai/context-resolution-and-helpers.md`](docs/ai/context-resolution-and-helpers.md)
+- [`docs/ai/step-plugins.md`](docs/ai/step-plugins.md)
+- [`docs/ai/rag-pipelines.md`](docs/ai/rag-pipelines.md)
 
-These files will be extracted progressively from `docs/runtime-internals.md`.
+These files were extracted progressively from `docs/runtime-internals.md`.
 
 ---
 

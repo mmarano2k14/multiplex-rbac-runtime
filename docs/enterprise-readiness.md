@@ -25,6 +25,7 @@ The goal is to be clear and honest about what is implemented, what is available 
 | How do you replay a workflow? | Completed executions can be snapshotted and restored from terminal snapshot foundations. Replay can detect existing live state or restore deleted live state. | MongoDB snapshots, replay service/foundations, ExecutionId-based snapshot restoration, deterministic replay fingerprint validation. | Tests validate `AlreadyExists`, restore after live deletion, and fingerprint equality. | Foundation available |
 | How do you audit an AI decision? | Execution state, step outputs, retry metadata, retention metadata, snapshots, and trace/metric events provide audit foundations. | Execution records, step states, persisted payloads, terminal snapshots, observability hooks, future decision ledger direction. | Current evidence exists through state/snapshot/observability tests; durable decision ledger remains roadmap. | Foundation available |
 | How do you limit concurrency? | Concurrency can be limited locally and across distributed workers/runtime instances. Provider, model, operation, execution, pipeline, step, and instance scopes are supported. | Policy-driven concurrency engine, `config.concurrency`, Redis ZSET lease gate, Lua-style atomic admission, lease expiration. | Tests validate Redis lease semantics, provider/model/operation throttling, admission denial, and release on failed claim. | Implemented |
+| How do you resolve execution context safely? | The runtime resolves input bindings, previous step outputs, payload references, provider/model/operation metadata, and policy contexts through helper layers instead of scattering context-building logic across the engine. | Context resolution helpers, input resolver, step context builder, payload resolver, provider context helper, policy context builders, RAG context resolver. | Runtime usage and tests validate input binding resolution, provider/model/operation propagation, payload rehydration, RAG context resolution, and replay-safe comparison foundations. | Foundation available |
 | How do you pause/resume/cancel safely? | Execution control state blocks new claims and coordinates state transitions without corrupting DAG state. Cancellation can override natural completion during finalization. | `IAiExecutionControlService`, Redis control state, control gate, claim blocking, cancellation finalization override. | Integration tests cover pause, resume, cancel, claim blocking, `Pausing -> Paused`, `Resuming -> Running`, cancellation override. | Implemented |
 | How do you control human-in-the-loop? | Executions can be moved to `WaitingForInput`, new claims are blocked, and external input can be submitted to resume execution. | Durable execution control state, waiting key, waiting step name, submitted input payload, `SubmitHumanInputAsync`. | Integration tests cover waiting for input and human input submission. | Implemented |
 | How do you keep memory/state bounded? | The runtime separates hot state from cold payloads and can compact or evict completed data while preserving resolver access. | Retention engine, retention triggers, compaction, eviction, payload externalization, MongoDB payload store, rehydration resolver. | Tests validate retention safety, archived payload resolution, and resolver consistency after eviction. | Implemented |
@@ -39,6 +40,7 @@ The current runtime is strongest in these areas:
 
 - deterministic DAG execution
 - Redis-backed distributed coordination
+- context resolution and helper foundations
 - retry and recovery safety
 - bounded hot state through retention and compaction
 - provider/model/operation throttling
@@ -62,7 +64,38 @@ The following areas are still evolving:
 - Kubernetes deployment package
 - public SDK/API polish
 - enterprise sample applications
-- complete documentation split
+- continued documentation refinement beyond Phase 0 V1
+
+---
+
+## Ecosystem Positioning
+
+Deterministic AI Runtime is not intended to replace agent frameworks, workflow orchestrators, data pipeline tools, observability platforms, or distributed infrastructure.
+
+Existing tools are strong in their own domains.
+
+This runtime focuses on a specific architectural problem:
+
+```text
+deterministic, distributed, state-driven AI execution
+```
+
+That means the project is focused on runtime guarantees such as:
+
+- distributed step ownership
+- Redis Lua coordination
+- retry and recovery separation
+- bounded hot state
+- context resolution
+- provider/model/operation throttling
+- execution control state
+- human-in-the-loop control
+- replay foundations
+- deterministic convergence
+
+For a detailed comparison with existing tools and categories, see:
+
+- [Comparison with Existing Tools](comparison-existing-tools.md)
 
 ---
 
@@ -77,3 +110,7 @@ It is especially relevant for teams exploring how to move from prompt-level or a
 The key architectural message is:
 
 > AI orchestration becomes a distributed systems problem once it reaches production.
+
+The repository should be presented as an advanced reference implementation and evolving infrastructure project.
+
+It should be positioned seriously, without overstating its maturity.
