@@ -363,10 +363,33 @@ Areas still evolving include:
 - public API/SDK polish
 - official replay APIs
 - durable decision ledger
-- observability dashboard
+- observability, tracing, and metrics polish
 - Kubernetes deployment assets
-- enterprise demo applications
+- additional enterprise demo scenarios
 - production documentation split
+
+---
+
+## Enterprise Runtime Demo
+
+A local enterprise-oriented demo is available in [`demo/enterprise-runtime/`](demo/enterprise-runtime/README.md).
+
+The demo is designed to prove that the runtime behaves like distributed AI execution infrastructure, not a toy agent framework.
+
+It currently includes:
+
+- Docker Compose infrastructure for Redis and MongoDB
+- scenario documentation for enterprise runtime behaviors
+- an external sample step plugin under `Samples/Multiplexed.Sample.External.Plugins.Steps`
+- a JSON pipeline at `demo/enterprise-runtime/pipelines/enterprise-demo-pipeline.json`
+- integration-test validation through `IAiRuntimePipelineBackgroundController`
+- distributed runtime worker participation
+- `RunId` and `ExecutionId` separation
+- terminal completion through the controller path
+
+The first demo pipeline is validated by an integration test that runs through the background controller with distributed runtime workers. This validates the controller execution path, not only a simple batch or in-memory execution path.
+
+Future demo work will expand this into additional scenarios for crash recovery, pause/resume/cancel, human-in-the-loop, throttling, retention/compaction, and deterministic convergence.
 
 ---
 
@@ -378,13 +401,13 @@ The roadmap is organized into phases.
 |---|---|---|
 | Completed | Core runtime foundations already implemented | In progress / validated by tests |
 | Phase 0 | README review and documentation restructure | Completed (V1) |
-| Phase 1 | Enterprise demo | Planned |
+| Phase 1 | Enterprise demo | In progress - local controller demo validated |
 | Phase 2 | Real enterprise sample | Planned |
-| Phase 3 | Observability dashboard | Planned |
-| Phase 4 | Kubernetes deployment | Planned |
+| Phase 3 | Observability, tracing, and metrics | Planned |
+| Phase 4 | Kubernetes deployment demo | Planned |
 | Phase 5 | Public API / SDK polish | Planned |
 | Phase 6 | Durable Decision Ledger | Planned |
-| Phase 7 | Official Replay API | Planned |
+| Phase 7 | Official Replay / Audit package | Planned |
 | Phase 8 | Cost and Provider Governance | Planned |
 | Phase 9 | Articles and public positioning | Planned |
 
@@ -401,6 +424,7 @@ The full documentation map is available here:
 - [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md) — Enterprise readiness matrix.
 - [`docs/comparison-existing-tools.md`](docs/comparison-existing-tools.md) — Ecosystem positioning and comparison with existing tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
+- [`demo/enterprise-runtime/README.md`](demo/enterprise-runtime/README.md) — Local enterprise runtime demo using Docker Compose, Redis, MongoDB, external demo steps, controller execution, distributed workers, and scenario documentation.
 
 Focused AI runtime documentation:
 

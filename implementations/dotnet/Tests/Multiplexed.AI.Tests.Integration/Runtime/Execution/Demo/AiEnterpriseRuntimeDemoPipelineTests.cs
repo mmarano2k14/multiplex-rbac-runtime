@@ -130,6 +130,93 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Demo
         }
 
         /// <summary>
+        /// Verifies that the enterprise demo pipeline exercises retry behavior through
+        /// the external flaky demo step.
+        /// </summary>
+        [RedisFact]
+        public async Task EnterpriseDemoPipeline_Should_Retry_Flaky_Demo_Step()
+        {
+            const string pipelineName = "enterprise-runtime-demo";
+            const string retriedStepName = "transient-provider-call";
+
+            await using var host = await AiDagExecutionEngineFixture.CreateAsync(
+                CreateEnterpriseDemoOptions(),
+                configureServices: services =>
+                {
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(DemoPassStep).Assembly);
+                });
+
+            var controller = host.ServiceProvider
+                .GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            var dagStore = host.ServiceProvider
+                .GetRequiredService<IAiDagExecutionStore>();
+
+            var resolver = host.ServiceProvider
+                .GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = pipelineName,
+                        PipelineJsonFilePath = "config/enterprise-demo-pipeline.json",
+                        Input = new
+                        {
+                            source = "enterprise-demo-retry-test",
+                            demo = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    TimeSpan.FromSeconds(60));
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var state = await dagStore.GetStateAsync(
+                    handle.ExecutionId);
+
+                Assert.NotNull(state);
+
+                var retriedStep = await resolver.GetStepAsync(
+                    handle.ExecutionId,
+                    retriedStepName,
+                    state!,
+                    CancellationToken.None);
+
+                Assert.NotNull(retriedStep);
+                Assert.Equal(AiStepExecutionStatus.Completed, retriedStep!.Status);
+                Assert.NotNull(retriedStep.RetryState);
+                Assert.True(
+                    retriedStep.RetryState!.RetryCount >= 1,
+                    $"Expected step '{retriedStepName}' to be retried at least once.");
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await dagStore.DeleteExecutionBundleAsync(
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
         /// Creates runtime options for the enterprise demo pipeline JSON.
         /// </summary>
         private static AiEngineOptions CreateEnterpriseDemoOptions()
