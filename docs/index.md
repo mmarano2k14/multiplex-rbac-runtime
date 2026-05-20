@@ -19,6 +19,7 @@ Focused AI runtime documentation is organized under:
 | [`../README.md`](../README.md) | Main repository entry point. Short, professional overview. |
 | [`runtime-internals.md`](runtime-internals.md) | Complete technical reference preserved from the original README. |
 | [`enterprise-readiness.md`](enterprise-readiness.md) | Matrix of enterprise AI execution questions and runtime answers. |
+| [`comparison-existing-tools.md`](comparison-existing-tools.md) | Ecosystem positioning against agent frameworks, workflow engines, orchestration tools, observability platforms, and distributed infrastructure. |
 | [`roadmap.md`](roadmap.md) | Project roadmap organized by phases. |
 
 ---
@@ -31,7 +32,8 @@ Start with:
 
 1. [`../README.md`](../README.md)
 2. [`enterprise-readiness.md`](enterprise-readiness.md)
-3. [`roadmap.md`](roadmap.md)
+3. [`comparison-existing-tools.md`](comparison-existing-tools.md)
+4. [`roadmap.md`](roadmap.md)
 
 This path explains what the project is, why it matters, and how it maps to enterprise AI execution problems.
 
@@ -102,6 +104,19 @@ A structured matrix answering key enterprise AI runtime questions:
 - bounded memory/state
 - multi-runtime-instance coordination
 - deterministic convergence
+
+### [`comparison-existing-tools.md`](comparison-existing-tools.md)
+
+A high-level ecosystem positioning document comparing the runtime with existing categories such as:
+
+- agent frameworks
+- workflow engines
+- data orchestration tools
+- observability platforms
+- distributed compute systems
+- infrastructure orchestration
+
+This document does not rank tools. It clarifies where Deterministic AI Runtime fits architecturally.
 
 ### [`roadmap.md`](roadmap.md)
 

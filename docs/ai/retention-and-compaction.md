@@ -845,21 +845,21 @@ Retention can reduce hot state without making required data inaccessible.
 | Capability | Status |
 |---|---|
 | Policy-driven retention engine | Implemented / validated |
-| `config.concurrency` resolution | Implemented / validated |
-| Local `maxDegreeOfParallelism` | Implemented / validated |
-| Distributed concurrency limits | Implemented / validated |
-| Policy-driven concurrency admission | Implemented / validated |
-| Generic `concurrency.throttle` policy | Implemented / validated |
-| Provider throttling | Implemented / validated |
-| Model throttling | Implemented / validated |
-| Operation throttling | Implemented / validated |
-| Step / step-type / pipeline throttle rules | Implemented / validated |
-| Redis ZSET lease model | Implemented / validated |
-| Lease expiration crash safety | Implemented / validated |
-| Redis Lua capacity enforcement | Implemented / validated |
-| Release on failed DAG claim | Implemented / validated |
-| Diagnostic denial reasons | Implemented / validated |
-| Integration with DAG claim flow | Implemented / validated |
+| `config.retention` policy resolution | Implemented / validated |
+| Retention triggers | Implemented / validated |
+| Retention decision flow | Implemented / validated |
+| Compaction strategy | Implemented / validated |
+| Eviction strategy | Implemented / validated |
+| Hybrid retention strategy | Implemented / validated |
+| Payload externalization | Implemented / validated |
+| Redis hot state reduction | Implemented / validated |
+| Resolver-backed rehydration | Implemented / validated |
+| Archive-backed reconstruction foundations | Implemented / validated foundations |
+| Retention observability foundations | Implemented / foundation available |
+| Terminal lifecycle compatibility | Implemented / validated |
+| Replay compatibility foundations | Implemented / validated foundations |
+| Advanced adaptive memory policies | Planned |
+| Rich retention dashboard | Planned |
 
 ---
 

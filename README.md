@@ -23,6 +23,7 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Distributed multi-runtime-instance execution | Added foundations for multiple runtime instances and workers to coordinate through shared Redis-backed execution state. |
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
+| Context resolution and helpers | Added a dedicated helper layer for input bindings, previous step outputs, payload rehydration, provider/model/operation context, policy context, RAG context, and replay-safe helpers. |
 | Documentation restructure | Completed Phase 0 V1 with a shorter README, preserved runtime internals, documentation index, roadmap, enterprise readiness matrix, ecosystem comparison, and focused runtime documentation under `docs/ai/`. |
 
 For detailed changes, see [`CHANGELOG.md`](./CHANGELOG.md) and [`docs/index.md`](docs/index.md).
@@ -398,6 +399,7 @@ The full documentation map is available here:
 - [`docs/index.md`](docs/index.md) — Documentation index and reading guide.
 - [`docs/runtime-internals.md`](docs/runtime-internals.md) — Complete technical reference preserved from the original README.
 - [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md) — Enterprise readiness matrix.
+- [`docs/comparison-existing-tools.md`](docs/comparison-existing-tools.md) — Ecosystem positioning and comparison with existing tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
 
 Focused AI runtime documentation:
