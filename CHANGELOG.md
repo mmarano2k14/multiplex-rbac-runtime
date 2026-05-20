@@ -6,6 +6,211 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.5.0] - 2026-05-20 - Execution Control State / Queue Control / Human-in-the-Loop
+
+### Added
+
+- Added durable execution control state support for runtime-level execution governance.
+- Added `AiExecutionControlState` to separate operator/user/system control state from DAG execution state.
+- Added `AiExecutionControlStatus` with support for:
+  - `None`
+  - `Running`
+  - `Pausing`
+  - `Paused`
+  - `Resuming`
+  - `Cancelling`
+  - `Cancelled`
+  - `WaitingForInput`
+- Added `AiExecutionControlAction` to separate requested control intent from effective runtime state.
+- Added `AiExecutionControlDecision` to centralize runtime decisions for claim blocking, cancellation, and human-input waiting.
+- Added `IAiExecutionControlStore` for durable distributed execution control persistence.
+- Added `IAiExecutionControlService` for high-level execution control operations:
+  - `PauseExecutionAsync`
+  - `MarkPausedAsync`
+  - `ResumeExecutionAsync`
+  - `MarkRunningAsync`
+  - `CancelExecutionAsync`
+  - `MarkWaitingForInputAsync`
+  - `SubmitHumanInputAsync`
+  - `CheckCanAdvanceAsync`
+- Added `IAiExecutionControlGate` as a small runtime-facing control gate used before execution advancement.
+- Added Redis-backed execution control store:
+  - `RedisAiExecutionControlStore`
+  - `RedisExecutionControlKeyBuilder`
+  - `RedisExecutionControlLuaScripts`
+- Added Redis key namespace for control state:
+  - `ai:execution:control:{executionId}`
+- Added optimistic versioning support for distributed-safe execution control updates.
+- Added Redis Lua compare-and-set update for versioned control state transitions.
+- Added atomic `TryCreateAsync` support to safely create control state when it does not yet exist.
+- Added execution control service registration in dependency injection.
+- Added runtime control gate registration in dependency injection.
+
+### Execution Control
+
+- Added execution-level pause support.
+- Pause now stops new DAG step claims for the target `ExecutionId`.
+- Already claimed/running work is allowed to finish safely.
+- Added transition from `Pausing` to `Paused` once the runtime observes that no active claimed or running work remains.
+- Added execution-level resume support.
+- Resume moves an execution into `Resuming`.
+- Runtime claim cycle now normalizes `Resuming` to `Running` once execution advancement is allowed again.
+- Added execution-level cancellation support.
+- Cancellation blocks new claims and marks the execution as cancelling.
+- Added cancellation precedence during DAG finalization.
+- If DAG convergence naturally produces `Completed` while execution control is `Cancelling`, final persisted execution status is now `Cancelled`.
+- Added human-in-the-loop waiting support.
+- Runtime can mark an execution as `WaitingForInput`.
+- Waiting executions block new claims.
+- Human input submission persists input into execution control state.
+- Submitting human input moves execution into `Resuming`.
+- Runtime later normalizes the execution back to `Running`.
+
+### Runtime Integration
+
+- Integrated `IAiExecutionControlGate` into the DAG step claim path.
+- Added control checks before single-step claim.
+- Added control checks before batch-step claim.
+- Control checks now block step claiming for:
+  - `Pausing`
+  - `Paused`
+  - `WaitingForInput`
+  - `Cancelling`
+  - `Cancelled`
+- Control checks allow advancement for:
+  - `None`
+  - `Running`
+  - `Resuming`
+- Added runtime transition handling:
+  - `Pausing` + no active work -> `Paused`
+  - `Resuming` + claim cycle observed -> `Running`
+- Integrated cancellation override into `AiDagExecutionFinalizationService`.
+- Updated finalization so cancelled executions cannot incorrectly converge as completed.
+
+### Controller / Queue Control
+
+- Added controller-level queue pause and resume support.
+- Added `PauseQueueAsync` to `IAiRuntimePipelineBackgroundController`.
+- Added `ResumeQueueAsync` to `IAiRuntimePipelineBackgroundController`.
+- Queue pause prevents new queued runs from starting.
+- Queue pause does not stop already-running executions.
+- Queue resume allows queued runs to start again.
+- Added queued run tracking inside `AiRuntimePipelineBackgroundController`.
+- Added `_queuedRuns` tracking for queued-but-not-started runs.
+- Added `_runningRuns` tracking for started controller runs.
+- Added `CancelQueuedRunAsync` support.
+- Queued runs can now be cancelled before execution creation.
+- Cancelled queued runs do not create a durable `ExecutionId`.
+- Cancelled queued runs complete their handle with `AiExecutionStatus.Cancelled`.
+- Added `CancelRunAsync` support.
+- `CancelRunAsync` cancels queued runs directly when they have not started.
+- `CancelRunAsync` delegates to `IAiExecutionControlService.CancelExecutionAsync` when the run is already running and has an `ExecutionId`.
+- Added RunId-to-ExecutionId cancellation bridge.
+- Running run cancellation now results in durable execution cancellation.
+- Updated controller run terminal handling so final `AiExecutionStatus.Cancelled` maps to `AiRuntimeWorkerRunStatus.Cancelled`.
+- Added hot enqueue behavior validation.
+- Runs can be added while the controller is already processing another run.
+- Runs can be added while the queue is paused and start only after resume.
+
+### Improved
+
+- Improved separation between controller lifecycle and execution lifecycle:
+  - `RunId` is controlled by the background pipeline controller.
+  - `ExecutionId` is controlled by durable execution state and execution control state.
+- Improved state-machine clarity by separating:
+  - requested action
+  - effective runtime control status
+  - runtime decision
+- Improved distributed safety of control transitions using optimistic version checks.
+- Improved finalization correctness under cancellation races.
+- Improved queue control semantics without impacting already-running executions.
+- Improved worker/controller distinction:
+  - queue control belongs to `AiRuntimePipelineBackgroundController`
+  - execution advancement belongs to `AiRuntimeInstanceWorker`
+  - execution state control belongs to `IAiExecutionControlService`
+- Improved cancellation semantics for running controller runs by reusing the existing execution control layer instead of duplicating cancellation logic.
+- Improved test coverage around pause, resume, cancellation, waiting-for-input, queued cancellation, running cancellation, and hot enqueue behavior.
+
+### Tests
+
+- Added Redis execution control store tests:
+  - set/get control state
+  - missing state returns null
+  - versioned update succeeds when expected version matches
+  - versioned update fails when expected version does not match
+  - delete removes control state
+  - waiting-for-input metadata and input are persisted
+- Added execution control service tests:
+  - pause creates pausing state
+  - resume creates resuming state
+  - cancel creates cancelling state
+  - cancellation wins over resume
+  - waiting-for-input blocks advancement
+  - human input submission resumes execution
+  - invalid waiting key throws
+  - no control state allows advancement
+- Added claim-blocking integration tests:
+  - pausing execution does not claim ready work
+  - waiting-for-input execution does not claim ready work
+  - cancelling execution does not claim ready work
+  - no control state claims normally
+  - pausing execution becomes paused after active work drains
+  - paused execution resumes and claims work
+  - waiting-for-input execution resumes after human input
+  - resuming execution becomes running after runtime advancement
+- Added finalization integration test:
+  - cancelling execution overrides natural completed convergence and persists final status as cancelled
+- Added controller queue-control integration tests:
+  - pause queue prevents queued run from starting
+  - resume queue allows queued run to complete
+  - pause queue does not stop already-running execution
+  - cancel queued run before execution creation
+  - cancelling unknown queued run returns false
+  - cancel running run delegates to execution control and persists cancelled status
+  - hot enqueue while controller is running
+  - hot enqueue while queue is paused
+- Revalidated existing distributed scenarios after execution-control integration.
+- Revalidated aggressive chaos scenarios with 100-step and 500-step distributed executions.
+
+### Architecture
+
+- Introduced a clear two-layer control architecture:
+
+  - Layer 1: Controller / Queue / Run Control
+    - `RunId`
+    - queue pause/resume
+    - queued run cancellation
+    - running run cancellation bridge
+    - hot enqueue
+
+  - Layer 2: Execution Control
+    - `ExecutionId`
+    - pause/resume
+    - cancellation
+    - waiting for human input
+    - submit human input
+    - durable Redis control state
+
+- Preserved separation between:
+  - `AiExecutionState` for DAG state, step state, retry state, payload references, and convergence
+  - `AiExecutionControlState` for operator/user/system control state
+- Kept Redis control persistence separate from Redis DAG execution state.
+- Kept execution control separate from controller queue control.
+- Kept cancellation semantics cooperative and deterministic.
+- Avoided hard termination of already running claimed steps.
+- Preserved deterministic convergence and distributed safety.
+
+### Notes
+
+- Queue pause does not pause already-running executions.
+- Execution pause does not cancel already-running claimed steps; it prevents new claims and waits for active work to drain.
+- Queue cancellation before execution creation does not create a durable `ExecutionId`.
+- Running run cancellation uses the existing execution-control layer and therefore follows the same deterministic cancellation/finalization behavior as direct execution cancellation.
+- Human input is persisted in durable execution control state and can later be extended into audit/replay control history.
+- Control state is currently Redis-backed and can later be mirrored into Mongo snapshots or an append-only audit log.
+
+---
+
 ## [1.0.4.9] - 2026-05-18 - Redis DAG Store Refactor / Service Decomposition
 
 ### Added

@@ -4,7 +4,7 @@ A policy-driven .NET runtime for deterministic DAG execution, distributed worker
 
 This repository provides a **reference implementation of a multiplexed, deterministic distributed AI runtime**, demonstrating how to build **observable, fault-tolerant, replayable, and multi-runtime-instance execution systems for production-grade AI workloads**.
 
-[![Version](https://img.shields.io/badge/Version-1.0.4.9-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.5.0-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 
 ---
@@ -2496,6 +2496,718 @@ It provides:
 - metrics and tracing coverage for background executions
 
 This is a major step toward production-grade distributed AI execution infrastructure.
+
+---
+
+## Execution Control State and Runtime Queue Control
+
+Multiplex AI Runtime now includes a dedicated **execution control state** and **runtime queue control** layer.
+
+This feature adds explicit control over both:
+
+```text
+ExecutionId-level runtime execution
+RunId-level background controller queue
+```
+
+The goal is to make long-running AI workflows controllable in production without breaking deterministic DAG execution, distributed worker safety, or replayability.
+
+This introduces a clean separation between:
+
+```text
+Layer 1: Controller / Queue / Run Control
+Layer 2: Execution Control / DAG Execution Control
+```
+
+---
+
+### Why Execution Control Matters
+
+Production AI workflows are not always fire-and-forget.
+
+Real systems often need to:
+
+- pause an execution
+- resume it later
+- cancel an execution safely
+- wait for human approval
+- submit human input
+- pause the queue of future runs
+- cancel queued work before it starts
+- cancel a running controller run
+- add new runs while the controller is already active
+
+Without explicit control state, these behaviors usually become ad-hoc flags, cancellation tokens, or local process state.
+
+That is unsafe in distributed execution.
+
+Multiplex AI Runtime treats control as durable runtime state.
+
+---
+
+### Two-Layer Control Model
+
+The runtime separates control into two layers.
+
+```text
+Layer 1: Controller / Queue / Run Control
+        RunId
+        background controller queue
+        queued runs
+        running controller runs
+        hot enqueue
+        queue pause / resume
+        queued run cancellation
+        running run cancellation bridge
+
+Layer 2: Execution Control
+        ExecutionId
+        DAG execution control state
+        pause / resume
+        cancellation
+        waiting for human input
+        submit human input
+        claim blocking
+        finalization override
+```
+
+This distinction is important.
+
+A `RunId` belongs to the controller lifecycle.
+
+An `ExecutionId` belongs to the durable DAG execution lifecycle.
+
+```text
+RunId != ExecutionId
+```
+
+The controller may receive, queue, cancel, or start a run.
+
+The execution engine owns the deterministic DAG state once an execution exists.
+
+---
+
+### Execution Control State
+
+Execution control state is stored separately from DAG execution state.
+
+The DAG state describes:
+
+- step statuses
+- dependencies
+- retries
+- claim ownership
+- payload references
+- convergence
+
+Execution control state describes:
+
+- whether execution may advance
+- whether claims should be blocked
+- whether cancellation was requested
+- whether human input is required
+- whether the execution is paused or resuming
+
+This avoids mixing operator/user/system control state into the DAG state machine.
+
+---
+
+### Execution Control Statuses
+
+The execution control state supports the following statuses:
+
+```text
+None
+Running
+Pausing
+Paused
+Resuming
+Cancelling
+Cancelled
+WaitingForInput
+```
+
+These statuses represent the effective control state of the execution.
+
+They are separate from the requested action.
+
+---
+
+### Execution Control Actions
+
+Requested actions are tracked separately:
+
+```text
+None
+Pause
+Resume
+Cancel
+WaitForInput
+SubmitInput
+```
+
+This separation makes the state machine clearer.
+
+For example:
+
+```text
+Action = Pause
+Status = Pausing
+```
+
+means a pause was requested, but active claimed work may still be draining.
+
+Once no active work remains:
+
+```text
+Status = Paused
+Action = None
+```
+
+---
+
+### Redis-Backed Durable Control State
+
+Execution control state is persisted in Redis using a dedicated key namespace:
+
+```text
+ai:execution:control:{executionId}
+```
+
+This control state is independent from Redis DAG execution state.
+
+The Redis control store supports:
+
+- get control state
+- create control state only if missing
+- update by optimistic version
+- delete control state
+
+Distributed-safe updates are implemented with Redis Lua compare-and-set behavior.
+
+This prevents multiple workers or operators from overwriting each other’s control transitions.
+
+---
+
+### Execution Control Service
+
+The execution control service provides high-level operations:
+
+```csharp
+await controlService.PauseExecutionAsync(executionId);
+
+await controlService.ResumeExecutionAsync(executionId);
+
+await controlService.CancelExecutionAsync(executionId);
+
+await controlService.MarkWaitingForInputAsync(
+    executionId,
+    waitingKey: "approval:pricing",
+    waitingStepName: "human-approval");
+
+await controlService.SubmitHumanInputAsync(
+    executionId,
+    waitingKey: "approval:pricing",
+    input: new Dictionary<string, object?>
+    {
+        ["approved"] = true,
+        ["comment"] = "Approved by operator"
+    });
+```
+
+The service owns the durable state transitions.
+
+The execution engine does not embed pause, resume, cancel, or human-input logic directly.
+
+Instead, it asks the runtime control gate whether execution may advance.
+
+---
+
+### Runtime Control Gate
+
+The runtime uses a small control gate before advancing execution work.
+
+```text
+Execution worker
+        ↓
+Execution control gate
+        ↓
+Can this ExecutionId claim or advance work?
+        ↓
+Yes → continue claim flow
+No  → stop claiming
+```
+
+The control gate returns a decision describing whether:
+
+- execution may continue
+- new claims should stop
+- cancellation should be applied
+- execution is waiting for input
+
+This keeps the claim path clean and avoids duplicating control logic across runners and workers.
+
+---
+
+### Claim Blocking
+
+Control state is evaluated before Redis DAG step claiming.
+
+The runtime blocks new claims for:
+
+```text
+Pausing
+Paused
+WaitingForInput
+Cancelling
+Cancelled
+```
+
+The runtime allows advancement for:
+
+```text
+None
+Running
+Resuming
+```
+
+This means an execution can be paused or cancelled without corrupting DAG state.
+
+Already claimed work may finish safely.
+
+New work will not be claimed while the execution is controlled.
+
+---
+
+### Pause and Resume Behavior
+
+Pause is cooperative and deterministic.
+
+```text
+PauseExecutionAsync
+        ↓
+Status = Pausing
+        ↓
+new claims are blocked
+        ↓
+already claimed work may finish
+        ↓
+runtime observes no active claimed/running work
+        ↓
+Status = Paused
+```
+
+Resume follows the opposite flow:
+
+```text
+ResumeExecutionAsync
+        ↓
+Status = Resuming
+        ↓
+claims are allowed again
+        ↓
+runtime observes advancement
+        ↓
+Status = Running
+```
+
+This makes pause/resume safe for distributed workers.
+
+The runtime does not kill running steps.
+
+It prevents new work from being claimed and waits for active work to drain.
+
+---
+
+### Human-in-the-Loop Execution
+
+The runtime can stop an execution and wait for external input.
+
+```text
+MarkWaitingForInputAsync
+        ↓
+Status = WaitingForInput
+        ↓
+claims are blocked
+        ↓
+operator or external system submits input
+        ↓
+SubmitHumanInputAsync
+        ↓
+Status = Resuming
+        ↓
+runtime marks execution Running on next advancement
+```
+
+Submitted input is stored in durable execution control state.
+
+This creates a foundation for:
+
+- human approval
+- manual review
+- external decision gates
+- compliance checkpoints
+- operator intervention
+
+---
+
+### Cancellation Behavior
+
+Execution cancellation is cooperative and deterministic.
+
+```text
+CancelExecutionAsync
+        ↓
+Status = Cancelling
+        ↓
+new claims are blocked
+        ↓
+already claimed work may finish
+        ↓
+finalization observes cancellation
+        ↓
+final persisted execution status = Cancelled
+```
+
+Cancellation also overrides natural DAG completion during finalization.
+
+This is important for races such as:
+
+```text
+Cancellation requested
+        +
+already claimed step completes successfully
+        +
+DAG convergence says Completed
+        ↓
+final persisted status = Cancelled
+```
+
+This prevents cancelled executions from incorrectly converging as completed.
+
+---
+
+### Controller Queue Control
+
+The background controller now supports queue-level control.
+
+Queue control operates at `RunId` level, before or around execution creation.
+
+It is separate from `ExecutionId` control.
+
+Supported controller operations:
+
+```csharp
+await controller.PauseQueueAsync(
+    reason: "maintenance window",
+    requestedBy: "operator");
+
+await controller.ResumeQueueAsync(
+    requestedBy: "operator");
+
+await controller.CancelQueuedRunAsync(
+    runId,
+    reason: "cancel before start",
+    requestedBy: "operator");
+
+await controller.CancelRunAsync(
+    runId,
+    reason: "cancel running run",
+    requestedBy: "operator");
+```
+
+---
+
+### Queue Pause and Resume
+
+Queue pause prevents new queued runs from starting.
+
+It does not pause already-running executions.
+
+```text
+PauseQueueAsync
+        ↓
+queued runs remain Queued
+        ↓
+no ExecutionId is created
+        ↓
+already-running executions continue
+        ↓
+ResumeQueueAsync
+        ↓
+queued runs may start
+```
+
+This allows operators to temporarily stop new work from starting without interrupting active executions.
+
+---
+
+### Queued Run Cancellation
+
+A queued run can be cancelled before execution creation.
+
+```text
+CancelQueuedRunAsync(runId)
+        ↓
+run status = Cancelled
+        ↓
+completion returns Cancelled
+        ↓
+ExecutionId remains empty
+        ↓
+no DAG state is created
+```
+
+This is controller-level cancellation.
+
+It does not need execution control because no durable execution exists yet.
+
+---
+
+### Running Run Cancellation
+
+A running controller run has both:
+
+```text
+RunId
+ExecutionId
+```
+
+When `CancelRunAsync(runId)` is called for a running run, the controller bridges to the execution control layer.
+
+```text
+CancelRunAsync(runId)
+        ↓
+find running run
+        ↓
+read ExecutionId from handle
+        ↓
+IAiExecutionControlService.CancelExecutionAsync(executionId)
+        ↓
+execution control handles deterministic cancellation
+        ↓
+final status = Cancelled
+```
+
+This avoids duplicating cancellation logic in the controller.
+
+The controller owns `RunId`.
+
+The execution control service owns `ExecutionId`.
+
+---
+
+### Hot Enqueue
+
+The controller supports hot enqueue behavior.
+
+A run can be added while:
+
+- the controller is already running
+- another run is currently executing
+- the queue is paused
+
+Examples:
+
+```text
+Run A is running
+        ↓
+Run B is enqueued dynamically
+        ↓
+Run B waits in queue
+        ↓
+Run A completes
+        ↓
+Run B starts automatically
+```
+
+When the queue is paused:
+
+```text
+Queue paused
+        ↓
+Run A enqueued
+Run B enqueued
+        ↓
+both remain Queued
+        ↓
+no ExecutionId is created
+        ↓
+queue resumed
+        ↓
+runs start normally
+```
+
+This makes the background controller usable as a real runtime work queue.
+
+---
+
+### Example: Queue Pause, Enqueue, Resume
+
+```csharp
+var controller = serviceProvider
+    .GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+await controller.StartAsync();
+
+await controller.PauseQueueAsync(
+    reason: "operator pause",
+    requestedBy: "admin");
+
+var handle = await controller.EnqueueAsync(
+    new AiRuntimePipelineRunRequest
+    {
+        PipelineName = "approval-pipeline",
+        PipelineDefinition = pipelineDefinition,
+        Input = new
+        {
+            candidateId = "candidate-001"
+        }
+    });
+
+// Still queued. No ExecutionId has been created yet.
+Console.WriteLine(handle.Status);      // Queued
+Console.WriteLine(handle.ExecutionId); // null / empty
+
+await controller.ResumeQueueAsync(
+    requestedBy: "admin");
+
+var final = await handle.Completion;
+```
+
+---
+
+## Example: Cancel Queued Run
+
+```csharp
+await controller.PauseQueueAsync();
+
+var handle = await controller.EnqueueAsync(
+    new AiRuntimePipelineRunRequest
+    {
+        PipelineName = "approval-pipeline",
+        PipelineDefinition = pipelineDefinition
+    });
+
+var cancelled = await controller.CancelQueuedRunAsync(
+    handle.RunId,
+    reason: "user cancelled request",
+    requestedBy: "api");
+
+var final = await handle.Completion;
+```
+
+Expected behavior:
+
+```text
+cancelled = true
+handle.Status = Cancelled
+handle.ExecutionId = empty
+final.Status = Cancelled
+```
+
+---
+
+### Example: Cancel Running Run
+
+```csharp
+var handle = await controller.EnqueueAsync(
+    new AiRuntimePipelineRunRequest
+    {
+        PipelineName = "long-running-pipeline",
+        PipelineDefinition = pipelineDefinition
+    });
+
+await WaitUntilExecutionIdExists(handle);
+
+await controller.CancelRunAsync(
+    handle.RunId,
+    reason: "operator cancellation",
+    requestedBy: "admin");
+
+var final = await handle.Completion;
+```
+
+Expected behavior:
+
+```text
+handle.RunId exists
+handle.ExecutionId exists
+CancelRunAsync delegates to execution control
+final.Status = Cancelled
+handle.Status = Cancelled
+```
+
+---
+
+### Validated Behavior
+
+The execution-control and queue-control implementation is validated by integration tests covering:
+
+- Redis control state persistence
+- optimistic Redis version updates
+- execution pause
+- execution resume
+- execution cancellation
+- waiting for human input
+- human input submission
+- control-based claim blocking
+- `Pausing -> Paused`
+- `Resuming -> Running`
+- cancellation override during finalization
+- queue pause
+- queue resume
+- queued run cancellation
+- unknown queued run cancellation
+- running run cancellation
+- hot enqueue while controller is running
+- hot enqueue while queue is paused
+- chaos scenarios with distributed execution
+
+---
+
+### Why This Matters
+
+This feature turns the runtime from an executor into a controllable execution platform.
+
+It allows the system to answer production questions such as:
+
+```text
+Can I pause this execution safely?
+Can I resume it later?
+Can I cancel it without corrupting state?
+Can I wait for human approval?
+Can I stop new queued runs from starting?
+Can I cancel work before it creates state?
+Can I cancel a running controller run?
+Can I add work dynamically while the runtime is already active?
+```
+
+The answer is now yes, with explicit state, durable transitions, and deterministic behavior.
+
+---
+
+### Summary
+
+Execution control and queue control provide:
+
+- durable `ExecutionId` control state
+- controller-level `RunId` control
+- safe pause/resume
+- safe cancellation
+- human-in-the-loop support
+- claim blocking
+- deterministic cancellation finalization
+- queue pause/resume
+- queued run cancellation
+- running run cancellation bridge
+- hot enqueue support
+
+This adds an important control-plane layer on top of the deterministic distributed AI runtime.
+
+The runtime is no longer only able to execute workflows.
+
+It can now control them.
 
 ---
 
