@@ -181,7 +181,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 // The second retry should have been scheduled exactly once.
                 Assert.Equal(AiStepExecutionStatus.WaitingForRetry, midStep.Status);
                 Assert.Equal(2, midStep.RetryState?.RetryCount);
-                Assert.Equal(2, midStep.Retry.MaxRetries);
+                Assert.Equal(2, midStep!.Retry!.MaxRetries);
                 Assert.True(midStep.RetryState?.NextRetryAtUtc.HasValue);
 
                 // Ensure no double-consumption occurred.
@@ -281,25 +281,29 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.RetryState?.NextRetryAtUtc.HasValue ?? true)
+                var nextRetryAtUtc = step.RetryState?.NextRetryAtUtc;
+
+                if (!nextRetryAtUtc.HasValue)
                 {
                     return;
                 }
 
-                var delay = step.RetryState?.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = nextRetryAtUtc.Value - DateTime.UtcNow;
+
                 if (delay <= TimeSpan.Zero)
                 {
                     return;
                 }
 
                 var wait = delay < TimeSpan.FromMilliseconds(50)
-                    ? delay
-                    : TimeSpan.FromMilliseconds(50);
+                     ? delay
+                     : TimeSpan.FromMilliseconds(50);
 
                 if (wait > TimeSpan.Zero)
                 {
-                    await Task.Delay(wait.Value, cancellationToken);
+                    await Task.Delay(wait, cancellationToken);
                 }
+
             }
 
             throw new TimeoutException(

@@ -804,11 +804,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
         }
 
         private static T GetRequiredService<T>(AiSequentialExecutionEngine engine)
+            where T : notnull
         {
             var property = typeof(AiExecutionEngine)
-                .GetProperty("Services", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                .GetProperty(
+                    "Services",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance);
 
-            var provider = (IServiceProvider)property!.GetValue(engine)!;
+            if (property?.GetValue(engine) is not IServiceProvider provider)
+            {
+                throw new InvalidOperationException(
+                    "Unable to access engine services.");
+            }
 
             return provider.GetRequiredService<T>();
         }

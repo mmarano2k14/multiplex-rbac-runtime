@@ -54,7 +54,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                 var json = JsonSerializer.Serialize(value);
                 var size = json.Length;
 
-                Console.WriteLine($"PAYLOAD POLICY CALLED size={size} valueType={value.GetType().FullName}");
+                // Console.WriteLine($"PAYLOAD POLICY CALLED size={size} valueType={value.GetType().FullName}");
 
                 if (size <= _options.MaxInlineSizeBytes)
                 {

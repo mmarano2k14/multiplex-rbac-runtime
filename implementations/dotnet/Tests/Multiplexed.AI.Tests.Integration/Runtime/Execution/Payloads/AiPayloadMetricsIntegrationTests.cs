@@ -127,7 +127,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
             }
 
             public Task<AiStoredPayload> StoreAsync(
-                object value,
+                object? value,
                 CancellationToken cancellationToken = default)
             {
                 var sizeBytes = EstimateSizeBytes(value);
@@ -143,8 +143,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Payloads
                 });
             }
 
-            private static long EstimateSizeBytes(object value)
+            private static long EstimateSizeBytes(object? value)
             {
+                if (value is null)
+                {
+                    return 0;
+                }
+
                 if (value is Dictionary<string, object?> dictionary &&
                     dictionary.TryGetValue("content", out var content) &&
                     content is string text)

@@ -194,7 +194,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Empty(decision.StepsToCompact);
+            Assert.Empty(decision!.StepsToCompact);
         }
 
         /// <summary>
@@ -228,10 +228,10 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Contains("failed", decision.StepsToEvict);
-            Assert.Contains("completed", decision.StepsToEvict);
+            Assert.Contains("failed", decision!.StepsToEvict);
+            Assert.Contains("completed", decision!.StepsToEvict);
 
-            Assert.DoesNotContain("running", decision.StepsToEvict);
+            Assert.DoesNotContain("running", decision!.StepsToEvict);
         }
 
         /// <summary>
@@ -259,7 +259,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Equal(3, decision.StepsToCompact.Count);
+            Assert.Equal(3, decision!.StepsToCompact.Count);
         }
 
         /// <summary>

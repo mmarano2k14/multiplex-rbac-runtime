@@ -228,7 +228,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
                     return false;
                 }
 
-                stepState.PromoteRetryToReadyIfDue(utcNow);
+                stepState!.PromoteRetryToReadyIfDue(utcNow);
             }
 
             if (step.DependsOn.Count > 0)
@@ -297,7 +297,7 @@ namespace Multiplexed.AI.Runtime.Pipeline
                     return false;
                 }
 
-                stepState.PromoteRetryToReadyIfDue(utcNow);
+                stepState!.PromoteRetryToReadyIfDue(utcNow);
             }
 
             if (step.DependsOn.Count > 0)

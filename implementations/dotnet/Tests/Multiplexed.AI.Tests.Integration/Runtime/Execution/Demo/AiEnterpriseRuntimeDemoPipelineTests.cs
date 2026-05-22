@@ -13,6 +13,7 @@ using Multiplexed.AI.Tests.Integration.Infrastructure;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
 using Multiplexed.Sample.External.Plugins.Steps.Steps;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Demo
 {
@@ -22,6 +23,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Demo
     [Collection("redis")]
     public sealed class AiEnterpriseRuntimeDemoPipelineTests
     {
+        private readonly ITestOutputHelper _output;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiEnterpriseRuntimeDemoPipelineTests"/> class.
+        /// </summary>
+        /// <param name="output">The xUnit output helper.</param>
+        public AiEnterpriseRuntimeDemoPipelineTests(
+            ITestOutputHelper output)
+        {
+            _output = output ?? throw new ArgumentNullException(nameof(output));
+        }
+
         /// <summary>
         /// Verifies that the enterprise demo pipeline can be executed through the
         /// background controller with distributed runtime workers.
@@ -116,6 +129,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Demo
                 Assert.True(
                     workerCycles.Count >= 2,
                     $"Expected at least two distributed runtime workers to participate, but only '{workerCycles.Count}' reported activity.");
+
+                _output.WriteLine(
+                    $"Enterprise demo completed. RunId='{handle.RunId}', ExecutionId='{handle.ExecutionId}', CompletedSteps='{final.CompletedSteps.Count}', Status='{final.Status}'.");
+
+                foreach (var item in workerCycles.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"RuntimeInstanceId='{item.Key}', Cycles='{item.Value}'.");
+                }
             }
             finally
             {
@@ -203,6 +225,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Demo
                 Assert.True(
                     retriedStep.RetryState!.RetryCount >= 1,
                     $"Expected step '{retriedStepName}' to be retried at least once.");
+
+                _output.WriteLine(
+                    $"Flaky demo step recovered. ExecutionId='{handle.ExecutionId}', Step='{retriedStepName}', RetryCount='{retriedStep.RetryState!.RetryCount}'.");
             }
             finally
             {

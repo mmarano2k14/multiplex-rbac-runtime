@@ -380,7 +380,8 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                         Result = new AiStepResult
                         {
                             Success = true,
-                            Data = payload.InlineValue as Dictionary<string, object?>
+                            Data = payload?.InlineValue as Dictionary<string, object?>
+                                ?? new Dictionary<string, object?>()
                         }
                     });
             }

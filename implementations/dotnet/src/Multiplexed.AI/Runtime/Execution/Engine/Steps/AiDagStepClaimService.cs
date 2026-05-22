@@ -116,7 +116,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 throw new InvalidOperationException("Distributed DAG store is not configured.");
             }
 
+            /*
             if (!await CanAdvanceExecutionAsync(executionId, workerId, cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+            */
+
+            var controlDecision = await CheckExecutionControlAsync(
+                                    executionId,
+                                    workerId,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+            if (controlDecision.ShouldCancel)
+            {
+                return null;
+            }
+
+            if (!controlDecision.CanContinue)
             {
                 return null;
             }
@@ -271,6 +289,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             ArgumentOutOfRangeException.ThrowIfLessThan(maxSteps, 1);
 
             if (_services.DagStore is null)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            /*
+            if (!await CanAdvanceExecutionAsync(executionId, workerId, cancellationToken).ConfigureAwait(false))
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+            */
+
+            var controlDecision = await CheckExecutionControlAsync(
+                                            executionId,
+                                            workerId,
+                                            cancellationToken)
+                                        .ConfigureAwait(false);
+
+            if (controlDecision.ShouldCancel)
+            {
+                return Array.Empty<AiClaimedStep>();
+            }
+
+            if (!controlDecision.CanContinue)
             {
                 return Array.Empty<AiClaimedStep>();
             }
@@ -926,6 +967,62 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 _services.Logger.Engine.LogInformation(
                     $"[AI DAG] Execution resumed and marked as running. ExecutionId='{executionId}', WorkerId='{workerId}', ControlStatus='{running.Status}'.");
             }
+        }
+
+
+        /// <summary>
+        /// Checks whether the execution is currently allowed to claim or advance work.
+        /// </summary>
+        /// <param name="executionId">
+        /// The durable execution identifier.
+        /// </param>
+        /// <param name="workerId">
+        /// The runtime worker identifier.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The durable execution control decision.
+        /// </returns>
+        private async Task<AiExecutionControlDecision> CheckExecutionControlAsync(
+            string executionId,
+            string workerId,
+            CancellationToken cancellationToken)
+        {
+            var decision = await _services.ExecutionControlGate
+                .CheckBeforeAdvanceAsync(
+                    executionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (decision.CanContinue)
+            {
+                if (decision.Status == AiExecutionControlStatus.Resuming)
+                {
+                    await MarkRunningIfExecutionIsResumingAsync(
+                            executionId,
+                            workerId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                return decision;
+            }
+
+            if (decision.Status == AiExecutionControlStatus.Pausing)
+            {
+                await MarkPausedIfExecutionHasDrainedAsync(
+                        executionId,
+                        workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            _services.Logger.Engine.LogInformation(
+                $"[AI DAG] Execution advancement blocked by control state. ExecutionId='{executionId}', WorkerId='{workerId}', Status='{decision.Status}', StopClaiming='{decision.ShouldStopClaiming}', ShouldCancel='{decision.ShouldCancel}', WaitingForInput='{decision.IsWaitingForInput}', Reason='{decision.Reason}'.");
+
+            return decision;
         }
     }
 }

@@ -1,0 +1,566 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
+using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.Core.ExecutionContext;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
+using Multiplexed.AI.Stores;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Control;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Persistence;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Progress;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Replay;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retention;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retry;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Validation;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios.Chaos;
+
+namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
+{
+    /// <summary>
+    /// Executes enterprise runtime pipeline requests.
+    /// </summary>
+    public sealed class EnterpriseRuntimeExecutionRunner
+    {
+        private readonly IServiceProvider _serviceProvider;
+        private readonly EnterpriseRuntimeExecutionReporter _reporter;
+        private readonly EnterpriseRuntimeExecutionPersistenceLoader _persistenceLoader;
+        private readonly EnterpriseRuntimeRetryAnalyzer _retryAnalyzer;
+        private readonly EnterpriseRuntimeRetentionAnalyzer _retentionAnalyzer;
+        private readonly EnterpriseRuntimeExecutionProgressMonitor _progressMonitor;
+        private readonly EnterpriseRuntimeExecutionControlHotkeyListener _controlHotkeyListener;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="EnterpriseRuntimeExecutionRunner"/> class.
+        /// </summary>
+        /// <param name="serviceProvider">
+        /// The service provider.
+        /// </param>
+        /// <param name="reporter">
+        /// The execution reporter.
+        /// </param>
+        /// <param name="persistenceLoader">
+        /// The execution persistence loader.
+        /// </param>
+        /// <param name="retryAnalyzer">
+        /// The execution retry analyzer.
+        /// </param>
+        /// <param name="retentionAnalyzer">
+        /// The execution retention analyzer.
+        /// </param>
+        /// <param name="progressMonitor">
+        /// The execution progress monitor.
+        /// </param>
+        /// <param name="controlHotkeyListener">
+        /// The execution control hotkey listener.
+        /// </param>
+        public EnterpriseRuntimeExecutionRunner(
+            IServiceProvider serviceProvider,
+            EnterpriseRuntimeExecutionReporter reporter,
+            EnterpriseRuntimeExecutionPersistenceLoader persistenceLoader,
+            EnterpriseRuntimeRetryAnalyzer retryAnalyzer,
+            EnterpriseRuntimeRetentionAnalyzer retentionAnalyzer,
+            EnterpriseRuntimeExecutionProgressMonitor progressMonitor,
+            EnterpriseRuntimeExecutionControlHotkeyListener controlHotkeyListener)
+        {
+            _serviceProvider = serviceProvider;
+            _reporter = reporter;
+            _persistenceLoader = persistenceLoader;
+            _retryAnalyzer = retryAnalyzer;
+            _retentionAnalyzer = retentionAnalyzer;
+            _progressMonitor = progressMonitor;
+            _controlHotkeyListener = controlHotkeyListener;
+        }
+
+        /// <summary>
+        /// Runs an enterprise runtime execution request.
+        /// </summary>
+        /// <param name="request">
+        /// The execution request.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The scenario execution result.
+        /// </returns>
+        public async Task<EnterpriseRuntimeScenarioResult> RunAsync(
+            EnterpriseRuntimeExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(
+                request);
+
+            var startedAtUtc = DateTime.UtcNow;
+
+            var controller = _serviceProvider
+                .GetRequiredService<IAiRuntimePipelineBackgroundController>();
+
+            var dagStore = _serviceProvider
+                .GetRequiredService<IAiDagExecutionStore>();
+
+            var resolver = _serviceProvider
+                .GetRequiredService<IAiExecutionStepResolver>();
+
+            var metrics = _serviceProvider
+                .GetRequiredService<IAiRuntimeMetrics>();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                Console.WriteLine("Starting background controller...");
+
+                await controller.StartAsync()
+                    .ConfigureAwait(false);
+
+                Console.WriteLine("Enqueuing enterprise runtime execution...");
+                Console.WriteLine();
+
+                handle = await EnqueueAsync(
+                        controller,
+                        request,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                Console.WriteLine($"RunId:       {handle.RunId}");
+                Console.WriteLine("ExecutionId: waiting for execution creation...");
+                Console.WriteLine();
+
+                using var runnerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+                using var progressCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+
+                var progressTask = _progressMonitor.MonitorAsync(
+                    handle,
+                    request,
+                    dagStore,
+                    metrics,
+                    progressCancellation.Token);
+
+                using var controlCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+
+                var controlTask = _controlHotkeyListener.ListenAsync(
+                    handle,
+                    runnerCancellation,
+                    controlCancellation.Token);
+
+                AiExecutionRecord final;
+
+                try
+                {
+                    final = await handle.Completion.WaitAsync(
+                            request.Timeout,
+                            runnerCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (
+                    runnerCancellation.IsCancellationRequested &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    await progressCancellation.CancelAsync()
+                        .ConfigureAwait(false);
+
+                    await SuppressProgressMonitorCancellationAsync(
+                            progressTask)
+                        .ConfigureAwait(false);
+
+                    await controlCancellation.CancelAsync()
+                        .ConfigureAwait(false);
+
+                    await SuppressControlListenerCancellationAsync(
+                            controlTask)
+                        .ConfigureAwait(false);
+
+                    Console.WriteLine();
+
+                    return EnterpriseRuntimeScenarioResult.Completed(
+                        DateTime.UtcNow - startedAtUtc,
+                        $"Scenario '{request.ScenarioName}' cancelled by console.");
+                }
+
+                await progressCancellation.CancelAsync()
+                    .ConfigureAwait(false);
+
+                await SuppressProgressMonitorCancellationAsync(
+                        progressTask)
+                    .ConfigureAwait(false);
+
+                await controlCancellation.CancelAsync()
+                    .ConfigureAwait(false);
+
+                await SuppressControlListenerCancellationAsync(
+                        controlTask)
+                    .ConfigureAwait(false);
+
+                Console.WriteLine();
+
+                if (string.IsNullOrWhiteSpace(handle.ExecutionId))
+                {
+                    throw new InvalidOperationException(
+                        "The execution completed without producing an ExecutionId.");
+                }
+
+                var persistedRecord = await _persistenceLoader.LoadPersistedRecordAsync(
+                        dagStore,
+                        handle.ExecutionId)
+                    .ConfigureAwait(false);
+
+                var persistedState = await _persistenceLoader.LoadPersistedStateAsync(
+                        dagStore,
+                        handle.ExecutionId)
+                    .ConfigureAwait(false);
+
+                EnterpriseRuntimeRetentionValidator.ValidateHotStateLimit(
+                    persistedState,
+                    request);
+
+                var retentionSummary = _retentionAnalyzer.Analyze(
+                    persistedState,
+                    request);
+
+                var retrySummary = await _retryAnalyzer.AnalyzeAsync(
+                        resolver,
+                        handle.ExecutionId,
+                        persistedState,
+                        request,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+
+                EnterpriseRuntimeExecutionValidator.Validate(
+                    final,
+                    persistedRecord,
+                    workerCycles.Count,
+                    retrySummary.MinimumRetryCount,
+                    request);
+
+                _reporter.PrintExecutionSummary(
+                    handle,
+                    final);
+
+                _reporter.PrintWorkerSummary(
+                    workerCycles);
+
+                _reporter.PrintRetrySummary(
+                    request,
+                    retrySummary);
+
+                _reporter.PrintRetentionSummary(
+                    retentionSummary);
+
+                _reporter.PrintValidationSummary();
+
+                if (request.ValidateReplay &&
+                    request.ChaosScenario is not null)
+                {
+                    await ValidateReplayAsync(
+                            request,
+                            handle.ExecutionId,
+                            persistedRecord,
+                            persistedState,
+                            resolver,
+                            dagStore,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                return EnterpriseRuntimeScenarioResult.Completed(
+                    DateTime.UtcNow - startedAtUtc,
+                    $"Scenario '{request.ScenarioName}' completed.");
+            }
+            finally
+            {
+                Console.WriteLine();
+                Console.WriteLine("Stopping background controller...");
+
+                await controller.StopAsync()
+                    .ConfigureAwait(false);
+
+                if (request.CleanupExecutionBundle &&
+                    !string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    Console.WriteLine("Cleaning up execution bundle...");
+
+                    await dagStore.DeleteExecutionBundleAsync(
+                            handle.ExecutionId)
+                        .ConfigureAwait(false);
+                }
+
+                Console.WriteLine("Execution runner finished.");
+            }
+        }
+
+        /// <summary>
+        /// Enqueues an enterprise runtime pipeline execution.
+        /// </summary>
+        /// <param name="controller">
+        /// The background controller.
+        /// </param>
+        /// <param name="request">
+        /// The execution request.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        /// <returns>
+        /// The created worker run handle.
+        /// </returns>
+        private static async Task<AiRuntimeWorkerRunHandle> EnqueueAsync(
+            IAiRuntimePipelineBackgroundController controller,
+            EnterpriseRuntimeExecutionRequest request,
+            CancellationToken cancellationToken)
+        {
+            var pipelineRequest = request.PipelineInput switch
+            {
+                { PipelineJsonFilePath: not null } => new AiRuntimePipelineRunRequest
+                {
+                    PipelineName = request.PipelineName,
+                    PipelineJsonFilePath = request.PipelineInput.PipelineJsonFilePath,
+                    Input = request.Input
+                },
+
+                { PipelineJsonText: not null } => new AiRuntimePipelineRunRequest
+                {
+                    PipelineName = request.PipelineName,
+                    PipelineJson = request.PipelineInput.PipelineJsonText,
+                    Input = request.Input
+                },
+
+                { PipelineDefinition: not null } => new AiRuntimePipelineRunRequest
+                {
+                    PipelineName = request.PipelineName,
+                    PipelineDefinition = request.PipelineInput.PipelineDefinition,
+                    Input = request.Input
+                },
+
+                _ => throw new InvalidOperationException(
+                    "The execution request does not contain a valid pipeline input.")
+            };
+
+            return await controller.EnqueueAsync(
+                    pipelineRequest,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Suppresses expected progress monitor cancellation.
+        /// </summary>
+        /// <param name="progressTask">
+        /// The progress monitor task.
+        /// </param>
+        private static async Task SuppressProgressMonitorCancellationAsync(
+            Task progressTask)
+        {
+            try
+            {
+                await progressTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when execution completes and the progress monitor is stopped.
+            }
+        }
+
+        /// <summary>
+        /// Suppresses expected control listener cancellation.
+        /// </summary>
+        /// <param name="controlTask">
+        /// The control listener task.
+        /// </param>
+        private static async Task SuppressControlListenerCancellationAsync(
+            Task controlTask)
+        {
+            try
+            {
+                await controlTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when execution completes and the control listener is stopped.
+            }
+        }
+
+        /// <summary>
+        /// Validates snapshot persistence, replay restoration, and replay fingerprint consistency.
+        /// </summary>
+        /// <param name="request">
+        /// The execution request.
+        /// </param>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="persistedRecord">
+        /// The persisted execution record captured before replay.
+        /// </param>
+        /// <param name="persistedState">
+        /// The persisted execution state captured before replay.
+        /// </param>
+        /// <param name="resolver">
+        /// The execution step resolver.
+        /// </param>
+        /// <param name="dagStore">
+        /// The DAG execution store.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The cancellation token.
+        /// </param>
+        private async Task ValidateReplayAsync(
+            EnterpriseRuntimeExecutionRequest request,
+            string executionId,
+            AiExecutionRecord persistedRecord,
+            AiExecutionState persistedState,
+            IAiExecutionStepResolver resolver,
+            IAiDagExecutionStore dagStore,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(
+                request);
+
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                executionId);
+
+            ArgumentNullException.ThrowIfNull(
+                persistedRecord);
+
+            ArgumentNullException.ThrowIfNull(
+                persistedState);
+
+            ArgumentNullException.ThrowIfNull(
+                resolver);
+
+            ArgumentNullException.ThrowIfNull(
+                dagStore);
+
+            if (request.ChaosScenario is null)
+            {
+                return;
+            }
+
+            var finalizedHook = _serviceProvider
+                .GetRequiredService<DistributedChaosRunFinalizedHook>();
+
+            var replayService = _serviceProvider
+                .GetRequiredService<IAiExecutionReplayService>();
+
+            var snapshotStore = _serviceProvider
+                .GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>();
+
+            Console.WriteLine();
+            Console.WriteLine("Replay validation");
+            Console.WriteLine("-----------------");
+
+            var finalized = await finalizedHook.WaitAsync(
+                    request.ChaosScenario.SnapshotWaitTimeout)
+                .ConfigureAwait(false);
+
+            if (!string.Equals(
+                    executionId,
+                    finalized.ExecutionId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Finalized execution mismatch. Expected='{executionId}', Actual='{finalized.ExecutionId}'.");
+            }
+
+            var snapshot = await snapshotStore.GetAsync(
+                    executionId)
+                .ConfigureAwait(false);
+
+            if (snapshot is null)
+            {
+                throw new InvalidOperationException(
+                    $"Expected terminal snapshot for execution '{executionId}', but no snapshot was found.");
+            }
+
+            await resolver.WarmAsync(
+                    executionId,
+                    persistedState,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var beforeReplayFingerprint = await EnterpriseRuntimeReplayValidator.CreateFingerprintAsync(
+                    request.ChaosScenario,
+                    executionId,
+                    persistedRecord,
+                    persistedState,
+                    resolver,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await dagStore.DeleteExecutionBundleAsync(
+                    executionId)
+                .ConfigureAwait(false);
+
+            var deletedRecord = await dagStore.GetRecordAsync(
+                    executionId)
+                .ConfigureAwait(false);
+
+            var deletedState = await dagStore.GetStateAsync(
+                    executionId)
+                .ConfigureAwait(false);
+
+            if (deletedRecord is not null ||
+                deletedState is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Expected live execution bundle '{executionId}' to be deleted before replay.");
+            }
+
+            var replayResult = await replayService.ReplayAsync(
+                    executionId)
+                .ConfigureAwait(false);
+
+            if (!replayResult.Restored)
+            {
+                throw new InvalidOperationException(
+                    $"Expected replay to restore execution '{executionId}'.");
+            }
+
+            if (replayResult.AlreadyExists)
+            {
+                throw new InvalidOperationException(
+                    $"Expected replay to restore a deleted execution '{executionId}', but it already existed.");
+            }
+
+            var restoredRecord = await _persistenceLoader.LoadPersistedRecordAsync(
+                    dagStore,
+                    executionId)
+                .ConfigureAwait(false);
+
+            var restoredState = await _persistenceLoader.LoadPersistedStateAsync(
+                    dagStore,
+                    executionId)
+                .ConfigureAwait(false);
+
+            await resolver.WarmAsync(
+                    executionId,
+                    restoredState,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var afterReplayFingerprint = await EnterpriseRuntimeReplayValidator.CreateFingerprintAsync(
+                    request.ChaosScenario,
+                    executionId,
+                    restoredRecord,
+                    restoredState,
+                    resolver,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            EnterpriseRuntimeReplayValidator.ValidateMatch(
+                beforeReplayFingerprint,
+                afterReplayFingerprint);
+
+            Console.WriteLine("Snapshot created: true");
+            Console.WriteLine("Replay restored:  true");
+            Console.WriteLine("Fingerprint match: true");
+            Console.WriteLine();
+        }
+    }
+}

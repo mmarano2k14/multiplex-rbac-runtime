@@ -578,12 +578,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
                 var step = stateWriter.GetOrCreateStep(state, stepName);
 
-                if (!step.RetryState?.NextRetryAtUtc.HasValue ?? true)
+                var nextRetryAtUtc = step.RetryState?.NextRetryAtUtc;
+
+                if (!nextRetryAtUtc.HasValue)
                 {
                     return;
                 }
 
-                var delay = step.RetryState!.NextRetryAtUtc.Value - DateTime.UtcNow;
+                var delay = nextRetryAtUtc.Value - DateTime.UtcNow;
+
                 if (delay <= TimeSpan.Zero)
                 {
                     return;
