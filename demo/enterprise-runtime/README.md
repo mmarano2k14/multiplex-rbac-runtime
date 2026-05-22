@@ -1,105 +1,145 @@
-# Enterprise Runtime Demo
+# Enterprise Runtime Console Demo
 
-This demo provides a local, enterprise-oriented demonstration of the deterministic AI runtime.
+This folder contains the executable enterprise runtime console demo for the deterministic AI runtime.
 
-The goal is not to introduce a new runtime feature.
+This is not an AI agent toy demo.
 
-The goal is to demonstrate that the existing runtime behaves like distributed AI execution infrastructure, not a toy agent framework.
+This demo shows how an AI execution runtime behaves when workflows move closer to production reality:
 
-It shows how the runtime coordinates distributed execution across workers and runtime instances while preserving deterministic convergence, execution safety, bounded state, and observability.
+- multiple workers
+- distributed coordination
+- retries
+- durable execution state
+- bounded hot state
+- compaction
+- eviction
+- snapshot persistence
+- replay validation
+- readable realtime logs
+- pause
+- resume
+- cancel with confirmation
+- safe cleanup
 
-## What this demo demonstrates
+The purpose of this demo is to make the runtime visible, testable, and understandable from a local console.
 
-This demo focuses on the following runtime capabilities:
+---
 
-- Distributed DAG execution
-- Multiple workers participating in the same execution
-- Multiple runtime instance foundations
-- Redis Lua atomic coordination
-- Duplicate execution prevention
-- Worker crash recovery
-- Retry and recovery behavior
-- Pause, resume, and cancel control state
-- Human-in-the-loop execution
-- Distributed concurrency and throttling
-- Retention and compaction
-- Observability and tracing
-- Deterministic convergence
+## Why this demo exists
+
+Most AI demos focus on prompts, models, tools, or agents.
+
+That is useful, but it does not answer the harder production questions:
+
+- What happens if multiple workers advance the same workflow?
+- How do you avoid duplicate step execution?
+- How do you recover from retryable failures?
+- How do you pause an execution safely?
+- How do you cancel without corrupting state?
+- How do you keep runtime state bounded?
+- How do you compact or evict completed work safely?
+- How do you replay an execution after cleanup?
+- How do you prove convergence after distributed execution?
+
+This demo focuses on those questions.
+
+It demonstrates execution infrastructure around AI workflows, not only AI calls.
+
+---
+
+## What this demo proves
+
+The enterprise runtime console demo proves that the runtime can:
+
+1. Execute a DAG-based AI workflow locally.
+2. Coordinate multiple distributed workers against the same execution.
+3. Prevent duplicate step execution through distributed coordination.
+4. Recover retryable step failures.
+5. Keep execution state bounded through retention.
+6. Compact and evict completed state while preserving replay safety.
+7. Persist terminal execution snapshots.
+8. Delete the live execution bundle.
+9. Replay the execution from persisted state.
+10. Compare replay fingerprints to prove deterministic restoration.
+11. Stream readable realtime runtime events to the console.
+12. Show live execution progress.
+13. Pause and resume execution while workers are active.
+14. Cancel execution safely through a confirmation flow.
+15. Clean up execution state after completion or cancel.
+
+---
 
 ## What this demo is not
 
-This demo is intentionally local and pragmatic.
+This demo is intentionally local.
 
 It is not:
 
-- A Kubernetes deployment
-- A production cluster
-- A web dashboard
-- A cloud reference architecture
-- A replacement for full production observability
-- A new runtime engine
+- a Kubernetes deployment
+- a production cluster
+- a cloud reference architecture
+- a full web dashboard
+- a replacement for production observability
+- a benchmark
+- a synthetic marketing animation
 
-Kubernetes, dashboards, deployment automation, and advanced monitoring are future phases.
+Those can come later.
 
-## Local infrastructure
+This demo is the local executable proof that the runtime engine, coordination model, control state, retention, replay, and observability foundations work together.
 
-The demo uses Docker Compose to start:
+---
 
-- Redis
-- MongoDB
+## Demo architecture
 
-Docker Compose file:
-
-```text
-demo/enterprise-runtime/deploy/docker/docker-compose.yml
-```
-
-## Start infrastructure
-
-From the repository root:
-
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
-```
-
-Verify containers:
-
-```powershell
-docker ps
-```
-
-Expected containers:
+At a high level, the console demo uses:
 
 ```text
-deterministic-ai-runtime-demo-redis
-deterministic-ai-runtime-demo-mongo
+Console runner
+  -> scenario selector
+  -> log mode selector
+  -> background runtime controller
+  -> distributed runtime workers
+  -> DAG execution engine
+  -> Redis coordination
+  -> MongoDB persistence
+  -> realtime runtime events
+  -> retry / retention / replay validation
 ```
 
-## Stop infrastructure
+The demo uses local infrastructure:
 
-From the repository root:
+```text
+Redis
+  - distributed claim coordination
+  - worker coordination
+  - runtime state coordination
+  - cache support
 
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml down
+MongoDB
+  - payload persistence
+  - snapshot persistence
+  - replay-safe storage
 ```
 
-## Reset demo state
+The console runner is responsible for:
 
-PowerShell:
-
-```powershell
-./demo/enterprise-runtime/scripts/reset-demo.ps1
+```text
+- selecting the scenario
+- selecting the log mode
+- starting the background controller
+- enqueuing a runtime execution
+- displaying progress
+- displaying readable realtime events
+- listening for pause / resume / cancel keys
+- validating retry recovery
+- validating retention
+- validating replay
+- cleaning up the execution bundle
 ```
 
-Bash:
+---
 
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
-```
-
-The reset scripts clear the local demo Redis database and drop the demo MongoDB database.
-
-## Demo structure
+## Folder structure
 
 ```text
 demo/
@@ -111,188 +151,990 @@ demo/
         docker-compose.yml
 
     pipelines/
+      enterprise-demo-pipeline.json
 
     scripts/
       reset-demo.ps1
       reset-demo.sh
 
     scenarios/
+      01-multi-worker-execution.md
+      02-worker-crash-recovery.md
+      03-duplicate-execution-prevention.md
+      04-pause-resume-cancel.md
+      05-human-in-the-loop.md
+      06-distributed-throttling.md
+      07-retention-compaction.md
+      08-deterministic-convergence.md
 
     logs/
       .gitkeep
 ```
 
-## Planned scenarios
+---
 
-The demo will be documented through scenario files:
+## Requirements
 
-```text
-scenarios/
-  01-multi-worker-execution.md
-  02-worker-crash-recovery.md
-  03-duplicate-execution-prevention.md
-  04-pause-resume-cancel.md
-  05-human-in-the-loop.md
-  06-distributed-throttling.md
-  07-retention-compaction.md
-  08-deterministic-convergence.md
+You need:
+
+- .NET SDK
+- Docker
+- Docker Compose
+- PowerShell or Bash
+- Redis and MongoDB running through the provided Docker Compose file
+
+---
+
+## Start local infrastructure
+
+From the repository root:
+
+```powershell
+docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
 ```
 
-## Scenario goals
+Verify the containers:
 
-### 1. Multi-worker execution
-
-Proves that multiple workers can participate in the same DAG execution safely.
-
-Expected behavior:
-
-```text
-One execution
-Multiple workers
-Steps claimed safely
-No duplicate step execution
-Execution converges correctly
+```powershell
+docker ps
 ```
 
-### 2. Worker crash recovery
-
-Proves that a claimed step can be recovered when a worker disappears.
-
-Expected behavior:
+Expected services:
 
 ```text
-Worker claims a step
-Worker disappears
-Lease expires
-Step becomes recoverable
-Another worker resumes safely
-Execution still converges
+deterministic-ai-runtime-demo-redis
+deterministic-ai-runtime-demo-mongo
 ```
 
-### 3. Duplicate execution prevention
+---
 
-Proves that concurrent claim attempts do not produce duplicate step execution.
+## Stop local infrastructure
 
-Expected behavior:
+From the repository root:
+
+```powershell
+docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml down
+```
+
+---
+
+## Reset demo state
+
+PowerShell:
+
+```powershell
+.\demo\enterprise-runtime\scripts\reset-demo.ps1
+```
+
+Bash:
+
+```bash
+./demo/enterprise-runtime/scripts/reset-demo.sh
+```
+
+The reset scripts clear the local demo Redis database and drop the local demo MongoDB database used by the runtime demo.
+
+Use reset when you want a clean run.
+
+---
+
+## Build the console demo
+
+From the repository root:
+
+```powershell
+dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+---
+
+## Run interactive mode
+
+If no command-line arguments are provided, the console starts in interactive mode:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+Interactive mode asks you to choose:
+
+1. A scenario.
+2. A log mode.
+
+This is the recommended mode for presenting the demo live.
+
+---
+
+## Interactive scenario selection
+
+When started without arguments, the console lets you choose:
 
 ```text
-Concurrent claim attempts
-Redis Lua atomic coordination
-Single owner
-No duplicate completion
+json
+chaos-100
+chaos-500
 ```
 
-### 4. Pause, resume, cancel
-
-Proves that the runtime control plane can durably control execution progress.
-
-Expected behavior:
+Use:
 
 ```text
-Pause execution
-New claims blocked
-Already claimed work drains
-Execution becomes paused
-Resume execution
-Claims allowed again
-Cancel execution
-Final status becomes cancelled
+Up / Down arrows
+Enter to confirm
 ```
 
-### 5. Human-in-the-loop
+---
 
-Proves that execution can wait for external human input and continue deterministically.
+## Interactive log mode selection
 
-Expected behavior:
+After selecting a scenario, the console lets you choose:
 
 ```text
-Execution waits for human input
-Claims blocked
-Human input submitted
-Execution resumes
-DAG completes deterministically
+none
+verbose
+verbose + raw
+verbose + noise
 ```
 
-### 6. Distributed concurrency and throttling
-
-Proves that workers respect distributed concurrency limits.
-
-Expected behavior:
+Use:
 
 ```text
-Global, pipeline, provider, model, or operation limits are respected
-Concurrency is denied when the limit is reached
-Workers respect distributed throttling
-Retry-after or delay behavior is visible
+Up / Down arrows
+Enter to confirm
 ```
 
-### 7. Retention and compaction
+---
 
-Proves that hot state remains bounded while payloads remain resolvable.
+## Scenario: json
 
-Expected behavior:
+The `json` scenario runs the standard JSON pipeline demo from:
 
 ```text
-Large or completed steps are compacted
-Payloads are moved externally
-Hot state remains controlled
-Resolver can still rehydrate data
+demo/enterprise-runtime/pipelines/enterprise-demo-pipeline.json
 ```
 
-### 8. Deterministic convergence
+Run directly:
 
-Proves that repeated and concurrent executions converge safely.
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json
+```
 
-Expected behavior:
+Run with readable runtime logs:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json --verbose
+```
+
+### Why this scenario exists
+
+The `json` scenario proves that the runtime can execute a pipeline from a real pipeline file.
+
+It is the fastest sanity check.
+
+It is useful when you want to verify:
+
+- controller startup
+- pipeline loading from JSON
+- execution creation
+- distributed worker participation
+- retry recovery
+- terminal completion
+- snapshot persistence
+- replay validation
+- cleanup
+
+### What it demonstrates
+
+The JSON scenario is intentionally small.
+
+It proves the end-to-end runtime path without stress:
 
 ```text
-Same pipeline
-Repeated runs
-Same final convergence
-No duplicate execution
-No broken dependencies
+pipeline file
+  -> controller
+  -> workers
+  -> DAG engine
+  -> retry recovery
+  -> terminal completion
+  -> snapshot
+  -> replay validation
+  -> cleanup
 ```
 
-## Implementation status
+Use this scenario first when validating a new environment.
 
-### Implemented in the runtime
+---
 
-- Deterministic DAG execution
-- Redis Lua atomic claims
-- Distributed worker coordination
-- Retry and recovery
-- Retention and compaction
-- Distributed concurrency and throttling
-- Execution control state
-- Pause, resume, cancel
-- Human-in-the-loop waiting state
-- Observability and tracing foundations
+## Scenario: chaos-100
 
-### Demonstrated locally in this phase
+The `chaos-100` scenario runs an in-memory distributed chaos pipeline with 100 steps.
 
-- Redis and MongoDB infrastructure
-- Demo folder structure
-- Reset scripts
-- Scenario-based documentation
-- Local demo preparation
+Run directly:
 
-### Future work
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100
+```
 
-- Executable demo runner
-- Multiple local worker launch scripts
-- Kubernetes deployment
-- Web dashboard
-- Full OpenTelemetry export
-- Cloud deployment profile
-- Advanced chaos testing
-- CI-based demo validation
+Run with readable runtime logs:
 
-## Message for reviewers
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+```
 
-This demo is designed for CTOs, architects, engineering managers, and senior engineers who want to understand whether the runtime addresses real production execution concerns.
+Run with raw runtime JSON events:
 
-The key point is simple:
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-raw
+```
 
-AI orchestration becomes a distributed systems problem once it moves beyond simple prompt execution.
+Run with noisy internal runtime events:
 
-This runtime demonstrates the infrastructure behaviors required to make AI execution controlled, observable, recoverable, and deterministic.
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-noise
+```
+
+### Why this scenario exists
+
+The `chaos-100` scenario exists to demonstrate distributed execution under moderate pressure.
+
+It is large enough to show:
+
+- multiple workers participating
+- step claims happening in parallel
+- retry recovery
+- live progress movement
+- pause and resume behavior
+- cancel confirmation behavior
+- deterministic completion
+- replay validation
+
+It is small enough to remain readable during a live demo.
+
+### What it demonstrates
+
+This scenario is good for showing the runtime as an execution system.
+
+It demonstrates that multiple workers can advance the same DAG execution safely without relying on a single local loop.
+
+Expected output includes:
+
+```text
+Distributed workers
+Retry recovery
+Retention summary
+Replay validation
+Terminal Completed status
+```
+
+This is the best scenario for a normal demo.
+
+---
+
+## Scenario: chaos-500
+
+The `chaos-500` scenario runs an aggressive in-memory distributed chaos pipeline with 500 steps.
+
+Run directly:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500
+```
+
+Run with readable runtime logs:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+```
+
+Run with raw runtime JSON events:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-raw
+```
+
+Run with noisy internal runtime events:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-noise
+```
+
+### Why this scenario exists
+
+The `chaos-500` scenario is the aggressive scenario.
+
+It exists to put pressure on:
+
+- distributed worker coordination
+- batch claim paths
+- retry recovery
+- hot-state limits
+- completed-step retention
+- compaction
+- eviction
+- snapshot persistence
+- replay restoration
+- fingerprint consistency after replay
+
+This scenario is intentionally heavier than `chaos-100`.
+
+It is the best scenario for proving that the runtime can keep execution state bounded while still preserving replay safety.
+
+### Why compaction and eviction matter
+
+A long-running AI workflow can produce a lot of intermediate state.
+
+If all completed step data remains in hot state forever, the execution state grows without bound.
+
+That becomes a production problem.
+
+The runtime therefore needs retention behavior:
+
+```text
+completed steps
+  -> compact payloads
+  -> externalize data
+  -> evict completed state from hot state
+  -> keep replay-safe references
+  -> allow resolver rehydration
+```
+
+The `chaos-500` scenario is designed to make this visible.
+
+Expected retention output includes:
+
+```text
+Configured hot state limit
+Terminal hot state steps
+Steps no longer in hot state
+Hot state limit respected
+```
+
+Example:
+
+```text
+Retention summary
+-----------------
+Configured hot state limit:     15
+Terminal hot state steps:       0
+Steps no longer in hot state:   500
+Hot state limit respected:      True
+```
+
+This proves that the hot state was kept under control while the execution still completed and replay validation still succeeded.
+
+---
+
+## Log modes
+
+The console supports several log modes.
+
+### none
+
+No verbose runtime event output.
+
+This is the cleanest mode.
+
+Use it when you only want:
+
+- progress
+- execution summary
+- worker summary
+- retry summary
+- retention summary
+- replay validation
+
+Command example:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100
+```
+
+### verbose
+
+Readable runtime events.
+
+This mode shows important runtime events in a human-friendly format.
+
+Command example:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+```
+
+Example output:
+
+```text
+[CLAIMED] chaos-step-090 | worker=worker:...
+[DONE]    chaos-step-090
+[FAILED]  chaos-step-011 | intentional first-attempt failure
+[FINAL]   succeeded | status=Completed
+[SNAPSHOT] persisted | execution=...
+[REPLAY]  restored | execution=...
+```
+
+Use this mode for demos and videos.
+
+### verbose + raw
+
+Readable runtime events plus raw JSON event output.
+
+Command example:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-raw
+```
+
+Use this mode when debugging event payloads.
+
+### verbose + noise
+
+Readable runtime events plus noisy internal events.
+
+Command example:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-noise
+```
+
+Use this mode when debugging lower-level runtime behavior.
+
+### verbose + raw + noise
+
+Full debug mode.
+
+Command example:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-raw --verbose-noise
+```
+
+Use this mode only when investigating runtime internals.
+
+---
+
+## Runtime controls
+
+During execution, the console supports interactive control keys.
+
+```text
+Space    Pause / Resume execution
+Shift+C  Cancel with confirmation
+```
+
+### Pause
+
+Press:
+
+```text
+Space
+```
+
+Expected output:
+
+```text
+[CONTROL] paused
+```
+
+Pause does not kill already claimed work.
+
+It prevents new claims.
+
+That means progress can still increase briefly after pressing pause because some steps may already be in flight.
+
+This is expected.
+
+Correct pause behavior:
+
+```text
+pause requested
+  -> active claimed steps drain
+  -> new claims are blocked
+  -> progress stabilizes
+```
+
+### Resume
+
+Press:
+
+```text
+Space
+```
+
+again.
+
+Expected output:
+
+```text
+[CONTROL] resumed
+```
+
+Resume allows workers to claim work again.
+
+Correct resume behavior:
+
+```text
+resume requested
+  -> claims allowed again
+  -> progress continues
+  -> execution converges
+```
+
+### Cancel
+
+Press:
+
+```text
+Shift+C
+```
+
+The console pauses first and opens a confirmation menu:
+
+```text
+Cancel execution?
+
+  Yes
+> No
+```
+
+Use the arrows to select.
+
+Use:
+
+```text
+Enter
+```
+
+to confirm.
+
+You can also use:
+
+```text
+Y
+N
+Escape
+```
+
+### Cancel with No
+
+If you select `No`, the execution resumes.
+
+Expected output:
+
+```text
+[CONTROL] cancel declined, resumed
+```
+
+This proves that cancel confirmation is safe and reversible before confirmation.
+
+### Cancel with Yes
+
+If you select `Yes`, the console sends durable cancellation and unblocks the local runner.
+
+Expected output:
+
+```text
+[CONTROL] cancel confirmed
+
+Stopping background controller...
+Cleaning up execution bundle...
+Execution runner finished.
+```
+
+This proves that the console can safely stop an active execution and still run cleanup.
+
+---
+
+## Important pause and cancel semantics
+
+Pause and cancel do not mean killing threads.
+
+The runtime uses cooperative control.
+
+That means:
+
+```text
+already claimed work may finish
+new claims are blocked
+state remains durable
+cleanup remains safe
+```
+
+This is intentional.
+
+It avoids corrupting execution state by killing work in the middle of a step.
+
+---
+
+## Live progress output
+
+During execution, the console displays live progress:
+
+```text
+Progress: 142/500 completed | retries=13 | workers=30 | hotStateSteps=15/15
+```
+
+The fields mean:
+
+```text
+completed
+  Number of completed steps.
+
+retries
+  Number of retry recoveries observed so far.
+
+workers
+  Number of participating runtime workers.
+
+hotStateSteps
+  Number of steps currently retained in hot state compared with the configured limit.
+```
+
+The progress line is updated in place to keep the console readable.
+
+---
+
+## Retry recovery validation
+
+The demo includes retryable failure behavior.
+
+At the end of a run, the retry summary shows:
+
+```text
+Retry recovery
+--------------
+Expected retried steps: 45
+Retried steps:          45
+Minimum retry count:    1
+Maximum retry count:    1
+All retried:            True
+```
+
+This proves that configured retry behavior was exercised and validated.
+
+---
+
+## Retention validation
+
+The retention summary shows whether the hot state stayed within the configured limit.
+
+Example:
+
+```text
+Retention summary
+-----------------
+Configured hot state limit:     15
+Terminal hot state steps:       0
+Steps no longer in hot state:   500
+Hot state limit respected:      True
+```
+
+This proves that the runtime is not keeping unbounded completed execution state in memory or hot state.
+
+---
+
+## Replay validation
+
+The demo validates replay after terminal snapshot persistence.
+
+Expected output:
+
+```text
+Replay validation
+-----------------
+Snapshot created: true
+Replay restored:  true
+Fingerprint match: true
+```
+
+This proves that the execution can be restored from persisted state and that the restored execution matches the pre-replay fingerprint.
+
+---
+
+## Worker participation summary
+
+At the end of the run, the console prints participating workers:
+
+```text
+Distributed workers
+-------------------
+RuntimeInstanceId: worker:1:... | Cycles: 40
+RuntimeInstanceId: worker:2:... | Cycles: 41
+RuntimeInstanceId: worker:3:... | Cycles: 40
+```
+
+This proves that the execution was not advanced by a single local loop.
+
+Multiple workers participated in the same execution.
+
+---
+
+## Direct command reference
+
+### Interactive mode
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+### JSON scenario
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json
+```
+
+### JSON scenario with verbose logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json --verbose
+```
+
+### Chaos 100
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100
+```
+
+### Chaos 100 with verbose logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+```
+
+### Chaos 100 with raw logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-raw
+```
+
+### Chaos 100 with noisy logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose --verbose-noise
+```
+
+### Chaos 500
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500
+```
+
+### Chaos 500 with verbose logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+```
+
+### Chaos 500 with raw logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-raw
+```
+
+### Chaos 500 with noisy logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-noise
+```
+
+### Full debug mode
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-raw --verbose-noise
+```
+
+---
+
+## Recommended demo flow
+
+For a live demo, use this order:
+
+### 1. Start infrastructure
+
+```powershell
+docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
+```
+
+### 2. Build
+
+```powershell
+dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+### 3. Run interactive mode
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+### 4. Select scenario
+
+Choose:
+
+```text
+chaos-100
+```
+
+for a normal demo.
+
+Choose:
+
+```text
+chaos-500
+```
+
+for the aggressive retention, compaction, and eviction demo.
+
+### 5. Select log mode
+
+Choose:
+
+```text
+verbose
+```
+
+for readable runtime events.
+
+### 6. Demonstrate controls
+
+During the run:
+
+```text
+Space
+```
+
+to pause.
+
+Then:
+
+```text
+Space
+```
+
+to resume.
+
+Then:
+
+```text
+Shift+C
+```
+
+to show cancel confirmation.
+
+Choose:
+
+```text
+No
+```
+
+to resume safely, or:
+
+```text
+Yes
+```
+
+to cancel and clean up.
+
+---
+
+## Troubleshooting
+
+### Redis or MongoDB is not running
+
+Start infrastructure:
+
+```powershell
+docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
+```
+
+Verify:
+
+```powershell
+docker ps
+```
+
+### The demo state looks stale
+
+Reset demo state:
+
+```powershell
+.\demo\enterprise-runtime\scripts\reset-demo.ps1
+```
+
+### The console seems to continue briefly after pause
+
+This is expected.
+
+Pause stops new claims.
+
+Already claimed work is allowed to finish.
+
+### Cancel stops the console but some worker logs appear briefly
+
+This can happen because logs already emitted by in-flight work may flush after cancel confirmation.
+
+The console still stops the controller and runs cleanup.
+
+### Verbose logs are too noisy
+
+Use:
+
+```powershell
+--verbose
+```
+
+instead of:
+
+```powershell
+--verbose --verbose-noise
+```
+
+### Raw JSON output is too large
+
+Use readable verbose mode only:
+
+```powershell
+--verbose
+```
+
+without:
+
+```powershell
+--verbose-raw
+```
+
+---
+
+## Engineering notes
+
+This demo intentionally exercises production-style runtime concerns.
+
+The console is not only a UX layer.
+
+It demonstrates that the runtime can expose control and visibility over execution while distributed workers are active.
+
+Important engineering points demonstrated by this console:
+
+- control state must be enforced on all claim paths
+- batch claim paths must respect pause and cancel
+- cancel must unblock the local runner safely
+- realtime events must be readable for humans
+- raw event data must remain available for diagnostics
+- hot state must remain bounded
+- replay must prove restore correctness
+- distributed workers must converge on one terminal result
+
+---
+
+## Future phases
+
+Possible future improvements:
+
+- dedicated slower control-demo scenario
+- web dashboard connected to realtime events
+- Kubernetes demo environment
+- OpenTelemetry export
+- richer worker health display
+- persisted run history viewer
+- no-cleanup inspection mode
+- replay command from CLI
+- chaos mode with simulated worker crash
+- provider throttling visualization
