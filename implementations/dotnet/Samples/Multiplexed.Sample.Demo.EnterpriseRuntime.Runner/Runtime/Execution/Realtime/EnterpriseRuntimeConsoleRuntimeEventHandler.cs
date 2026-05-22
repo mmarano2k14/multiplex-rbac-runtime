@@ -205,6 +205,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime
             Console.ForegroundColor = readableEvent.Kind switch
             {
                 EnterpriseRuntimeRealtimeEventKind.StepFailed => ConsoleColor.Yellow,
+                EnterpriseRuntimeRealtimeEventKind.StepThrottled => ConsoleColor.Yellow,
                 EnterpriseRuntimeRealtimeEventKind.FinalizationRaceLost => ConsoleColor.DarkYellow,
                 EnterpriseRuntimeRealtimeEventKind.FinalizationSucceeded => ConsoleColor.Green,
                 EnterpriseRuntimeRealtimeEventKind.SnapshotPersisted => ConsoleColor.Cyan,

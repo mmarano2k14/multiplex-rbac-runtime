@@ -66,8 +66,13 @@
         WorkerIdle = 11,
 
         /// <summary>
+        /// A step was delayed by distributed throttling.
+        /// </summary>
+        StepThrottled = 12,
+
+        /// <summary>
         /// A diagnostic runtime event occurred.
         /// </summary>
-        Diagnostic = 12
+        Diagnostic = 13
     }
 }

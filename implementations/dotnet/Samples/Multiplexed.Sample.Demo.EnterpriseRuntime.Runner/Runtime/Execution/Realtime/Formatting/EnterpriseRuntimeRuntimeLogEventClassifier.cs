@@ -38,53 +38,15 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
                 Category = category,
                 Message = message,
                 OccurredAtUtc = runtimeLogEvent.OccurredAtUtc,
-                ExecutionId = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "ExecutionId") ?? ExtractQuotedValue(
-                    message,
-                    "ExecutionId="),
-                StepName = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "Step") ?? GetStringValue(
-                    runtimeLogEvent.Data,
-                    "StepName") ?? ExtractQuotedValue(
-                    message,
-                    "StepName=") ?? ExtractQuotedValue(
-                    message,
-                    "Step="),
-                WorkerId = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "WorkerId") ?? GetStringValue(
-                    runtimeLogEvent.Data,
-                    "Worker") ?? ExtractQuotedValue(
-                    message,
-                    "WorkerId=") ?? ExtractQuotedValue(
-                    message,
-                    "Worker="),
-                ClaimToken = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "ClaimToken") ?? ExtractQuotedValue(
-                    message,
-                    "ClaimToken="),
-                Status = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "Status") ?? ExtractQuotedValue(
-                    message,
-                    "Status="),
-                Error = GetStringValue(
-                    runtimeLogEvent.Data,
-                    "Error") ?? ExtractQuotedValue(
-                    message,
-                    "Error="),
-                SourceSignature = CreateSourceSignature(
-                    category,
-                    message),
-                IsNoise = IsNoise(
-                    kind,
-                    category,
-                    message),
-                IsImportant = IsImportant(
-                    kind)
+                ExecutionId = GetStringValue(runtimeLogEvent.Data, "ExecutionId") ?? ExtractQuotedValue(message, "ExecutionId="),
+                StepName = GetStringValue(runtimeLogEvent.Data, "Step") ?? GetStringValue(runtimeLogEvent.Data, "StepName") ?? ExtractQuotedValue(message, "StepName=") ?? ExtractQuotedValue(message, "Step="),
+                WorkerId = GetStringValue(runtimeLogEvent.Data, "WorkerId") ?? GetStringValue(runtimeLogEvent.Data, "Worker") ?? ExtractQuotedValue(message, "WorkerId=") ?? ExtractQuotedValue(message, "Worker="),
+                ClaimToken = GetStringValue(runtimeLogEvent.Data, "ClaimToken") ?? ExtractQuotedValue(message, "ClaimToken="),
+                Status = GetStringValue(runtimeLogEvent.Data, "Status") ?? ExtractQuotedValue(message, "Status="),
+                Error = GetStringValue(runtimeLogEvent.Data, "Error") ?? ExtractQuotedValue(message, "Error="),
+                SourceSignature = CreateSourceSignature(category, message),
+                IsNoise = IsNoise(kind, category, message),
+                IsImportant = IsImportant(kind)
             };
         }
 
@@ -170,6 +132,13 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
             }
 
             if (message.Contains(
+                    "Step throttled",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return EnterpriseRuntimeRealtimeEventKind.StepThrottled;
+            }
+
+            if (message.Contains(
                     "retry",
                     StringComparison.OrdinalIgnoreCase) ||
                 message.Contains(
@@ -216,8 +185,12 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
             string category,
             string message)
         {
-            if (kind is EnterpriseRuntimeRealtimeEventKind.WorkerIdle or
-                EnterpriseRuntimeRealtimeEventKind.FinalizationAttempt)
+            if (kind == EnterpriseRuntimeRealtimeEventKind.StepThrottled)
+            {
+                return false;
+            }
+
+            if (kind is EnterpriseRuntimeRealtimeEventKind.WorkerIdle or EnterpriseRuntimeRealtimeEventKind.FinalizationAttempt)
             {
                 return true;
             }
@@ -275,6 +248,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
             EnterpriseRuntimeRealtimeEventKind kind)
         {
             return kind is EnterpriseRuntimeRealtimeEventKind.StepFailed
+                or EnterpriseRuntimeRealtimeEventKind.StepThrottled
                 or EnterpriseRuntimeRealtimeEventKind.FinalizationSucceeded
                 or EnterpriseRuntimeRealtimeEventKind.FinalizationRaceLost
                 or EnterpriseRuntimeRealtimeEventKind.SnapshotPersisted
@@ -303,20 +277,26 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
             }
 
             if (data is IReadOnlyDictionary<string, object?> dictionary &&
-                dictionary.TryGetValue(key, out var value))
+                dictionary.TryGetValue(
+                    key,
+                    out var value))
             {
                 return value?.ToString();
             }
 
             if (data is IDictionary<string, object?> mutableDictionary &&
-                mutableDictionary.TryGetValue(key, out var mutableValue))
+                mutableDictionary.TryGetValue(
+                    key,
+                    out var mutableValue))
             {
                 return mutableValue?.ToString();
             }
 
             if (data is JsonElement jsonElement &&
                 jsonElement.ValueKind == JsonValueKind.Object &&
-                jsonElement.TryGetProperty(key, out var property))
+                jsonElement.TryGetProperty(
+                    key,
+                    out var property))
             {
                 return property.ValueKind == JsonValueKind.String
                     ? property.GetString()
@@ -330,7 +310,9 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Form
                 serialized);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty(key, out var rootProperty))
+                document.RootElement.TryGetProperty(
+                    key,
+                    out var rootProperty))
             {
                 return rootProperty.ValueKind == JsonValueKind.String
                     ? rootProperty.GetString()

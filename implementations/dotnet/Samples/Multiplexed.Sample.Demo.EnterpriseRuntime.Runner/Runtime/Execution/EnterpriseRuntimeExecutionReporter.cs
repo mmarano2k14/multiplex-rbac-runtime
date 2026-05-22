@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retention;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retry;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Throttling;
 
 namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
 {
@@ -156,6 +157,33 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
             Console.WriteLine($"Terminal hot state steps:       {retentionSummary.ActualHotStateStepCount}");
             Console.WriteLine($"Steps no longer in hot state:   {retentionSummary.StepsRemovedFromHotState}");
             Console.WriteLine($"Hot state limit respected:      {retentionSummary.HotStateLimitRespected}");
+            Console.WriteLine();
+        }
+
+        /// <summary>
+        /// Prints throttling execution summary.
+        /// </summary>
+        /// <param name="summary">
+        /// The throttling summary.
+        /// </param>
+        public void PrintThrottlingSummary(
+            EnterpriseRuntimeThrottlingSummary summary)
+        {
+            ArgumentNullException.ThrowIfNull(summary);
+
+            if (summary.ConfiguredLimit <= 0)
+            {
+                return;
+            }
+
+            Console.WriteLine("Throttling Summary");
+            Console.WriteLine("------------------");
+            Console.WriteLine($"Scope:                     {summary.Scope}");
+            Console.WriteLine($"Target:                    {summary.Target}");
+            Console.WriteLine($"Configured limit:          {summary.ConfiguredLimit}");
+            Console.WriteLine($"Observed workers:          {summary.ObservedWorkerCount}");
+            Console.WriteLine($"Step throttling observed:  {summary.StepThrottlingObserved}");
+            Console.WriteLine($"Throttle respected:        {summary.ThrottleRespected}");
             Console.WriteLine();
         }
 

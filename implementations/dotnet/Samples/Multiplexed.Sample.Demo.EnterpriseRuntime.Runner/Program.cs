@@ -16,6 +16,7 @@ using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Persist
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Progress;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retention;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retry;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Throttling;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Infrastructure;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Interactive;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Options;
@@ -60,9 +61,10 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
                         options,
                         new[]
                         {
-                            "json",
-                            "chaos-100",
-                            "chaos-500"
+                            EnterpriseRuntimeScenarioNames.Json,
+                            EnterpriseRuntimeScenarioNames.Chaos100,
+                            EnterpriseRuntimeScenarioNames.Chaos500,
+                            EnterpriseRuntimeScenarioNames.Throttling100
                         });
 
                     Console.WriteLine();
@@ -184,6 +186,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
             services.AddSingleton<EnterpriseRuntimeRetryAnalyzer>();
 
             services.AddSingleton<EnterpriseRuntimeRetentionAnalyzer>();
+
+            services.AddSingleton<EnterpriseRuntimeThrottlingAnalyzer>();         
 
             services.AddSingleton<EnterpriseRuntimeExecutionProgressMonitor>();
 

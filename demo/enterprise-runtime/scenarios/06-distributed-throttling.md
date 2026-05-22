@@ -2,11 +2,7 @@
 
 ## Status
 
-This scenario documents a runtime capability and a future dedicated console scenario.
-
-The deterministic AI runtime includes distributed concurrency and throttling concepts for controlling how workers consume shared capacity.
-
-However, the current enterprise runtime console demo does not yet expose a dedicated executable `distributed-throttling` scenario.
+This scenario is now executable in the enterprise runtime console demo.
 
 The current executable console scenarios are:
 
@@ -14,11 +10,12 @@ The current executable console scenarios are:
 json
 chaos-100
 chaos-500
+throttling-100
 ```
 
-Those scenarios demonstrate distributed execution, retry recovery, retention, replay validation, realtime logs, and execution controls.
+The `throttling-100` scenario demonstrates distributed provider throttling under worker pressure.
 
-A future dedicated throttling scenario should explicitly demonstrate global, pipeline, step, provider, model, and operation-level limits under distributed worker pressure.
+It uses a DAG execution with 100 steps, distributed workers, randomized provider selection, and an OpenAI provider throttle target.
 
 ---
 
@@ -83,123 +80,163 @@ Distributed throttling solves this by coordinating limits through a shared gate.
 
 ---
 
-## What this scenario should prove
+## What this scenario proves
 
-A dedicated distributed throttling scenario should prove:
+The `throttling-100` scenario proves:
 
 ```text
-workers evaluate concurrency policies
+workers evaluate concurrency configuration
 workers request admission before executing throttled work
-the Redis gate admits work when capacity is available
-the Redis gate denies work when limits are reached
-denied work is delayed or retried safely
+the Redis gate controls admission through shared distributed state
+OpenAI provider capacity is intentionally limited
+excess OpenAI work is throttled
+throttled work does not fail the execution incorrectly
+workers continue safely after throttling
 leases are released after work completes
-expired leases recover after worker failure
-global limits are respected across workers
-provider limits are respected across workers
-model limits are respected across workers
-operation limits are respected across workers
-execution still completes
+the execution still converges to Completed
 ```
+
+The important point is that throttling is distributed.
+
+No worker decides provider capacity alone.
 
 ---
 
 ## Current console demo relationship
 
-The current console demo already demonstrates distributed worker coordination through:
+The console demo now includes a dedicated throttling scenario:
 
 ```text
-chaos-100
-chaos-500
+throttling-100
 ```
 
 Run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
 ```
 
-or:
+To see raw realtime event payloads as well:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-raw
 ```
 
-These scenarios prove that multiple workers can safely participate in one execution.
-
-They do not yet prove a dedicated throttling configuration where provider, model, or operation limits are intentionally saturated and denied.
-
----
-
-## Future executable scenario
-
-A future console scenario could be registered as:
-
-```text
-distributed-throttling
-```
-
-Potential command:
+To see noisy internal runtime events:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario distributed-throttling --verbose
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-noise
 ```
-
-Do not treat this command as available until the scenario is implemented and registered in the console runner.
 
 ---
 
-## Recommended future scenario design
+## Scenario shape
 
-A dedicated distributed throttling scenario should use:
-
-```text
-multiple workers
-many throttled steps
-a low global concurrency limit
-a low provider concurrency limit
-a low model concurrency limit
-visible allowed / denied decisions
-retry-after or delay behavior
-final execution completion
-```
-
-Suggested shape:
+The current scenario uses:
 
 ```text
-50 to 100 DAG steps
-10 workers
-global concurrency limit: 4
-provider concurrency limit: 2
-model concurrency limit: 1 or 2
-operation concurrency limit: 2
-verbose output enabled
+scenario: throttling-100
+steps: 100
+execution mode: DAG
+worker count: distributed runtime workers
+provider throttle target: openai
+provider throttle limit: 3
+operation: llm.chat
+step key: hello-world
 ```
 
-This would make throttling visible without making the demo too long.
+The provider is randomized for step configuration, while OpenAI remains dominant enough to trigger throttling reliably.
+
+This keeps the scenario closer to real AI workloads where several providers or tools may exist, while one provider is the constrained target.
 
 ---
 
-## Conceptual architecture
+## Throttling configuration
 
-Distributed throttling should follow this flow:
+The pipeline-level concurrency configuration uses a provider throttle policy:
 
-```text
-worker wants to execute a throttled step
-worker resolves concurrency policy
-worker builds concurrency context
-worker asks the distributed gate for admission
-Redis gate evaluates active leases atomically
-gate returns allowed or denied
-allowed worker executes step
-denied worker delays or retries later
-lease is released after completion
-expired leases are cleaned up automatically
+```json
+{
+  "concurrency": {
+    "enabled": true,
+    "maxDegreeOfParallelism": 64,
+    "jitter": false,
+    "policies": [
+      {
+        "name": "concurrency.throttle",
+        "config": {
+          "scope": "provider",
+          "target": "openai",
+          "limit": 3,
+          "leaseSeconds": 60,
+          "defaultRetryAfterMs": 25
+        }
+      }
+    ]
+  }
+}
 ```
 
-The important point is that the decision is distributed.
+Each step enables concurrency participation:
 
-No worker decides global capacity alone.
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4.1",
+  "operation": "llm.chat",
+  "delayMs": 400,
+  "concurrency": {
+    "enabled": true
+  }
+}
+```
+
+---
+
+## Expected console output
+
+In verbose mode, throttling should be visible through readable events:
+
+```text
+[CLAIMED] throttling-step-088 | worker=MSI:28368:3615bc... | token=52d389f992d348a3...
+[THROTTLED] throttling-step-090 | [AI DAG] Step throttled. ExecutionId='...', PipelineKey='...', StepName='...'
+[DONE]    throttling-step-088 | source=ai.execution.info:[AI DAG BATCH] Step completed...
+```
+
+The `[THROTTLED]` event is intentionally shown in verbose output because it is a critical distributed runtime signal.
+
+---
+
+## Expected final summary
+
+The final summary should include:
+
+```text
+Throttling Summary
+------------------
+Scope:                     provider
+Target:                    openai
+Configured limit:          3
+Observed workers:          3
+Step throttling observed:  True
+Throttle respected:        True
+```
+
+---
+
+## Expected behavior
+
+Expected behavior:
+
+```text
+workers attempt to execute throttled steps
+the concurrency engine evaluates configured limits
+the Redis gate admits some work
+the Redis gate denies excess work
+denied work is delayed or retried later
+workers do not exceed configured distributed limits
+execution still completes
+```
 
 ---
 
@@ -221,63 +258,13 @@ operation capacity
 tenant capacity
 ```
 
-A good throttling scenario should show at least some of these scopes.
-
----
-
-## Example scope model
-
-Example:
-
-```text
-global
-  max 10 concurrent AI operations
-
-pipeline:enterprise-runtime-demo
-  max 6 concurrent operations
-
-provider:openai
-  max 3 concurrent operations
-
-model:gpt-4.1
-  max 2 concurrent operations
-
-operation:rag.retrieval
-  max 4 concurrent operations
-```
-
-The runtime should enforce all relevant scopes before allowing a step to execute.
-
-If any scope is saturated, admission should be denied or delayed.
-
----
-
-## Why Redis gate matters
-
-Distributed throttling requires a shared coordination point.
-
-Redis is useful for this because it can provide atomic admission behavior.
-
-Conceptually:
-
-```text
-remove expired leases
-count active leases
-compare count with configured limit
-admit or deny atomically
-store lease if admitted
-return decision to worker
-```
-
-This prevents multiple workers from observing capacity at the same time and all admitting themselves incorrectly.
+The current scenario focuses primarily on provider-level throttling.
 
 ---
 
 ## Lease-based throttling
 
-The gate should use leases, not only counters.
-
-Counters can become unsafe if a worker crashes before decrementing the counter.
+The distributed gate uses leases rather than counters.
 
 Lease-based control is safer:
 
@@ -295,95 +282,17 @@ This makes throttling crash-tolerant.
 
 ---
 
-## Expected future console output
-
-A dedicated future scenario should show readable events like:
-
-```text
-[THROTTLE] allowed | scope=provider:openai | active=1/2 | worker=worker:1
-[THROTTLE] denied  | scope=provider:openai | active=2/2 | retryAfter=250ms
-[LEASE]    acquired | scope=model:gpt-4.1 | lease=...
-[LEASE]    released | scope=model:gpt-4.1 | lease=...
-[DONE]     throttled-step-010
-```
-
-The final summary should show:
-
-```text
-Throttling summary
-------------------
-Global limit respected:    True
-Provider limit respected:  True
-Model limit respected:     True
-Denied admissions:         42
-Retried admissions:        42
-Execution completed:       True
-```
-
----
-
-## Expected future behavior
-
-Expected behavior:
-
-```text
-workers attempt to execute throttled steps
-the concurrency engine evaluates configured limits
-the Redis gate admits some work
-the Redis gate denies excess work
-denied work is delayed or retried later
-workers do not exceed configured distributed limits
-execution still completes
-```
-
----
-
-## What to observe when implemented
-
-When this scenario becomes executable, observe:
-
-```text
-concurrency policy resolution
-admission allowed events
-admission denied events
-retry-after or delay behavior
-lease acquisition
-lease release
-active count per scope
-final execution completion
-```
-
-Useful log keywords:
-
-```text
-concurrency.evaluate
-concurrency.allowed
-concurrency.denied
-redis-gate
-lease.acquired
-lease.released
-retry-after
-provider
-model
-operation
-```
-
----
-
 ## Success criteria
 
 The scenario is successful if:
 
 ```text
-configured global limits are not exceeded
 configured provider limits are not exceeded
-configured model limits are not exceeded
-configured operation limits are not exceeded
-denied work does not fail the execution incorrectly
-denied work retries or delays safely
+throttled work does not fail the execution incorrectly
+workers continue safely after throttling
 leases are released after completion
-expired leases do not block forever
 the execution eventually completes
+visible throttling events appear in verbose mode
 ```
 
 ---
@@ -401,8 +310,6 @@ lease release is skipped
 expired leases are not cleaned up
 batch claims bypass throttling
 provider scope is ignored
-model scope is ignored
-operation scope is ignored
 ```
 
 ---
@@ -486,40 +393,28 @@ Retention controls completed execution state size.
 
 Both matter in long-running AI workflows.
 
-`chaos-500` currently demonstrates retention pressure.
+`chaos-500` demonstrates retention pressure.
 
-A future `distributed-throttling` scenario should demonstrate capacity pressure.
-
----
-
-## Current recommended demo
-
-Until a dedicated distributed throttling scenario exists, use `chaos-100` or `chaos-500` to demonstrate distributed workers and safe execution control:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
-```
-
-For heavier pressure:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
-```
-
-These commands do not specifically prove throttling saturation, but they prove the distributed execution foundation required for throttling.
+`throttling-100` demonstrates distributed capacity pressure.
 
 ---
 
-## Implementation note
+## Recommended demo
 
-When a dedicated `distributed-throttling` scenario is added to the console runner, update this file with:
+Run:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
+```
+
+This demonstrates:
 
 ```text
-exact command
-configured concurrency limits
-expected allowed / denied events
-throttling summary output
-success criteria based on measured limits
+distributed execution
+distributed throttling
+provider concurrency control
+distributed lease coordination
+bounded concurrency
+realtime runtime visibility
+deterministic convergence
 ```
-
-At that point, this file should become a fully executable scenario guide instead of a capability and future scenario document.

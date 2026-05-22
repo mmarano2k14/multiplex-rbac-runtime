@@ -18,7 +18,8 @@
 
             Console.WriteLine("This demo shows a deterministic AI runtime executing production-style workflows");
             Console.WriteLine("with distributed workers, durable execution state, retry recovery, retention,");
-            Console.WriteLine("replay validation, realtime logs, and interactive execution control.");
+            Console.WriteLine("distributed throttling, replay validation, realtime logs, and interactive");
+            Console.WriteLine("execution control.");
             Console.WriteLine();
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -37,6 +38,10 @@
             PrintScenario(
                 "chaos-500",
                 "Runs an aggressive in-memory distributed chaos pipeline with 500 steps. This scenario puts stronger pressure on distributed workers, retry recovery, hot-state retention, compaction, eviction, snapshot persistence, and replay restoration.");
+
+            PrintScenario(
+                "throttling-100",
+                "Runs a distributed throttling pipeline with 100 steps. Demonstrates provider-level distributed concurrency control, realtime throttling visibility, lease-based admission control, and bounded provider capacity under worker pressure.");
 
             Console.WriteLine();
 

@@ -34,6 +34,10 @@
                     FormatStepFailed(
                         readableEvent),
 
+                EnterpriseRuntimeRealtimeEventKind.StepThrottled =>
+                    FormatStepThrottled(
+                        readableEvent),
+
                 EnterpriseRuntimeRealtimeEventKind.FinalizationSucceeded =>
                     FormatFinalizationSucceeded(
                         readableEvent),
@@ -75,8 +79,7 @@
         private static string FormatStepClaimed(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[CLAIMED] {ValueOrUnknown(readableEvent.StepName)} | worker={Shorten(readableEvent.WorkerId)} | token={Shorten(readableEvent.ClaimToken)}";
+            return $"[CLAIMED] {ValueOrUnknown(readableEvent.StepName)} | worker={Shorten(readableEvent.WorkerId)} | token={Shorten(readableEvent.ClaimToken)}";
         }
 
         /// <summary>
@@ -91,8 +94,7 @@
         private static string FormatStepCompleted(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[DONE]    {ValueOrUnknown(readableEvent.StepName)} | source={Trim(readableEvent.SourceSignature, 160)}";
+            return $"[DONE]    {ValueOrUnknown(readableEvent.StepName)} | source={Trim(readableEvent.SourceSignature, 160)}";
         }
 
         /// <summary>
@@ -108,12 +110,26 @@
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
             var error = string.IsNullOrWhiteSpace(
-                    readableEvent.Error)
+                readableEvent.Error)
                 ? readableEvent.Message
                 : readableEvent.Error;
 
-            return
-                $"[FAILED]  {ValueOrUnknown(readableEvent.StepName)} | {Trim(error, 140)}";
+            return $"[FAILED]  {ValueOrUnknown(readableEvent.StepName)} | {Trim(error, 140)}";
+        }
+
+        /// <summary>
+        /// Formats a throttled step event.
+        /// </summary>
+        /// <param name="readableEvent">
+        /// The readable realtime event.
+        /// </param>
+        /// <returns>
+        /// The formatted console line.
+        /// </returns>
+        private static string FormatStepThrottled(
+            EnterpriseRuntimeReadableRealtimeEvent readableEvent)
+        {
+            return $"[THROTTLED] {ValueOrUnknown(readableEvent.StepName)} | {Trim(readableEvent.Message, 160)}";
         }
 
         /// <summary>
@@ -128,8 +144,7 @@
         private static string FormatRetryOrRecovery(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[RETRY]   {ValueOrUnknown(readableEvent.StepName)} | {Trim(readableEvent.Message, 140)}";
+            return $"[RETRY]   {ValueOrUnknown(readableEvent.StepName)} | {Trim(readableEvent.Message, 140)}";
         }
 
         /// <summary>
@@ -144,8 +159,7 @@
         private static string FormatFinalizationSucceeded(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[FINAL]   succeeded | status={ValueOrUnknown(readableEvent.Status)}";
+            return $"[FINAL]   succeeded | status={ValueOrUnknown(readableEvent.Status)}";
         }
 
         /// <summary>
@@ -160,8 +174,7 @@
         private static string FormatFinalizationRaceLost(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                "[FINAL]   skipped | already finalized by another worker";
+            return "[FINAL]   skipped | already finalized by another worker";
         }
 
         /// <summary>
@@ -176,8 +189,7 @@
         private static string FormatSnapshotPersisted(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[SNAPSHOT] persisted | execution={Shorten(readableEvent.ExecutionId)} | status={ValueOrUnknown(readableEvent.Status)}";
+            return $"[SNAPSHOT] persisted | execution={Shorten(readableEvent.ExecutionId)} | status={ValueOrUnknown(readableEvent.Status)}";
         }
 
         /// <summary>
@@ -192,8 +204,7 @@
         private static string FormatCleanupSkipped(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[CLEANUP] skipped | execution={Shorten(readableEvent.ExecutionId)}";
+            return $"[CLEANUP] skipped | execution={Shorten(readableEvent.ExecutionId)}";
         }
 
         /// <summary>
@@ -208,8 +219,7 @@
         private static string FormatReplayRestored(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[REPLAY]  restored | execution={Shorten(readableEvent.ExecutionId)} | status={ValueOrUnknown(readableEvent.Status)}";
+            return $"[REPLAY]  restored | execution={Shorten(readableEvent.ExecutionId)} | status={ValueOrUnknown(readableEvent.Status)}";
         }
 
         /// <summary>
@@ -224,8 +234,7 @@
         private static string FormatDiagnostic(
             EnterpriseRuntimeReadableRealtimeEvent readableEvent)
         {
-            return
-                $"[EVENT]   {readableEvent.Category} | {Trim(readableEvent.Message, 160)}";
+            return $"[EVENT]   {readableEvent.Category} | {Trim(readableEvent.Message, 160)}";
         }
 
         /// <summary>

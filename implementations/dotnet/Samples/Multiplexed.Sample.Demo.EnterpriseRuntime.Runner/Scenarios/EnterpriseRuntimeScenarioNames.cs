@@ -19,5 +19,10 @@
         /// The 500-step distributed chaos scenario.
         /// </summary>
         public const string Chaos500 = "chaos-500";
+
+        /// <summary>
+        /// The throttling-100 distributed scenario.
+        /// </summary>
+        public const string Throttling100 = "throttling-100";
     }
 }

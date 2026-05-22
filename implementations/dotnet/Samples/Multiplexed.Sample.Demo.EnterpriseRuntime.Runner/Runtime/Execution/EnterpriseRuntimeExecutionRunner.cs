@@ -12,6 +12,7 @@ using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Progres
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Replay;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retention;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Retry;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Throttling;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Validation;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios.Chaos;
@@ -28,6 +29,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
         private readonly EnterpriseRuntimeExecutionPersistenceLoader _persistenceLoader;
         private readonly EnterpriseRuntimeRetryAnalyzer _retryAnalyzer;
         private readonly EnterpriseRuntimeRetentionAnalyzer _retentionAnalyzer;
+        private readonly EnterpriseRuntimeThrottlingAnalyzer _throttlingAnalyzer;
         private readonly EnterpriseRuntimeExecutionProgressMonitor _progressMonitor;
         private readonly EnterpriseRuntimeExecutionControlHotkeyListener _controlHotkeyListener;
 
@@ -49,6 +51,9 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
         /// <param name="retentionAnalyzer">
         /// The execution retention analyzer.
         /// </param>
+        /// <param name="throttlingAnalyzer">
+        /// The execution throttling analyzer.
+        /// </param>
         /// <param name="progressMonitor">
         /// The execution progress monitor.
         /// </param>
@@ -61,6 +66,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
             EnterpriseRuntimeExecutionPersistenceLoader persistenceLoader,
             EnterpriseRuntimeRetryAnalyzer retryAnalyzer,
             EnterpriseRuntimeRetentionAnalyzer retentionAnalyzer,
+            EnterpriseRuntimeThrottlingAnalyzer throttlingAnalyzer,
             EnterpriseRuntimeExecutionProgressMonitor progressMonitor,
             EnterpriseRuntimeExecutionControlHotkeyListener controlHotkeyListener)
         {
@@ -69,6 +75,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
             _persistenceLoader = persistenceLoader;
             _retryAnalyzer = retryAnalyzer;
             _retentionAnalyzer = retentionAnalyzer;
+            _throttlingAnalyzer = throttlingAnalyzer;
             _progressMonitor = progressMonitor;
             _controlHotkeyListener = controlHotkeyListener;
         }
@@ -232,6 +239,11 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
 
                 var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
 
+                var throttlingSummary = _throttlingAnalyzer.Analyze(
+                    persistedState,
+                    request,
+                    workerCycles.Count);
+
                 EnterpriseRuntimeExecutionValidator.Validate(
                     final,
                     persistedRecord,
@@ -249,6 +261,9 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
                 _reporter.PrintRetrySummary(
                     request,
                     retrySummary);
+
+                _reporter.PrintThrottlingSummary(
+                    throttlingSummary);
 
                 _reporter.PrintRetentionSummary(
                     retentionSummary);
