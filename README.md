@@ -2,7 +2,9 @@
 
 A deterministic AI execution runtime for production-grade AI workloads.
 
-This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, and observability.
+This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, observability, and executable enterprise demo scenarios.
+
+The current runtime foundations are intentionally designed as the base for a broader AI execution and MLOps-oriented platform.
 
 [![Version](https://img.shields.io/badge/Version-1.0.5.0-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
@@ -21,12 +23,14 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Area | Summary |
 |---|---|
 | Distributed multi-runtime-instance execution | Added foundations for multiple runtime instances and workers to coordinate through shared Redis-backed execution state. |
+| Distributed concurrency and throttling demo | Added an executable `throttling-100` enterprise demo scenario with provider-level concurrency control, realtime throttling visibility, Redis lease-based admission control, randomized provider distribution, and bounded provider capacity under worker pressure. |
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
 | Context resolution and helpers | Added a dedicated helper layer for input bindings, previous step outputs, payload rehydration, provider/model/operation context, policy context, RAG context, and replay-safe helpers. |
 | Documentation restructure | Completed Phase 0 V1 with a shorter README, preserved runtime internals, documentation index, roadmap, enterprise readiness matrix, ecosystem comparison, and focused runtime documentation under `docs/ai/`. |
+| Long-term platform direction | Added a dedicated road-to-MLOps direction document to describe how the runtime foundations can evolve toward AI execution infrastructure and MLOps-oriented runtime operations. |
 
-For detailed changes, see [`CHANGELOG.md`](./CHANGELOG.md) and [`docs/index.md`](docs/index.md).
+For detailed changes, see [`CHANGELOG.md`](./CHANGELOG.md), [`docs/index.md`](docs/index.md), and [`docs/road-to-mlops.md`](docs/road-to-mlops.md).
 
 ## Overview
 
@@ -53,6 +57,8 @@ It provides a state-driven execution layer where:
 - context helpers resolve inputs, payloads, provider metadata, and policy context
 - policies control retry, retention, and concurrency
 - execution can be paused, resumed, cancelled, or blocked for human input
+
+The project should be read as an AI execution infrastructure foundation. The runtime core is already substantial, while the longer-term direction is to evolve toward a broader AI operations and MLOps-oriented platform.
 
 ---
 
@@ -129,12 +135,14 @@ This project explores what an AI execution runtime should look like when reliabi
 | Retry and recovery | Implemented | Retry state, waiting windows, and stale running-step recovery are separated. |
 | Retention and compaction | Implemented | Hot state can be compacted/evicted while payloads remain resolvable. |
 | Distributed concurrency and throttling | Implemented | Redis ZSET leases enforce global, pipeline, step, execution, instance, provider, model, and operation limits. |
+| Enterprise throttling scenario | Implemented | `throttling-100` demonstrates provider-level distributed throttling with realtime visibility and deterministic convergence. |
 | Policy-driven execution | Implemented | Retry, retention, and concurrency use configurable policy definitions. |
 | Execution control state | Implemented | ExecutionId-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Implemented | RunId-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue. |
 | RunId vs ExecutionId separation | Implemented | Controller lifecycle identity is separated from durable DAG execution identity. |
 | Snapshot and replay foundations | Foundation available | Terminal snapshots and replay restoration are available as a foundation for official replay APIs. |
-| Observability and tracing | Foundation available | Runtime metrics and trace recording exist; production-grade OpenTelemetry integration is planned. |
+| Observability and tracing | Foundation available | Runtime metrics, trace recording, realtime events, and console visibility exist; production-grade OpenTelemetry integration and dashboarding remain planned. |
+| MLOps-oriented platform evolution | Direction defined | Long-term platform direction is documented in `docs/road-to-mlops.md`. |
 | Durable decision ledger | Planned | Future work for stronger audit and decision history. |
 | Public API / SDK polish | Planned | Future work for cleaner external developer experience. |
 
@@ -225,7 +233,8 @@ The project is designed around production questions that enterprise AI systems m
 | How do you control human-in-the-loop? | WaitingForInput and SubmitHumanInput are supported through durable control state. |
 | How do you keep memory/state bounded? | Retention, compaction, eviction, and payload externalization control hot state size. |
 | How do you coordinate multiple runtime instances? | Shared Redis state, Lua coordination, leases, and deterministic convergence enable coordination. |
-| How do you prove deterministic convergence? | Integration tests validate completion, replay fingerprints, distributed execution, and recovery behavior. |
+| How do you prove deterministic convergence? | Integration tests and enterprise demo scenarios validate completion, replay fingerprints, distributed execution, throttling, and recovery behavior. |
+| How does this evolve toward AI operations and MLOps? | Runtime foundations are designed to support future AI execution control planes, governance, observability, replay, and operational workflows. |
 
 For the detailed enterprise matrix, see [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md).
 
@@ -329,6 +338,8 @@ The runtime includes foundations for production visibility and replayability:
 - storage metrics
 - context resolution diagnostics
 - concurrency admission diagnostics
+- realtime runtime events
+- readable console runtime events
 - trace recording foundations
 - terminal snapshots
 - replay restoration
@@ -353,9 +364,11 @@ The strongest areas today are:
 - retry/recovery semantics
 - retention/compaction
 - distributed concurrency and throttling
+- executable distributed throttling scenario
 - execution control state
 - runtime queue control
 - replay/snapshot foundations
+- observability and realtime logging foundations
 - integration-test-driven validation
 
 Areas still evolving include:
@@ -364,8 +377,10 @@ Areas still evolving include:
 - official replay APIs
 - durable decision ledger
 - observability, tracing, and metrics polish
+- operational dashboarding
 - Kubernetes deployment assets
-- additional enterprise demo scenarios
+- real enterprise sample workflows
+- MLOps-oriented platform capabilities
 - production documentation split
 
 ---
@@ -382,14 +397,39 @@ It currently includes:
 - scenario documentation for enterprise runtime behaviors
 - an external sample step plugin under `Samples/Multiplexed.Sample.External.Plugins.Steps`
 - a JSON pipeline at `demo/enterprise-runtime/pipelines/enterprise-demo-pipeline.json`
-- integration-test validation through `IAiRuntimePipelineBackgroundController`
+- interactive console scenario selection
 - distributed runtime worker participation
+- realtime readable runtime logs
+- live progress output
+- execution pause, resume, and cancel controls
+- retry recovery summaries
+- retention and hot-state summaries
+- replay validation for supported scenarios
+- distributed provider throttling through the `throttling-100` scenario
 - `RunId` and `ExecutionId` separation
 - terminal completion through the controller path
 
-The first demo pipeline is validated by an integration test that runs through the background controller with distributed runtime workers. This validates the controller execution path, not only a simple batch or in-memory execution path.
+The current executable console scenarios are:
 
-Future demo work will expand this into additional scenarios for crash recovery, pause/resume/cancel, human-in-the-loop, throttling, retention/compaction, and deterministic convergence.
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+The `throttling-100` scenario demonstrates:
+
+- distributed provider throttling
+- Redis lease-based concurrency admission
+- realtime `[THROTTLED]` visibility
+- randomized provider distribution with OpenAI as the throttled target
+- bounded provider capacity under worker pressure
+- deterministic convergence despite throttling delays
+
+The demo validates the controller execution path, distributed worker participation, runtime controls, realtime logging, and terminal completion behavior. It is intended to show distributed AI execution infrastructure, not only a simple batch or in-memory execution path.
+
+Future demo work will expand further into crash recovery, human-in-the-loop, advanced replay workflows, Kubernetes deployment assets, real enterprise sample workflows, and broader AI operations/MLOps-oriented runtime capabilities.
 
 ---
 
@@ -399,17 +439,21 @@ The roadmap is organized into phases.
 
 | Phase | Focus | Status |
 |---|---|---|
-| Completed | Core runtime foundations already implemented | In progress / validated by tests |
+| Completed | Core runtime foundations already implemented | Implemented / validated by tests |
 | Phase 0 | README review and documentation restructure | Completed (V1) |
-| Phase 1 | Enterprise demo | In progress - local controller demo validated |
+| Phase 1 | Enterprise demo | Completed (V1) - controller demo, distributed workers, runtime controls, chaos scenarios, retention/replay, and throttling scenario validated |
 | Phase 2 | Real enterprise sample | Planned |
-| Phase 3 | Observability, tracing, and metrics | Planned |
+| Phase 3 | Observability, tracing, and metrics | Foundations available / active polish |
 | Phase 4 | Kubernetes deployment demo | Planned |
 | Phase 5 | Public API / SDK polish | Planned |
 | Phase 6 | Durable Decision Ledger | Planned |
 | Phase 7 | Official Replay / Audit package | Planned |
 | Phase 8 | Cost and Provider Governance | Planned |
 | Phase 9 | Articles and public positioning | Planned |
+
+The roadmap above tracks the current runtime and enterprise demo evolution.
+
+The longer-term platform direction is tracked separately in [`docs/road-to-mlops.md`](docs/road-to-mlops.md), which describes how these deterministic execution foundations can evolve toward broader AI execution infrastructure, governance, observability, replay, and MLOps-oriented runtime operations.
 
 For the detailed roadmap, see [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -424,7 +468,10 @@ The full documentation map is available here:
 - [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md) — Enterprise readiness matrix.
 - [`docs/comparison-existing-tools.md`](docs/comparison-existing-tools.md) — Ecosystem positioning and comparison with existing tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
+- [`docs/road-to-mlops.md`](docs/road-to-mlops.md) — Long-term evolution from deterministic AI runtime foundations toward a broader AI execution and MLOps-oriented platform.
 - [`demo/enterprise-runtime/README.md`](demo/enterprise-runtime/README.md) — Local enterprise runtime demo using Docker Compose, Redis, MongoDB, external demo steps, controller execution, distributed workers, and scenario documentation.
+- [`demo/enterprise-runtime/docs/scenarios/06-distributed-concurrency-and-throttling.md`](demo/enterprise-runtime/docs/scenarios/06-distributed-concurrency-and-throttling.md) — Executable distributed throttling scenario documentation.
+- [`demo/enterprise-runtime/docs/scenarios/08-deterministic-convergence.md`](demo/enterprise-runtime/docs/scenarios/08-deterministic-convergence.md) — Deterministic convergence scenario documentation.
 
 Focused AI runtime documentation:
 

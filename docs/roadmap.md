@@ -15,6 +15,7 @@ The project is under active development. Some capabilities are implemented and v
 | Current | Current active documentation or engineering phase. |
 | Planned | Identified future work. |
 | Foundation available | Core building blocks exist, but the public API or production polish is not complete. |
+| Platform direction | Long-term evolution path beyond the current runtime foundation. |
 
 ---
 
@@ -56,6 +57,8 @@ The following capabilities are already implemented or available as runtime found
 | Terminal snapshots | Foundation available |
 | Replay restoration | Foundation available |
 | Runtime metrics and tracing foundations | Foundation available |
+| Enterprise runtime demo scenarios | Completed (V1) |
+| Road to MLOps direction | Platform direction |
 
 ---
 
@@ -101,25 +104,45 @@ Future documentation refinement may continue, but the first documentation restru
 
 ## Phase 1 — Enterprise Demo
 
-**Status:** Planned
+**Status:** Completed (V1)
 
 Goal: build a demo that clearly answers enterprise AI execution questions.
 
-The demo should show:
+Implemented demo capabilities include:
 
 - deterministic DAG execution
-- worker crash recovery
-- duplicate execution prevention
-- retry behavior
+- distributed workers
+- retry and recovery
+- retention and compaction pressure
+- replay validation
 - distributed throttling
-- pause/resume/cancel
-- human-in-the-loop
-- bounded state through retention
-- context resolution across inputs, step outputs, payloads, providers, and policies
-- replay from snapshot
-- deterministic convergence proof
+- realtime readable runtime logs
+- pause/resume/cancel controls
+- interactive console execution
+- runtime progress monitoring
+- deterministic convergence scenarios
 
-The demo should be understandable by architects, engineering managers, and senior developers.
+Implemented executable scenarios:
+
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+The demo now validates:
+
+- distributed execution behavior
+- runtime coordination
+- retry recovery
+- retention pressure
+- replay restoration
+- distributed provider throttling
+- deterministic convergence
+- execution control state
+
+Future refinements may continue, but the first enterprise demo phase is complete.
 
 ---
 
@@ -144,11 +167,23 @@ The sample should show how the runtime applies to real business processes, not o
 
 ## Phase 3 — Observability Dashboard
 
-**Status:** Planned
+**Status:** Foundations available / Planned polish
 
 Goal: expose runtime behavior visually.
 
-Dashboard capabilities may include:
+Current observability foundations already include:
+
+- runtime metrics
+- trace recording
+- realtime runtime events
+- retry diagnostics
+- retention diagnostics
+- concurrency admission diagnostics
+- replay diagnostics
+- readable console runtime events
+- execution progress monitoring
+
+Future dashboard capabilities may include:
 
 - execution list
 - DAG visualization
@@ -157,11 +192,11 @@ Dashboard capabilities may include:
 - retention and compaction events
 - resolver and context-resolution diagnostics
 - concurrency admission decisions
-- provider/model throttling status
+- provider/model throttling visibility
 - replay and snapshot visibility
 - execution control actions
 
-This phase should make the runtime easier to understand and operate.
+This phase is partially implemented through runtime observability foundations, but visual operational tooling remains planned.
 
 ---
 
@@ -292,6 +327,49 @@ The goal is to position the project seriously without exaggerating its maturity.
 
 ---
 
+
+## Long-Term Platform Direction
+
+The roadmap above tracks the current runtime foundation and enterprise demo evolution.
+
+The project should not be interpreted as a finished product. The deterministic runtime core is a foundation for a broader AI execution and MLOps-oriented platform.
+
+The long-term direction is to evolve from:
+
+```text
+runtime engine
+```
+
+toward:
+
+```text
+AI execution infrastructure
+AI operations control plane
+MLOps-oriented runtime platform
+enterprise AI governance layer
+```
+
+This broader direction includes areas such as:
+
+- AI execution infrastructure
+- enterprise AI orchestration
+- runtime governance
+- replay and audit systems
+- distributed AI operations
+- multi-agent coordination
+- execution observability
+- AI memory and decision systems
+- provider governance and cost control
+- tenant-aware runtime controls
+- MLOps-oriented runtime infrastructure
+
+See:
+
+- [`docs/road-to-mlops.md`](road-to-mlops.md)
+
+This keeps the current roadmap focused while documenting the larger platform ambition.
+
+---
 ## Guiding Principles
 
 All roadmap work should respect these principles:
@@ -313,12 +391,21 @@ All roadmap work should respect these principles:
 
 ## Current Priority
 
-The current priority is:
+The current priorities are:
 
 ```text
-Phase 1 — Enterprise Demo
+Enterprise demo polish
+Observability polish
+Replay and audit formalization
+Road to MLOps platform direction
+Kubernetes deployment demo
+Articles and public positioning
 ```
 
 Phase 0 documentation restructure is complete as V1.
 
-Next work should focus on demonstrating the runtime’s enterprise execution guarantees clearly, using the new documentation structure as the foundation.
+The runtime foundations are already implemented and validated through distributed integration scenarios.
+
+The focus is now shifting toward operational polish, enterprise demonstration, replay formalization, MLOps-oriented platform direction, and public positioning.
+
+The dedicated long-term platform direction is documented in [`docs/road-to-mlops.md`](road-to-mlops.md).

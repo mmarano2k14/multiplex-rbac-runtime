@@ -6,6 +6,156 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.5.1] - 2026-05-23 Enterprise Runtime Demo
+
+- Added executable enterprise runtime console demo for production-style AI workflow execution.
+- Added local demo infrastructure support for:
+  - Redis
+  - MongoDB
+  - Docker Compose
+  - reset scripts
+  - local demo pipeline assets
+
+- Added interactive enterprise runtime console runner with:
+  - scenario selection
+  - log mode selection
+  - background controller startup
+  - runtime execution enqueue
+  - live progress monitoring
+  - readable realtime runtime logs
+  - raw realtime event mode
+  - noisy internal event mode
+  - pause/resume hotkeys
+  - cancel-with-confirmation flow
+  - execution cleanup after completion or cancellation
+
+- Added executable demo scenarios:
+
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+- Added `json` scenario to validate:
+  - JSON pipeline loading
+  - controller execution path
+  - distributed worker execution
+  - retry recovery
+  - terminal completion
+  - snapshot persistence
+  - replay validation
+  - cleanup
+
+- Added `chaos-100` scenario to validate:
+  - 100-step in-memory distributed DAG execution
+  - multi-worker coordination
+  - retry recovery under moderate pressure
+  - live progress visibility
+  - pause/resume behavior
+  - cancel confirmation behavior
+  - deterministic completion
+  - replay validation
+
+- Added `chaos-500` scenario to validate:
+  - 500-step aggressive distributed DAG execution
+  - distributed worker coordination under heavier pressure
+  - retry recovery
+  - hot-state retention pressure
+  - compaction
+  - eviction
+  - snapshot persistence
+  - replay restoration
+  - replay fingerprint consistency
+  - bounded terminal hot state
+
+- Added `throttling-100` scenario to validate:
+  - 100-step distributed provider throttling
+  - provider-level concurrency target
+  - OpenAI as the throttled provider
+  - randomized provider distribution while keeping OpenAI dominant
+  - Redis lease-based distributed admission control
+  - bounded provider capacity under worker pressure
+  - deterministic convergence after throttling delays
+
+- Added realtime readable event formatting for:
+  - claimed steps
+  - completed steps
+  - failed steps
+  - retry/recovery events
+  - finalization success
+  - finalization race loss
+  - snapshot persistence
+  - replay restoration
+  - cleanup events
+  - throttled steps
+
+- Added realtime throttling visibility:
+  - classified `[AI DAG] Step throttled` runtime events as `StepThrottled`
+  - added `[THROTTLED]` console output
+  - excluded throttling events from noisy-only filtering
+  - added console color support for throttling events
+
+- Added execution summaries for demo validation:
+  - execution summary
+  - distributed worker summary
+  - retry recovery summary
+  - retention summary
+  - replay validation summary
+  - throttling summary
+  - validation summary
+
+- Added throttling execution summary with:
+  - scope
+  - target
+  - configured limit
+  - observed workers
+  - throttling observed
+  - throttle respected
+
+- Added enterprise runtime demo documentation:
+  - demo README
+  - scenario document table
+  - command reference
+  - interactive mode documentation
+  - log mode documentation
+  - runtime controls documentation
+  - troubleshooting section
+  - recommended demo flow
+
+- Added scenario documentation for:
+  - multi-worker execution
+  - worker crash recovery
+  - duplicate execution prevention
+  - pause/resume/cancel
+  - human-in-the-loop
+  - distributed throttling
+  - retention and compaction
+  - deterministic convergence
+
+- Updated root README to reference:
+  - executable enterprise demo scenarios
+  - `throttling-100`
+  - scenario documentation
+  - long-term `road-to-mlops.md` direction
+
+- Added `docs/road-to-mlops.md` to clarify the long-term evolution from deterministic runtime foundations toward:
+  - AI execution infrastructure
+  - AI operations platform
+  - runtime governance
+  - replay and audit systems
+  - distributed AI operations
+  - MLOps-oriented runtime operations
+
+- Updated roadmap documentation to distinguish:
+  - completed runtime foundations
+  - completed enterprise demo V1
+  - observability foundations
+  - future MLOps/platform evolution
+
+---
+
 ## [1.0.5.0] - 2026-05-20 - Execution Control State / Queue Control / Human-in-the-Loop
 
 ### Added

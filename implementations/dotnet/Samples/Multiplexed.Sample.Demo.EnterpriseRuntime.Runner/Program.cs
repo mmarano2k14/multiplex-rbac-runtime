@@ -10,6 +10,7 @@ using Multiplexed.AI.Runtime;
 using Multiplexed.Realtime.Events.Abstractions;
 using Multiplexed.Realtime.Handlers;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Configuration;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Control;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Persistence;
@@ -48,6 +49,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
         {
             try
             {
+                var settings = EnterpriseRuntimeDemoSettingsLoader.Load();
+
                 var options = EnterpriseRuntimeDemoOptionsParser.Parse(
                     args);
 
@@ -81,9 +84,11 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
 
                 await using var host = EnterpriseRuntimeDemoHost.Create(
                     runtimeOptions,
+                    settings,
                     services => ConfigureDemoServices(
                         services,
-                        options));
+                        options,
+                        settings));
 
                 var scenarioRunner = new EnterpriseRuntimeScenarioRunner(
                     host.ServiceProvider.GetServices<IEnterpriseRuntimeScenario>());
@@ -161,15 +166,25 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
         /// <param name="options">
         /// The demo options.
         /// </param>
+        /// <param name="settings">
+        /// The demo settings.
+        /// </param>
         private static void ConfigureDemoServices(
             IServiceCollection services,
-            EnterpriseRuntimeDemoOptions options)
+            EnterpriseRuntimeDemoOptions options,
+            EnterpriseRuntimeDemoSettings settings)
         {
             ArgumentNullException.ThrowIfNull(
                 services);
 
             ArgumentNullException.ThrowIfNull(
                 options);
+
+            ArgumentNullException.ThrowIfNull(
+                settings);
+
+            services.AddSingleton(
+                settings);
 
             services.AddSingleton(
                 new EnterpriseRuntimeVerboseConsoleOptions
@@ -187,7 +202,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
 
             services.AddSingleton<EnterpriseRuntimeRetentionAnalyzer>();
 
-            services.AddSingleton<EnterpriseRuntimeThrottlingAnalyzer>();         
+            services.AddSingleton<EnterpriseRuntimeThrottlingAnalyzer>();
 
             services.AddSingleton<EnterpriseRuntimeExecutionProgressMonitor>();
 
@@ -216,8 +231,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
             services.AddMongoAiExecutionSnapshots<ExecutionContextSnapshot>(
                 snapshotOptions =>
                 {
-                    snapshotOptions.ConnectionString = "mongodb://localhost:27017";
-                    snapshotOptions.DatabaseName = "deterministic_ai_runtime_demo";
+                    snapshotOptions.ConnectionString = settings.Mongo.ConnectionString;
+                    snapshotOptions.DatabaseName = settings.Mongo.DatabaseName;
                     snapshotOptions.CollectionName =
                         $"execution_snapshots_demo_{Guid.NewGuid():N}";
                 });

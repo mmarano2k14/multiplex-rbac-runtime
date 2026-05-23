@@ -12,6 +12,9 @@
 		<None Include="..\..\..\..\demo\enterprise-runtime\pipelines\enterprise-demo-pipeline.json" Link="config\enterprise-demo-pipeline.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
+		<None Include="..\..\..\..\demo\enterprise-runtime\config\enterprise-runtime-settings.json" Link="config\enterprise-runtime-settings.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
 	</ItemGroup>
 
 	<ItemGroup>

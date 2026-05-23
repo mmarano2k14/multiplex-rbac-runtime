@@ -20,6 +20,8 @@ This demo shows how an AI execution runtime behaves when workflows move closer t
 - resume
 - cancel with confirmation
 - safe cleanup
+- distributed provider throttling
+- deterministic convergence validation
 
 The purpose of this demo is to make the runtime visible, testable, and understandable from a local console.
 
@@ -153,6 +155,9 @@ demo/
     pipelines/
       enterprise-demo-pipeline.json
 
+    config/
+      demo-settings.json
+
     scripts/
       reset-demo.ps1
       reset-demo.sh
@@ -173,6 +178,138 @@ demo/
 
 ---
 
+## Scenario documents
+
+| Scenario | Document | Purpose |
+|---|---|---|
+| Multi-worker execution | [`01-multi-worker-execution.md`](scenarios/01-multi-worker-execution.md) | Demonstrates multiple workers advancing the same execution safely. |
+| Worker crash recovery | [`02-worker-crash-recovery.md`](scenarios/02-worker-crash-recovery.md) | Documents recovery behavior when worker execution is interrupted. |
+| Duplicate execution prevention | [`03-duplicate-execution-prevention.md`](scenarios/03-duplicate-execution-prevention.md) | Explains how atomic claims and ownership prevent duplicate step execution. |
+| Pause, resume, cancel | [`04-pause-resume-cancel.md`](scenarios/04-pause-resume-cancel.md) | Shows execution control behavior while workers are active. |
+| Human-in-the-loop | [`05-human-in-the-loop.md`](scenarios/05-human-in-the-loop.md) | Documents waiting-for-input and human input submission behavior. |
+| Distributed throttling | [`06-distributed-throttling.md`](scenarios/06-distributed-throttling.md) | Demonstrates distributed provider throttling and bounded concurrency. |
+| Retention and compaction | [`07-retention-compaction.md`](scenarios/07-retention-compaction.md) | Shows hot-state retention, compaction, eviction, and replay safety. |
+| Deterministic convergence | [`08-deterministic-convergence.md`](scenarios/08-deterministic-convergence.md) | Summarizes convergence guarantees across distributed execution scenarios. |
+
+---
+## Runtime configuration
+
+The enterprise runtime demo supports centralized runtime configuration through:
+
+```text
+config/demo-settings.json
+```
+
+The file is linked into the console runner output folder and copied with the executable, similar to the demo pipeline file.
+
+It allows changing:
+
+- Redis connection settings
+- MongoDB connection settings
+- Docker infrastructure metadata
+- container names
+- runtime defaults
+- future installer/bootstrap configuration
+
+Example:
+
+```json
+{
+  "version": "1.0",
+  "infrastructure": {
+    "dockerComposeFile": "demo/enterprise-runtime/deploy/docker/docker-compose.yml",
+    "projectName": "deterministic-ai-runtime-demo"
+  },
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "connectionString": "localhost:6379",
+    "database": 0,
+    "containerName": "deterministic-ai-runtime-demo-redis"
+  },
+  "mongo": {
+    "host": "localhost",
+    "port": 27017,
+    "connectionString": "mongodb://localhost:27017",
+    "databaseName": "deterministic_ai_runtime_demo",
+    "containerName": "deterministic-ai-runtime-demo-mongo"
+  },
+  "runner": {
+    "defaultScenario": "json",
+    "defaultVerbose": false,
+    "defaultVerboseRaw": false,
+    "defaultVerboseNoise": false
+  }
+}
+```
+
+### Why this exists
+
+The demo previously used hardcoded Redis and MongoDB connection strings.
+
+The runtime now loads infrastructure configuration dynamically from JSON.
+
+This makes the demo:
+
+- more portable
+- easier to distribute
+- installer-ready
+- easier to run on different machines
+- easier to integrate with Docker
+- future-ready for Kubernetes and bootstrap tooling
+
+### Changing ports
+
+You can change Redis and MongoDB ports directly from:
+
+```text
+config/demo-settings.json
+```
+
+and the runtime will use the new values.
+
+Example Redis override:
+
+```json
+{
+  "redis": {
+    "port": 6380,
+    "connectionString": "localhost:6380"
+  }
+}
+```
+
+Example MongoDB override:
+
+```json
+{
+  "mongo": {
+    "port": 27018,
+    "connectionString": "mongodb://localhost:27018"
+  }
+}
+```
+
+The Docker Compose file must use matching port mappings.
+
+Example Redis mapping:
+
+```yaml
+ports:
+  - "6380:6379"
+```
+
+Example MongoDB mapping:
+
+```yaml
+ports:
+  - "27018:27017"
+```
+
+This validates that the runtime no longer depends on hardcoded infrastructure values.
+
+---
+
 ## Requirements
 
 You need:
@@ -182,6 +319,7 @@ You need:
 - Docker Compose
 - PowerShell or Bash
 - Redis and MongoDB running through the provided Docker Compose file
+- `config/demo-settings.json` copied with the console runner
 
 ---
 
@@ -205,6 +343,14 @@ Expected services:
 deterministic-ai-runtime-demo-redis
 deterministic-ai-runtime-demo-mongo
 ```
+
+The runtime reads Redis and MongoDB connection values from:
+
+```text
+config/demo-settings.json
+```
+
+If you change Docker port mappings, update the matching connection strings in this file.
 
 ---
 
@@ -273,6 +419,7 @@ When started without arguments, the console lets you choose:
 json
 chaos-100
 chaos-500
+throttling-100
 ```
 
 Use:
@@ -520,6 +667,76 @@ Hot state limit respected:      True
 ```
 
 This proves that the hot state was kept under control while the execution still completed and replay validation still succeeded.
+
+---
+
+## Scenario: throttling-100
+
+The `throttling-100` scenario runs a distributed provider throttling pipeline with 100 steps.
+
+Run directly:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100
+```
+
+Run with readable runtime logs:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
+```
+
+Run with raw runtime JSON events:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-raw
+```
+
+Run with noisy internal runtime events:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-noise
+```
+
+### Why this scenario exists
+
+The `throttling-100` scenario demonstrates distributed provider-level concurrency control under worker pressure.
+
+The scenario intentionally creates contention against a throttled provider target while distributed workers continue advancing the execution safely.
+
+It demonstrates:
+
+- distributed throttling
+- Redis lease-based concurrency admission
+- bounded provider capacity
+- realtime throttling visibility
+- randomized provider distribution
+- deterministic convergence under throttling pressure
+
+### What it demonstrates
+
+The scenario proves that workers can coordinate safely around shared provider limits.
+
+The runtime demonstrates:
+
+```text
+workers request provider admission
+Redis coordinates distributed leases
+provider capacity remains bounded
+excess work is throttled safely
+workers continue progressing
+the execution still converges to Completed
+```
+
+Example verbose output:
+
+```text
+[CLAIMED] throttling-step-088 | worker=...
+[THROTTLED] throttling-step-090 | provider=openai | retry-after=25ms
+[DONE]    throttling-step-088
+```
+
+The scenario also demonstrates that throttling delays do not corrupt deterministic convergence.
 
 ---
 
@@ -935,6 +1152,31 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose --verbose-noise
 ```
 
+### Throttling 100
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100
+```
+
+### Throttling 100 with verbose logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
+```
+
+### Throttling 100 with raw logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-raw
+```
+
+### Throttling 100 with noisy logs
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-noise
+```
+
+
 ### Full debug mode
 
 ```powershell
@@ -982,6 +1224,14 @@ chaos-500
 ```
 
 for the aggressive retention, compaction, and eviction demo.
+
+Choose:
+
+```text
+throttling-100
+```
+
+for the distributed provider throttling and bounded concurrency demo.
 
 ### 5. Select log mode
 
@@ -1049,6 +1299,44 @@ Verify:
 
 ```powershell
 docker ps
+```
+
+### Connection fails after changing Docker ports
+
+Make sure the Docker Compose port mappings and `config/demo-settings.json` connection strings match.
+
+For example, if Redis is mapped as:
+
+```yaml
+ports:
+  - "6380:6379"
+```
+
+then the JSON setting must use:
+
+```json
+{
+  "redis": {
+    "connectionString": "localhost:6380"
+  }
+}
+```
+
+If MongoDB is mapped as:
+
+```yaml
+ports:
+  - "27018:27017"
+```
+
+then the JSON setting must use:
+
+```json
+{
+  "mongo": {
+    "connectionString": "mongodb://localhost:27018"
+  }
+}
 ```
 
 ### The demo state looks stale
@@ -1138,3 +1426,4 @@ Possible future improvements:
 - replay command from CLI
 - chaos mode with simulated worker crash
 - provider throttling visualization
+- AI operations and MLOps-oriented runtime tooling

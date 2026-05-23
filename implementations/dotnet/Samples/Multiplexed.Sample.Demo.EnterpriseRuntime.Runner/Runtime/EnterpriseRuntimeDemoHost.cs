@@ -17,6 +17,7 @@ using Multiplexed.AI.Runtime.Execution.Retention.Policies;
 using Multiplexed.Rbac.Core.ExecutionContext;
 using Multiplexed.Rbac.Core.Runtime.DI;
 using Multiplexed.Realtime.DI;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Configuration;
 using StackExchange.Redis;
 using ExecutionContext = Multiplexed.Rbac.Core.ExecutionContext.ExecutionContext;
 
@@ -36,9 +37,14 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
             IServiceScope scope,
             IReadOnlyCollection<IHostedService> hostedServices)
         {
-            _rootProvider = rootProvider ?? throw new ArgumentNullException(nameof(rootProvider));
-            _scope = scope ?? throw new ArgumentNullException(nameof(scope));
-            _hostedServices = hostedServices ?? throw new ArgumentNullException(nameof(hostedServices));
+            _rootProvider = rootProvider ?? throw new ArgumentNullException(
+                nameof(rootProvider));
+
+            _scope = scope ?? throw new ArgumentNullException(
+                nameof(scope));
+
+            _hostedServices = hostedServices ?? throw new ArgumentNullException(
+                nameof(hostedServices));
         }
 
         /// <summary>
@@ -52,6 +58,9 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
         /// <param name="options">
         /// The runtime engine options.
         /// </param>
+        /// <param name="settings">
+        /// The enterprise runtime demo settings.
+        /// </param>
         /// <param name="configureServices">
         /// The optional demo service configuration delegate.
         /// </param>
@@ -60,15 +69,21 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
         /// </returns>
         public static EnterpriseRuntimeDemoHost Create(
             AiEngineOptions options,
+            EnterpriseRuntimeDemoSettings settings,
             Action<IServiceCollection>? configureServices = null)
         {
-            ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(
+                options);
+
+            ArgumentNullException.ThrowIfNull(
+                settings);
 
             var services = new ServiceCollection();
 
             RegisterServices(
                 services,
-                options);
+                options,
+                settings);
 
             configureServices?.Invoke(
                 services);
@@ -117,7 +132,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
 
             if (_rootProvider.GetService<IConnectionMultiplexer>() is IAsyncDisposable asyncMultiplexer)
             {
-                await asyncMultiplexer.DisposeAsync().ConfigureAwait(false);
+                await asyncMultiplexer.DisposeAsync()
+                    .ConfigureAwait(false);
             }
             else if (_rootProvider.GetService<IConnectionMultiplexer>() is IDisposable multiplexer)
             {
@@ -128,29 +144,57 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
 
             if (_rootProvider is IAsyncDisposable asyncDisposable)
             {
-                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                await asyncDisposable.DisposeAsync()
+                    .ConfigureAwait(false);
+
                 return;
             }
 
             _rootProvider.Dispose();
         }
 
+        /// <summary>
+        /// Registers enterprise runtime demo services.
+        /// </summary>
+        /// <param name="services">
+        /// The service collection.
+        /// </param>
+        /// <param name="options">
+        /// The runtime engine options.
+        /// </param>
+        /// <param name="settings">
+        /// The enterprise runtime demo settings.
+        /// </param>
         private static void RegisterServices(
             IServiceCollection services,
-            AiEngineOptions options)
+            AiEngineOptions options,
+            EnterpriseRuntimeDemoSettings settings)
         {
-            ArgumentNullException.ThrowIfNull(services);
-            ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(
+                services);
+
+            ArgumentNullException.ThrowIfNull(
+                options);
+
+            ArgumentNullException.ThrowIfNull(
+                settings);
 
             services.AddLogging();
             services.AddMemoryCache();
 
+            services.AddSingleton(
+                settings);
+
             services.AddSingleton<IConnectionMultiplexer>(_ =>
-                ConnectionMultiplexer.Connect("localhost:6379"));
+                ConnectionMultiplexer.Connect(
+                    settings.Redis.ConnectionString));
 
-            EnsurePayloadStoreOptions(options);
+            EnsurePayloadStoreOptions(
+                options,
+                settings);
 
-            services.AddMultiplexAI(options);
+            services.AddMultiplexAI(
+                options);
 
             services.AddAiPoliciesFromAssemblies(
                 typeof(AiRuntimeAssemblyMarker).Assembly,
@@ -184,31 +228,49 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
                 });
 
             services.AddMultiplexRealtime(
-                configureChannel: null,
-                typeof(AiRuntimeAssemblyMarker).Assembly)
-                //typeof(EnterpriseRuntimeDemoHost).Assembly)
-            .AddSignalRRealtimeTransport(realtimeOptions =>
-            {
-                realtimeOptions.CorsPolicy = "SignalRcors";
-                realtimeOptions.AllowedOrigins =
-                [
-                    "http://localhost:3000"
-                ];
-            });
+                    configureChannel: null,
+                    typeof(AiRuntimeAssemblyMarker).Assembly)
+                .AddSignalRRealtimeTransport(realtimeOptions =>
+                {
+                    realtimeOptions.CorsPolicy = "SignalRcors";
+                    realtimeOptions.AllowedOrigins =
+                    [
+                        "http://localhost:3000"
+                    ];
+                });
 
             services.Replace(
                 ServiceDescriptor.Singleton<IExecutionContextAccessor, DemoExecutionContextAccessor>());
         }
 
+        /// <summary>
+        /// Ensures payload store options are configured for the enterprise runtime demo.
+        /// </summary>
+        /// <param name="options">
+        /// The runtime engine options.
+        /// </param>
+        /// <param name="settings">
+        /// The enterprise runtime demo settings.
+        /// </param>
         private static void EnsurePayloadStoreOptions(
-            AiEngineOptions options)
+            AiEngineOptions options,
+            EnterpriseRuntimeDemoSettings settings)
         {
+            ArgumentNullException.ThrowIfNull(
+                options);
+
+            ArgumentNullException.ThrowIfNull(
+                settings);
+
             options.PayloadStore ??= new AiPayloadStoreOptions();
 
             options.PayloadStore.Enabled = true;
 
             if (string.IsNullOrWhiteSpace(options.PayloadStore.Provider) ||
-                string.Equals(options.PayloadStore.Provider, "inmemory", StringComparison.OrdinalIgnoreCase))
+                string.Equals(
+                    options.PayloadStore.Provider,
+                    "inmemory",
+                    StringComparison.OrdinalIgnoreCase))
             {
                 options.PayloadStore.Provider = "mongo-redis";
             }
@@ -222,8 +284,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
 
             options.PayloadStore.Mongo ??= new MongoAiPayloadStoreOptions();
             options.PayloadStore.Mongo.Enabled = true;
-            options.PayloadStore.Mongo.ConnectionString ??= "mongodb://localhost:27017";
-            options.PayloadStore.Mongo.DatabaseName ??= "deterministic_ai_runtime_demo";
+            options.PayloadStore.Mongo.ConnectionString ??= settings.Mongo.ConnectionString;
+            options.PayloadStore.Mongo.DatabaseName ??= settings.Mongo.DatabaseName;
             options.PayloadStore.Mongo.CollectionName ??= $"payloads_demo_{Guid.NewGuid():N}";
 
             options.PayloadStore.RedisCache ??= new RedisAiPayloadCacheOptions();
@@ -252,6 +314,12 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime
             options.PayloadStore.StepIndexCache.RefreshTtlOnRead = true;
         }
 
+        /// <summary>
+        /// Creates the demo execution context.
+        /// </summary>
+        /// <returns>
+        /// The demo execution context.
+        /// </returns>
         private static ExecutionContext CreateRuntimeContext()
         {
             return new ExecutionContext
