@@ -19,5 +19,10 @@
         /// Gets or sets the local runner cancellation source used to unblock the console runner.
         /// </summary>
         public CancellationTokenSource? RunnerCancellationSource { get; set; }
+
+        /// <summary>
+        /// Gets or sets RealtimeOutputSuspended, which indicates whether the console should suspend displaying realtime output.
+        /// </summary>
+        public bool RealtimeOutputSuspended { get; set; } = false;
     }
 }

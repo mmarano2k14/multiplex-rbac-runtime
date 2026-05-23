@@ -21,9 +21,10 @@ The current executable scenarios are:
 json
 chaos-100
 chaos-500
+throttling-100
 ```
 
-Those scenarios demonstrate distributed worker participation, retry recovery, retention, replay, and execution control.
+Those scenarios demonstrate distributed worker participation, retry recovery, retention, replay, distributed throttling, execution control, and deterministic convergence.
 
 A future dedicated `worker-crash` scenario should explicitly simulate a runtime worker disappearing while owning a claimed step.
 
@@ -131,16 +132,38 @@ The current console demo does not kill a worker process manually.
 
 However, related mechanisms are already visible through the current scenarios.
 
-Use:
+Use the launcher:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Then select:
+
+```text
+chaos-100
 ```
 
 or:
 
+```text
+chaos-500
+```
+
+with log mode:
+
+```text
+verbose
+```
+
+Direct launcher commands:
+
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
 ```
 
 These scenarios show:
@@ -165,10 +188,16 @@ They are prerequisites for a future worker crash scenario.
 A future version may expose a direct scenario such as:
 
 ```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario worker-crash -Verbose
+```
+
+Advanced direct project command:
+
+```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario worker-crash --verbose
 ```
 
-This command does not exist yet unless the scenario has been implemented in the console runner.
+This command does not exist yet unless the scenario has been implemented and registered in the console runner.
 
 Do not document it as executable until it is registered in the runner.
 
@@ -289,6 +318,7 @@ Pause is cooperative:
 the user asks the runtime to stop claiming new work
 already claimed work may drain
 resume allows claiming again
+realtime console logs are suspended while paused
 ```
 
 Cancel is also cooperative but terminal:
@@ -341,13 +371,19 @@ Both are required for reliable distributed execution.
 Until a dedicated worker crash scenario is added, use `chaos-100` for the closest visible distributed behavior:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
 ```
 
 Use `chaos-500` for stronger distributed and retention pressure:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Run the full validation before commit:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
 ```
 
 ---

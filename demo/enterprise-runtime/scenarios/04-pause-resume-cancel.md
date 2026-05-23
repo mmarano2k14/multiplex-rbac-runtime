@@ -1,41 +1,52 @@
-# Scenario 04 - Pause, resume, and cancel
+# Scenario 05 - Distributed throttling and bounded concurrency
 
 ## Purpose
 
-This scenario explains how the enterprise runtime console demo proves durable execution control.
+This scenario explains how the enterprise runtime console demo proves distributed throttling and bounded concurrency enforcement.
 
-The goal is to show that an execution can be paused, resumed, and cancelled while distributed workers are active.
+The goal is to show that multiple distributed workers can safely coordinate access to shared provider capacity without exceeding configured limits.
 
-This is not only a user-interface feature.
+This is not only local throttling.
 
-It is a runtime control-plane feature.
-
-The console sends control commands to the durable execution control service. Workers then respect that control state while claiming and advancing work.
+It is distributed concurrency governance enforced through Redis-backed coordination.
 
 ---
 
 ## Why this matters
 
-Production AI execution cannot only be fire-and-forget.
-
-Long-running AI workflows need operational control.
-
-In a real system, operators may need to:
+AI systems frequently interact with shared external providers:
 
 ```text
-pause an execution
-inspect state
-wait for an external condition
-resume later
-cancel safely
-avoid corrupting state
-avoid killing in-flight work unsafely
-clean up resources
+LLM providers
+embedding providers
+vector databases
+external APIs
+tool providers
+retrieval systems
 ```
 
-Without a durable control plane, an AI workflow runtime cannot be operated safely.
+Those systems usually have:
 
-Pause, resume, and cancel are foundational runtime capabilities.
+```text
+rate limits
+concurrency limits
+token limits
+cost limits
+shared capacity
+```
+
+Without distributed throttling:
+
+```text
+workers may overload providers
+requests may fail unpredictably
+provider bans may occur
+costs may explode
+retries may amplify pressure
+parallel workers may exceed capacity
+```
+
+A production AI runtime must coordinate concurrency globally.
 
 ---
 
@@ -44,80 +55,108 @@ Pause, resume, and cancel are foundational runtime capabilities.
 This scenario proves that the runtime can:
 
 ```text
-accept pause requests
-block new claims while paused
-allow already claimed work to drain
-resume claiming after resume
-pause before cancellation confirmation
-cancel after confirmation
-resume if cancellation is declined
-unblock the console runner after confirmed cancel
-clean up execution state safely
+coordinate distributed concurrency
+enforce provider-level throttling
+bound shared concurrency across workers
+use Redis-backed distributed leases
+prevent concurrency explosions
+respect configured capacity
+recover leases safely
+continue converging under throttling pressure
 ```
 
 ---
 
 ## Executable console scenarios
 
-Pause, resume, and cancel can be tested with the current executable scenarios:
+Distributed throttling is demonstrated through:
 
 ```text
+throttling-100
+```
+
+Other scenarios:
+
+```text
+json
 chaos-100
 chaos-500
 ```
 
-Recommended scenario:
+also use distributed workers, but:
 
 ```text
-chaos-500
+throttling-100
 ```
 
-Why `chaos-500` is useful here:
-
-```text
-more steps
-more workers
-more time to press keys
-more visible pause/resume behavior
-stronger distributed pressure
-```
-
-For a shorter test, use:
-
-```text
-chaos-100
-```
+is specifically designed to demonstrate concurrency governance.
 
 ---
 
-## Start local infrastructure
+## Recommended entry point
 
-From the repository root:
-
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
-```
-
-Verify that Redis and MongoDB are running:
+Use the launcher:
 
 ```powershell
-docker ps
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
+
+This automatically:
+
+```text
+loads enterprise-runtime-settings.json
+checks Docker
+starts infrastructure
+shows infrastructure status
+launches the interactive runtime console
+```
+
+Then select:
+
+```text
+throttling-100
+```
+
+For log mode, select:
+
+```text
+verbose
+```
+
+This is the recommended live demo path.
+
+---
+
+## Start infrastructure only
+
+To install or start infrastructure without launching the runner:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+The launcher uses:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+for Redis, MongoDB, and Docker settings.
 
 ---
 
 ## Reset demo state
 
-PowerShell:
+Reset the configured Redis and MongoDB demo state:
 
 ```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
 ```
 
-Bash:
+Reset and run the throttling demo directly:
 
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario throttling-100 -Verbose
 ```
 
 ---
@@ -134,16 +173,16 @@ dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.Enterprise
 
 ## Run through interactive mode
 
-Run the console without arguments:
+Run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
 Then select:
 
 ```text
-chaos-500
+throttling-100
 ```
 
 For log mode, select:
@@ -152,403 +191,233 @@ For log mode, select:
 verbose
 ```
 
-This is the recommended live demo mode because it shows readable runtime events and gives enough time to test pause, resume, and cancel.
+This is the recommended live demo path because it clearly shows concurrency admission and throttling behavior.
 
 ---
 
-## Run directly with command-line arguments
+## Run directly with launcher arguments
 
-Run the recommended control demo path:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
-```
-
-Run the shorter control path:
+Run the throttling demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
 ```
 
 Run without verbose logs:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100
+```
+
+Run with aggressive noisy debugging:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose -VerboseRaw -VerboseNoise
 ```
 
 ---
 
-## Runtime controls
+## Advanced direct project commands
 
-During execution, the console supports these keys:
+The launcher is recommended.
 
-```text
-Space    Pause / Resume execution
-Shift+C  Cancel with confirmation
+Direct project execution is still possible for troubleshooting.
+
+Run the throttling demo:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
 ```
 
-The control flow is:
+Run without verbose logs:
 
-```text
-Space
-  -> pause if running
-  -> resume if paused
-
-Shift+C
-  -> pause first
-  -> open cancel confirmation
-
-Cancel confirmation
-  Yes -> cancel execution and unblock runner
-  No  -> resume execution
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100
 ```
 
 ---
 
-## Pause behavior
+## What the scenario simulates
 
-Press:
-
-```text
-Space
-```
-
-Expected output:
+The scenario simulates:
 
 ```text
-[CONTROL] paused
+many ready steps
+multiple distributed workers
+shared provider capacity
+bounded concurrency
+distributed lease coordination
+contention pressure
 ```
 
-Pause means:
+Workers attempt to execute steps concurrently.
+
+The runtime must decide:
 
 ```text
-new claims are blocked
-already claimed work is allowed to finish
-execution state remains durable
-workers do not corrupt state
+who gets provider access
+who must wait
+when leases expire
+when work becomes admissible again
 ```
 
-Pause does not kill a running step.
-
-This is intentional.
-
-A running step may already own a claim token and may already be executing. The runtime allows that in-flight work to drain safely.
-
-That is why progress may still increase briefly after pressing pause.
-
-Example:
+The important guarantee is:
 
 ```text
-Progress: 7/500 completed | retries=0 | workers=30 | hotStateSteps=...
-[CONTROL] paused
-Progress: 21/500 completed | retries=2 | workers=30 | hotStateSteps=...
+workers may compete
+configured capacity is still respected
 ```
-
-This does not mean pause failed.
-
-It means already claimed work finished after the pause request.
-
-The important behavior is that new claims stop after the in-flight work drains.
 
 ---
 
-## Resume behavior
+## Distributed throttling model
 
-Press:
+The runtime uses distributed concurrency scopes.
 
-```text
-Space
-```
-
-again.
-
-Expected output:
+Examples include:
 
 ```text
-[CONTROL] resumed
+global
+pipeline
+step
+execution
+runtime instance
+provider
+provider + model
+provider + operation
 ```
 
-Resume means:
+The throttling scenario primarily demonstrates:
 
 ```text
-claims are allowed again
-workers can continue advancing ready steps
-the DAG continues toward convergence
+provider-level concurrency
 ```
 
-The execution should continue normally after resume.
+through Redis-backed lease coordination.
 
 ---
 
-## Cancel behavior
+## Lease-based coordination
 
-Press:
-
-```text
-Shift+C
-```
-
-The console pauses first and opens a confirmation menu:
-
-```text
-Cancel execution?
-
-  Yes
-> No
-```
-
-The default selection is `No`.
-
-This is deliberate.
-
-Cancel should be explicit.
-
----
-
-## Cancel with No
-
-If you select:
-
-```text
-No
-```
-
-Expected output:
-
-```text
-[CONTROL] cancel declined, resumed
-```
-
-The runtime resumes execution.
-
-This proves that the cancel flow is safe and reversible before confirmation.
-
----
-
-## Cancel with Yes
-
-If you select:
-
-```text
-Yes
-```
-
-Expected output:
-
-```text
-[CONTROL] cancel confirmed
-```
-
-Then the console exits the active run safely:
-
-```text
-Stopping background controller...
-Cleaning up execution bundle...
-Execution runner finished.
-```
-
-The console sends durable cancellation and also unblocks the local runner so the terminal does not remain stuck waiting on the run handle.
-
----
-
-## What happens internally during pause
-
-The pause flow is cooperative.
+The runtime uses distributed leases stored in Redis.
 
 Conceptually:
 
 ```text
-user presses Space
-console calls PauseExecutionAsync
-execution control state becomes Pausing / Paused
-workers check the execution control gate
-new claims are blocked
-already claimed steps drain
-execution waits for resume
+worker requests provider capacity
+runtime checks active leases
+if capacity available:
+    lease granted
+else:
+    request denied temporarily
+worker retries later
 ```
 
-This protects state.
+This prevents uncontrolled concurrency growth.
 
-The runtime does not kill threads or interrupt step execution unsafely.
+The important property is:
+
+```text
+coordination is distributed
+```
+
+not local to one process.
 
 ---
 
-## What happens internally during resume
+## Redis-backed admission control
 
-The resume flow is also cooperative.
+The runtime uses Redis to coordinate distributed concurrency safely.
 
 Conceptually:
 
 ```text
-user presses Space again
-console calls ResumeExecutionAsync
-execution control state becomes Resuming / Running
-workers check the execution control gate
-claims are allowed again
-execution continues
+workers compete for provider capacity
+Redis stores active leases
+Lua scripts enforce atomic admission
+lease expiration prevents dead ownership
+workers retry later if denied
+```
+
+This avoids race conditions where multiple workers exceed limits simultaneously.
+
+---
+
+## What to observe in logs
+
+With verbose mode enabled, observe events such as:
+
+```text
+[THROTTLE] provider admission granted
+[THROTTLE] provider admission denied
+[LEASE] acquired
+[LEASE] released
+[CLAIMED] throttling-step-...
+[DONE] throttling-step-...
+```
+
+Progress output:
+
+```text
+Progress: 54/100 completed | retries=2 | workers=10 | hotStateSteps=...
+```
+
+The important observation is:
+
+```text
+workers continue progressing
+provider concurrency remains bounded
+execution still converges
 ```
 
 ---
 
-## What happens internally during cancel
+## What this proves operationally
 
-The cancel flow has two parts:
+This scenario proves that:
 
 ```text
-durable execution cancellation
-local console runner unblocking
+distributed workers can share bounded provider capacity
+provider governance survives concurrency pressure
+throttling remains centralized
+worker ordering does not break convergence
+distributed execution remains stable
 ```
 
-Durable cancellation:
+This is critical for:
 
 ```text
-console calls CancelExecutionAsync
-execution control state records cancellation
-workers stop new claims
-runtime state remains consistent
-```
-
-Console runner unblocking:
-
-```text
-console cancels the local runner wait
-background controller stops
-execution bundle cleanup runs
-console returns to the user
-```
-
-This prevents the console from hanging after confirmed cancel.
-
----
-
-## Important semantic detail
-
-Pause and cancel are not hard thread-abort operations.
-
-They are cooperative control operations.
-
-That means:
-
-```text
-already claimed work may complete
-new work is blocked
-state remains durable
-cleanup remains safe
-```
-
-This is the correct behavior for an execution runtime that prioritizes consistency.
-
----
-
-## Why batch claim enforcement matters
-
-The runtime has more than one claim path.
-
-For pause and cancel to be correct, the execution control gate must be enforced everywhere work can be claimed.
-
-That includes:
-
-```text
-single-step claim path
-batch claim path
-distributed worker claim path
-```
-
-A bug in one claim path can allow work to continue even after pause or cancel.
-
-This scenario is important because it proves that control state is not only stored, but enforced during execution.
-
----
-
-## What to observe in the console
-
-With verbose mode enabled, observe control output:
-
-```text
-Controls:
-  Space    Pause / Resume execution
-  Shift+C  Cancel with confirmation
-```
-
-Pause:
-
-```text
-[CONTROL] paused
-```
-
-Resume:
-
-```text
-[CONTROL] resumed
-```
-
-Cancel declined:
-
-```text
-[CONTROL] cancel declined, resumed
-```
-
-Cancel confirmed:
-
-```text
-[CONTROL] cancel confirmed
-```
-
-Cleanup:
-
-```text
-Stopping background controller...
-Cleaning up execution bundle...
-Execution runner finished.
+cost governance
+provider safety
+shared enterprise infrastructure
+large-scale orchestration
 ```
 
 ---
 
 ## Expected behavior
 
-Expected behavior for pause:
+Expected behavior:
 
 ```text
 execution starts normally
-progress moves
-Space is pressed
-pause is recorded
-in-flight work drains
-new claims stop
-progress stabilizes
+multiple workers participate
+workers compete for provider access
+some admissions succeed
+some admissions wait
+leases are released after completion
+execution continues progressing
+final convergence succeeds
 ```
 
-Expected behavior for resume:
+The runtime should not:
 
 ```text
-Space is pressed again
-resume is recorded
-new claims start again
-progress continues
-execution can complete
-```
-
-Expected behavior for cancel with No:
-
-```text
-Shift+C is pressed
-execution pauses
-confirmation menu opens
-No is selected
-execution resumes
-```
-
-Expected behavior for cancel with Yes:
-
-```text
-Shift+C is pressed
-execution pauses
-confirmation menu opens
-Yes is selected
-cancel is recorded
-runner unblocks
-controller stops
-cleanup runs
+exceed configured provider concurrency
+deadlock
+stall forever
+duplicate terminal completion
+lose ownership safety
 ```
 
 ---
@@ -558,15 +427,14 @@ cleanup runs
 The scenario is successful if:
 
 ```text
-Space pauses execution.
-Space resumes execution.
-Shift+C opens the cancel confirmation menu.
-No resumes execution.
-Yes cancels and exits cleanly.
-The console does not hang after confirmed cancel.
-Cleanup runs after cancel.
-Already claimed work is allowed to drain safely.
-New claims are blocked while paused.
+The execution completes successfully.
+Distributed workers participate.
+Concurrency remains bounded.
+Throttle admission events appear.
+Leases are acquired and released.
+The execution converges correctly.
+Replay validation succeeds.
+No duplicate completion occurs.
 ```
 
 ---
@@ -576,124 +444,240 @@ New claims are blocked while paused.
 Recommended live flow:
 
 ```text
-Start chaos-500 with verbose mode.
-Wait until progress starts moving.
-Press Space.
-Explain that already claimed work may still finish.
-Wait for progress to stabilize.
-Press Space again.
-Show progress continuing.
-Press Shift+C.
-Select No.
-Show execution resumes.
-Press Shift+C again.
-Select Yes.
-Show controller stop and cleanup.
+Start throttling-100 with verbose mode.
+Explain that multiple workers are competing for provider capacity.
+Show throttle admission logs.
+Show leases being granted and released.
+Show that progress continues despite throttling.
+Pause execution briefly.
+Resume execution.
+Allow the run to converge.
+Show replay validation.
 ```
 
 ---
 
-## Recommended commands
+## Example successful output
 
-Recommended direct command:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
-```
-
-Shorter version:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
-```
-
-Interactive mode:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
-```
-
----
-
-## Troubleshooting
-
-### Progress continues briefly after pause
-
-This is expected.
-
-Already claimed work is allowed to finish.
-
-Pause blocks new claims.
-
-### Cancel confirmed but logs appear briefly
-
-Some logs may already have been emitted by in-flight work.
-
-The important behavior is that the controller stops and cleanup runs.
-
-### The console does not react to keys
-
-Make sure the terminal window has focus.
-
-Use a real terminal such as PowerShell or VS Code terminal.
-
-### Cancel confirmation appears
-
-Use:
+Example:
 
 ```text
-Up / Down
-Enter
-Y
-N
-Escape
+Execution completed
+-------------------
+RunId:       ...
+ExecutionId: ...
+Status:      Completed
+Terminal:    True
+Steps:       100
+
+Distributed workers
+-------------------
+RuntimeInstanceId: worker:1:...
+RuntimeInstanceId: worker:2:...
+RuntimeInstanceId: worker:3:...
+
+Throttle summary
+----------------
+Provider admissions: 100
+Denied admissions:   42
+Lease releases:      100
+
+Replay validation
+-----------------
+Snapshot created: true
+Replay restored:  true
+Fingerprint match: true
 ```
 
 ---
 
-## What this scenario does not claim
+## Relationship with chaos-100
 
-This scenario does not claim to kill running threads.
-
-It does not claim to interrupt an external tool call halfway through.
-
-It does not claim to simulate a worker crash.
-
-It proves cooperative durable execution control:
+`chaos-100` demonstrates:
 
 ```text
-pause
-resume
-cancel confirmation
-claim blocking
-safe runner unblocking
-safe cleanup
+distributed execution
+retry recovery
+parallel worker participation
+deterministic convergence
+```
+
+but does not focus specifically on provider throttling.
+
+Use `chaos-100` for general runtime orchestration demonstrations.
+
+Use `throttling-100` for provider governance demonstrations.
+
+---
+
+## Relationship with chaos-500
+
+`chaos-500` focuses more on:
+
+```text
+retention pressure
+compaction
+eviction
+large distributed execution pressure
+snapshot persistence
+replay restoration
+```
+
+It is heavier operationally.
+
+`throttling-100` is more focused on:
+
+```text
+distributed concurrency governance
+provider coordination
+bounded capacity enforcement
 ```
 
 ---
 
-## Relationship with worker crash recovery
+## Relationship with retry recovery
 
-Pause and cancel are user-driven control operations.
+Retries can amplify provider pressure.
 
-Worker crash recovery is failure-driven.
+Without throttling:
 
-Pause and cancel are cooperative.
+```text
+retries may create concurrency storms
+```
 
-Worker crash recovery requires lease expiration and recovery of abandoned work.
+This scenario demonstrates that the runtime can:
 
-Both are important, but they prove different runtime properties.
+```text
+retry safely
+while still respecting provider capacity
+```
+
+This is critical in production systems.
 
 ---
 
 ## Relationship with deterministic convergence
 
-Execution control must not corrupt convergence.
+Throttling changes execution timing.
 
-Pause should not change the final result if the execution is resumed.
+Different workers may wait at different moments.
 
-Cancel should stop the run safely and avoid leaving the console blocked.
+Provider access ordering may vary.
 
-A production runtime must be controllable without becoming inconsistent.
+Even under throttling pressure, the runtime must still:
 
-That is what this scenario demonstrates.
+```text
+respect dependencies
+avoid duplicate execution
+converge deterministically
+produce one final result
+```
+
+This is one of the key production guarantees of the runtime.
+
+---
+
+## Relationship with pause and cancel
+
+The throttling scenario also supports:
+
+```text
+Space    Pause / Resume execution
+Shift+C  Cancel with confirmation
+```
+
+Pause blocks new claims and suspends realtime logs.
+
+Already admitted work may still complete.
+
+Cancel safely terminates the execution flow.
+
+---
+
+## Troubleshooting
+
+### Progress appears slower
+
+This is expected.
+
+The runtime is intentionally limiting concurrency.
+
+The goal is safe bounded execution, not maximum uncontrolled throughput.
+
+### Workers appear idle briefly
+
+Workers may be waiting for provider admission.
+
+This is normal.
+
+### Realtime logs stop during pause
+
+This is expected.
+
+Realtime output is intentionally suspended while paused.
+
+### The execution still converges slowly
+
+This is also expected.
+
+The scenario demonstrates bounded concurrency under pressure.
+
+---
+
+## What this scenario does not claim
+
+This scenario does not claim:
+
+```text
+real provider APIs
+real token accounting
+real billing enforcement
+real Kubernetes autoscaling
+```
+
+It demonstrates the runtime coordination behavior required before integrating those concerns.
+
+---
+
+## Recommended commands
+
+Recommended interactive demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Recommended direct launcher command:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
+```
+
+Noisy debugging mode:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose -VerboseRaw -VerboseNoise
+```
+
+Validation script:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+---
+
+## Production significance
+
+Distributed throttling is one of the most important runtime capabilities for enterprise AI systems.
+
+Without it:
+
+```text
+parallel workers become dangerous
+cost becomes unpredictable
+provider stability degrades
+retry storms become catastrophic
+```
+
+This scenario demonstrates that the runtime treats concurrency governance as a first-class execution concern.

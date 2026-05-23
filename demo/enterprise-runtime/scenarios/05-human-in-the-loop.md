@@ -14,9 +14,10 @@ The current executable console scenarios are:
 json
 chaos-100
 chaos-500
+throttling-100
 ```
 
-Those scenarios demonstrate distributed execution, retry recovery, retention, replay validation, realtime logs, and execution controls.
+Those scenarios demonstrate distributed execution, retry recovery, retention, replay validation, realtime logs, distributed throttling, and execution controls.
 
 A future dedicated human-in-the-loop scenario should explicitly demonstrate an execution entering `WaitingForInput`, blocking downstream work, accepting input, and resuming deterministically.
 
@@ -97,13 +98,25 @@ replay can restore the execution with the submitted input
 
 The current console demo already proves related control-plane behavior through pause, resume, and cancel.
 
-Run:
+Use the launcher:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
-Then use:
+Then select:
+
+```text
+chaos-500
+```
+
+For log mode, select:
+
+```text
+verbose
+```
+
+You can then demonstrate:
 
 ```text
 Space    Pause / Resume execution
@@ -129,6 +142,7 @@ Operator presses Space
 Runtime stops new claims
 Already claimed work drains
 Execution waits for resume
+Realtime logs are suspended
 ```
 
 Human-in-the-loop is part of the workflow.
@@ -165,13 +179,19 @@ A future console scenario could be registered as:
 human-input
 ```
 
-Potential command:
+Potential launcher command:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario human-input -Verbose
+```
+
+Potential advanced direct project command:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario human-input --verbose
 ```
 
-Do not treat this command as available until the scenario is implemented and registered in the console runner.
+Do not treat these commands as available until the scenario is implemented and registered in the console runner.
 
 ---
 
@@ -417,7 +437,7 @@ If replay cannot restore the human input, the execution is not audit-safe.
 Until a dedicated human-in-the-loop scenario exists, use the current control scenario to demonstrate external runtime control:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
 ```
 
 Then demonstrate:
@@ -431,6 +451,44 @@ This does not replace human-in-the-loop, but it proves that the runtime already 
 
 ---
 
+## Recommended commands
+
+Recommended interactive demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Recommended current control demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Validation script:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+---
+
+## What this scenario does not claim
+
+This scenario does not claim:
+
+```text
+a production UI
+real approval workflows
+identity federation
+real enterprise IAM integration
+production notification systems
+```
+
+It demonstrates the runtime execution model required before integrating those systems.
+
+---
+
 ## Implementation note
 
 When a dedicated `human-input` scenario is added to the console runner, this file should be updated from a capability note to a fully executable scenario guide.
@@ -438,7 +496,7 @@ When a dedicated `human-input` scenario is added to the console runner, this fil
 At that point, include:
 
 ```text
-exact command
+exact launcher command
 expected console prompt
 input submission flow
 expected waiting state

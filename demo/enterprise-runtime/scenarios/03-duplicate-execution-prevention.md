@@ -51,6 +51,7 @@ resume claiming after resume
 pause before cancellation confirmation
 cancel after confirmation
 resume if cancellation is declined
+suspend realtime logs while paused
 unblock the console runner after confirmed cancel
 clean up execution state safely
 ```
@@ -62,8 +63,10 @@ clean up execution state safely
 Pause, resume, and cancel can be tested with the current executable scenarios:
 
 ```text
+json
 chaos-100
 chaos-500
+throttling-100
 ```
 
 Recommended scenario:
@@ -90,34 +93,79 @@ chaos-100
 
 ---
 
-## Start local infrastructure
+## Recommended entry point
 
-From the repository root:
-
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
-```
-
-Verify that Redis and MongoDB are running:
+Use the launcher:
 
 ```powershell
-docker ps
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
+
+This automatically:
+
+```text
+loads enterprise-runtime-settings.json
+checks Docker
+starts infrastructure
+shows infrastructure status
+launches the interactive runtime console
+```
+
+Interactive mode then lets you choose:
+
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+For this scenario, choose:
+
+```text
+chaos-500
+```
+
+For log mode, choose:
+
+```text
+verbose
+```
+
+This is the recommended live demo mode because it shows readable runtime events and gives enough time to test pause, resume, and cancel.
+
+---
+
+## Start infrastructure only
+
+To install or start infrastructure without launching the runner:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+The launcher uses:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+for Docker and connection settings.
 
 ---
 
 ## Reset demo state
 
-PowerShell:
+Reset the configured Redis and MongoDB demo state:
 
 ```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
 ```
 
-Bash:
+Reset and run the control scenario directly:
 
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-500 -Verbose
 ```
 
 ---
@@ -134,10 +182,10 @@ dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.Enterprise
 
 ## Run through interactive mode
 
-Run the console without arguments:
+Run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
 Then select:
@@ -152,11 +200,43 @@ For log mode, select:
 verbose
 ```
 
-This is the recommended live demo mode because it shows readable runtime events and gives enough time to test pause, resume, and cancel.
+This is the recommended live demo path because it shows readable runtime events and gives enough time to test pause, resume, and cancel.
 
 ---
 
-## Run directly with command-line arguments
+## Run directly with launcher arguments
+
+Run the recommended control demo path:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Run the shorter control path:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+Run without verbose logs:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500
+```
+
+Run with full noisy debug output:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose -VerboseRaw -VerboseNoise
+```
+
+---
+
+## Advanced direct project commands
+
+The launcher is recommended.
+
+Direct project execution is still possible for troubleshooting.
 
 Run the recommended control demo path:
 
@@ -226,6 +306,7 @@ new claims are blocked
 already claimed work is allowed to finish
 execution state remains durable
 workers do not corrupt state
+realtime logs are suspended
 ```
 
 Pause does not kill a running step.
@@ -250,6 +331,23 @@ It means already claimed work finished after the pause request.
 
 The important behavior is that new claims stop after the in-flight work drains.
 
+While paused:
+
+```text
+realtime logs are suspended
+noise logs stop
+verbose output stops
+the console becomes readable
+```
+
+This is especially useful during:
+
+```text
+verbose-noise
+```
+
+mode.
+
 ---
 
 ## Resume behavior
@@ -273,6 +371,7 @@ Resume means:
 ```text
 claims are allowed again
 workers can continue advancing ready steps
+realtime logs resume
 the DAG continues toward convergence
 ```
 
@@ -364,6 +463,7 @@ execution control state becomes Pausing / Paused
 workers check the execution control gate
 new claims are blocked
 already claimed steps drain
+realtime console output is suspended
 execution waits for resume
 ```
 
@@ -385,6 +485,7 @@ console calls ResumeExecutionAsync
 execution control state becomes Resuming / Running
 workers check the execution control gate
 claims are allowed again
+realtime console output resumes
 execution continues
 ```
 
@@ -563,6 +664,8 @@ Space resumes execution.
 Shift+C opens the cancel confirmation menu.
 No resumes execution.
 Yes cancels and exits cleanly.
+Realtime logs stop while paused.
+Realtime logs resume after resume.
 The console does not hang after confirmed cancel.
 Cleanup runs after cancel.
 Already claimed work is allowed to drain safely.
@@ -580,8 +683,10 @@ Start chaos-500 with verbose mode.
 Wait until progress starts moving.
 Press Space.
 Explain that already claimed work may still finish.
+Show that realtime logs stop.
 Wait for progress to stabilize.
 Press Space again.
+Show logs returning.
 Show progress continuing.
 Press Shift+C.
 Select No.
@@ -595,22 +700,34 @@ Show controller stop and cleanup.
 
 ## Recommended commands
 
-Recommended direct command:
+Recommended interactive demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Recommended direct launcher command:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
 ```
 
 Shorter version:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
 ```
 
 Interactive mode:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Validation script:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
 ```
 
 ---
@@ -624,6 +741,12 @@ This is expected.
 Already claimed work is allowed to finish.
 
 Pause blocks new claims.
+
+### Logs stop while paused
+
+This is expected.
+
+Realtime console output is intentionally suspended while paused so the console remains readable.
 
 ### Cancel confirmed but logs appear briefly
 

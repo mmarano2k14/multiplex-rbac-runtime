@@ -102,27 +102,155 @@ No worker decides provider capacity alone.
 
 ---
 
-## Current console demo relationship
+## Recommended entry point
 
-The console demo now includes a dedicated throttling scenario:
+Use the launcher:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+This automatically:
+
+```text
+loads enterprise-runtime-settings.json
+checks Docker
+starts infrastructure
+shows infrastructure status
+launches the interactive runtime console
+```
+
+Then select:
 
 ```text
 throttling-100
 ```
 
+For log mode, select:
+
+```text
+verbose
+```
+
+This is the recommended live demo path.
+
+---
+
+## Start infrastructure only
+
+To install or start infrastructure without launching the runner:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+The launcher uses:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+for Redis, MongoDB, and Docker settings.
+
+---
+
+## Reset demo state
+
+Reset the configured Redis and MongoDB demo state:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
+```
+
+Reset and run the throttling demo directly:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario throttling-100 -Verbose
+```
+
+---
+
+## Build the demo runner
+
+From the repository root:
+
+```powershell
+dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+---
+
+## Run through interactive mode
+
 Run:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Then select:
+
+```text
+throttling-100
+```
+
+For log mode, select:
+
+```text
+verbose
+```
+
+This is the recommended live demo path because it clearly shows concurrency admission and throttling behavior.
+
+---
+
+## Run directly with launcher arguments
+
+Run the throttling demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
+```
+
+Run without verbose logs:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100
+```
+
+Run with aggressive noisy debugging:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose -VerboseRaw -VerboseNoise
+```
+
+---
+
+## Advanced direct project commands
+
+The launcher is recommended.
+
+Direct project execution is still possible for troubleshooting.
+
+Run the throttling demo:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
 ```
 
-To see raw realtime event payloads as well:
+Run without verbose logs:
+
+```powershell
+dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100
+```
+
+Run with raw realtime payloads:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-raw
 ```
 
-To see noisy internal runtime events:
+Run with noisy internal runtime events:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose --verbose-noise
@@ -370,6 +498,7 @@ new claims should stop
 new throttling leases should not be acquired
 existing in-flight work may drain
 leases should be released
+realtime logs should be suspended
 ```
 
 If execution is cancelled:
@@ -399,12 +528,33 @@ Both matter in long-running AI workflows.
 
 ---
 
+## Relationship with deterministic convergence
+
+Distributed throttling changes execution timing.
+
+Different workers may receive admission at different moments.
+
+Provider access ordering may vary.
+
+Despite that:
+
+```text
+dependencies must remain correct
+ownership must remain safe
+duplicate execution must be prevented
+the execution must converge
+```
+
+This scenario proves that bounded concurrency does not break deterministic convergence.
+
+---
+
 ## Recommended demo
 
 Run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
 ```
 
 This demonstrates:
@@ -418,3 +568,60 @@ bounded concurrency
 realtime runtime visibility
 deterministic convergence
 ```
+
+---
+
+## Recommended live demo flow
+
+Recommended flow:
+
+```text
+Start throttling-100 with verbose mode.
+Explain that workers are competing for provider access.
+Show THROTTLED events.
+Show that progress continues safely.
+Pause execution briefly.
+Show realtime logs stopping while paused.
+Resume execution.
+Allow the execution to complete.
+Show the throttling summary.
+Show replay validation.
+```
+
+---
+
+## Validation script
+
+Run the full validation script before commit:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+This validates:
+
+```text
+json
+chaos-100
+throttling-100
+chaos-500
+```
+
+and confirms that distributed throttling still behaves correctly.
+
+---
+
+## Production significance
+
+Distributed throttling is one of the most important runtime capabilities for enterprise AI systems.
+
+Without it:
+
+```text
+parallel workers become dangerous
+cost becomes unpredictable
+provider stability degrades
+retry storms become catastrophic
+```
+
+This scenario demonstrates that the runtime treats concurrency governance as a first-class execution concern.

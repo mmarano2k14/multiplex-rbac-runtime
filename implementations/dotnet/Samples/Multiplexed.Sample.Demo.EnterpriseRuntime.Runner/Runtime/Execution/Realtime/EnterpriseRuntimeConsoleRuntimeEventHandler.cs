@@ -4,6 +4,7 @@ using Multiplexed.Realtime.Events;
 using Multiplexed.Realtime.Events.Abstractions;
 using Multiplexed.Realtime.Events.Runtime;
 using Multiplexed.Realtime.Handlers;
+using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Control;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Options;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime.Formatting;
 
@@ -28,6 +29,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime
         };
 
         private readonly EnterpriseRuntimeVerboseConsoleOptions _options;
+        private readonly EnterpriseRuntimeExecutionControlState _controlState;
         private readonly EnterpriseRuntimeRuntimeLogEventClassifier _classifier;
         private readonly EnterpriseRuntimeRuntimeLogEventFormatter _formatter;
 
@@ -37,6 +39,9 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime
         /// <param name="options">
         /// The verbose console options.
         /// </param>
+        /// <param name="controlState">
+        /// The execution control state used to suspend realtime console output during interactive pause.
+        /// </param>
         /// <param name="classifier">
         /// The runtime log event classifier.
         /// </param>
@@ -45,11 +50,15 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime
         /// </param>
         public EnterpriseRuntimeConsoleRuntimeEventHandler(
             EnterpriseRuntimeVerboseConsoleOptions options,
+            EnterpriseRuntimeExecutionControlState controlState,
             EnterpriseRuntimeRuntimeLogEventClassifier classifier,
             EnterpriseRuntimeRuntimeLogEventFormatter formatter)
         {
             _options = options ?? throw new ArgumentNullException(
                 nameof(options));
+
+            _controlState = controlState ?? throw new ArgumentNullException(
+                nameof(controlState));
 
             _classifier = classifier ?? throw new ArgumentNullException(
                 nameof(classifier));
@@ -67,6 +76,11 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Realtime
                 runtimeEvent);
 
             if (!_options.Enabled)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (_controlState.RealtimeOutputSuspended)
             {
                 return Task.CompletedTask;
             }

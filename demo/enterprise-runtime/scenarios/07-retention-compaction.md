@@ -109,63 +109,22 @@ The `chaos-500` scenario is stronger because it combines convergence with retent
 
 ---
 
-## Start local infrastructure
+## Recommended entry point
 
-From the repository root:
-
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
-```
-
-Verify that Redis and MongoDB are running:
+Use the launcher:
 
 ```powershell
-docker ps
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
-Expected services:
+This automatically:
 
 ```text
-deterministic-ai-runtime-demo-redis
-deterministic-ai-runtime-demo-mongo
-```
-
----
-
-## Reset demo state
-
-PowerShell:
-
-```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
-```
-
-Bash:
-
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
-```
-
-Use reset when you want a clean convergence and replay validation run.
-
----
-
-## Build the demo runner
-
-From the repository root:
-
-```powershell
-dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
-```
-
----
-
-## Run through interactive mode
-
-Run the console without arguments:
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+loads enterprise-runtime-settings.json
+checks Docker
+starts infrastructure
+shows infrastructure status
+launches the interactive runtime console
 ```
 
 Then select:
@@ -192,7 +151,117 @@ Use `chaos-500` when you want to demonstrate deterministic convergence under str
 
 ---
 
-## Run directly with command-line arguments
+## Start infrastructure only
+
+To install or start infrastructure without launching the runner:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+The launcher uses:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+for Redis, MongoDB, and Docker settings.
+
+---
+
+## Reset demo state
+
+Reset the configured Redis and MongoDB demo state:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
+```
+
+Reset and run the aggressive convergence scenario directly:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-500 -Verbose
+```
+
+Use reset when you want a clean convergence and replay validation run.
+
+---
+
+## Build the demo runner
+
+From the repository root:
+
+```powershell
+dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+```
+
+---
+
+## Run through interactive mode
+
+Run:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Then select:
+
+```text
+chaos-100
+```
+
+or:
+
+```text
+chaos-500
+```
+
+For log mode, select:
+
+```text
+verbose
+```
+
+Use `chaos-100` for a readable convergence demo.
+
+Use `chaos-500` when you want to demonstrate deterministic convergence under stronger retention and distributed state pressure.
+
+---
+
+## Run directly with launcher arguments
+
+Run the normal convergence scenario:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+Run the aggressive convergence scenario:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Run the JSON pipeline convergence check:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario json -Verbose
+```
+
+Run without verbose logs:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100
+```
+
+---
+
+## Advanced direct project commands
+
+The launcher is recommended.
+
+Direct project execution is still possible for troubleshooting.
 
 Run the normal convergence scenario:
 
@@ -570,11 +639,32 @@ Pause should not break deterministic convergence.
 
 If execution is paused and later resumed, the same accepted state should continue toward completion.
 
+Realtime logs are intentionally suspended while paused so the console remains readable.
+
 Cancel is different because it intentionally stops the run.
 
 For completed runs, deterministic convergence is validated through terminal completion and replay fingerprint matching.
 
 For cancelled runs, the important guarantee is safe control, cleanup, and no console hang.
+
+---
+
+## Relationship with distributed throttling
+
+Distributed throttling changes execution timing.
+
+Workers may wait for provider admission at different moments.
+
+Despite that:
+
+```text
+dependency ordering must remain correct
+ownership must remain safe
+retries must remain deterministic
+the final replay fingerprint must still match
+```
+
+This proves that bounded concurrency and distributed throttling do not break convergence.
 
 ---
 
@@ -596,6 +686,27 @@ cleanup removes data needed for replay
 
 ---
 
+## Validation script
+
+Run the full validation script before commit:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+This validates:
+
+```text
+json
+chaos-100
+throttling-100
+chaos-500
+```
+
+and confirms that deterministic convergence still behaves correctly.
+
+---
+
 ## What this scenario does not claim
 
 This scenario does not claim that every possible workflow is deterministic by itself.
@@ -613,25 +724,31 @@ It does not make uncontrolled external systems deterministic.
 Normal deterministic convergence demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
 ```
 
 Aggressive convergence and retention demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
 ```
 
 Summary-only convergence demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500
 ```
 
 Interactive demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Validation script:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
 ```
 
 ---

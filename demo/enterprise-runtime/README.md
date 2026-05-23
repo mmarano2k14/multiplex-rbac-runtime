@@ -27,6 +27,111 @@ The purpose of this demo is to make the runtime visible, testable, and understan
 
 ---
 
+## Quick start
+
+The recommended entry point is the interactive demo launcher:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+This script is the main way to run the demo.
+
+It will:
+
+```text
+load config/enterprise-runtime-settings.json
+verify Docker is available
+start the local Docker infrastructure
+show infrastructure status
+launch the enterprise runtime console in interactive mode
+```
+
+Interactive mode then lets you choose:
+
+1. A scenario.
+2. A log mode.
+
+This is the best mode for live demos, screenshots, videos, and manual validation.
+
+### Most useful commands
+
+Run the full interactive demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+Install or start infrastructure only:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+Run a clean aggressive distributed validation:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-500 -Verbose
+```
+
+Run the distributed throttling demo:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
+```
+
+Run the full validation script:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+---
+
+## Interactive mode
+
+Interactive mode is the primary demo experience.
+
+Start it with:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+The launcher handles infrastructure startup before the runtime console starts.
+
+Interactive mode provides:
+
+- scenario selection
+- log mode selection
+- readable realtime runtime logs
+- pause/resume/cancel controls
+- live execution progress
+- distributed worker visibility
+- retry summary
+- retention summary
+- replay validation
+- throttling visibility
+
+Available interactive scenarios:
+
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+Recommended log mode:
+
+```text
+verbose
+```
+
+Use `verbose + noise` only when debugging lower-level runtime internals.
+
+
+
 ## Why this demo exists
 
 Most AI demos focus on prompts, models, tools, or agents.
@@ -68,6 +173,8 @@ The enterprise runtime console demo proves that the runtime can:
 13. Pause and resume execution while workers are active.
 14. Cancel execution safely through a confirmation flow.
 15. Clean up execution state after completion or cancel.
+16. Demonstrate distributed provider throttling under worker pressure.
+17. Validate the demo end-to-end through an automated validation script.
 
 ---
 
@@ -132,10 +239,12 @@ The console runner is responsible for:
 - enqueuing a runtime execution
 - displaying progress
 - displaying readable realtime events
+- suspending realtime event output while paused
 - listening for pause / resume / cancel keys
 - validating retry recovery
 - validating retention
 - validating replay
+- validating throttling behavior
 - cleaning up the execution bundle
 ```
 
@@ -155,12 +264,10 @@ demo/
     pipelines/
       enterprise-demo-pipeline.json
 
-    config/
-      demo-settings.json
-
     scripts/
-      reset-demo.ps1
-      reset-demo.sh
+      run-demo.ps1
+      run-demo.sh
+      validate-demo.ps1
 
     scenarios/
       01-multi-worker-execution.md
@@ -192,121 +299,97 @@ demo/
 | Deterministic convergence | [`08-deterministic-convergence.md`](scenarios/08-deterministic-convergence.md) | Summarizes convergence guarantees across distributed execution scenarios. |
 
 ---
-## Runtime configuration
+## Demo launcher script
 
-The enterprise runtime demo supports centralized runtime configuration through:
-
-```text
-config/demo-settings.json
-```
-
-The file is linked into the console runner output folder and copied with the executable, similar to the demo pipeline file.
-
-It allows changing:
-
-- Redis connection settings
-- MongoDB connection settings
-- Docker infrastructure metadata
-- container names
-- runtime defaults
-- future installer/bootstrap configuration
-
-Example:
-
-```json
-{
-  "version": "1.0",
-  "infrastructure": {
-    "dockerComposeFile": "demo/enterprise-runtime/deploy/docker/docker-compose.yml",
-    "projectName": "deterministic-ai-runtime-demo"
-  },
-  "redis": {
-    "host": "localhost",
-    "port": 6379,
-    "connectionString": "localhost:6379",
-    "database": 0,
-    "containerName": "deterministic-ai-runtime-demo-redis"
-  },
-  "mongo": {
-    "host": "localhost",
-    "port": 27017,
-    "connectionString": "mongodb://localhost:27017",
-    "databaseName": "deterministic_ai_runtime_demo",
-    "containerName": "deterministic-ai-runtime-demo-mongo"
-  },
-  "runner": {
-    "defaultScenario": "json",
-    "defaultVerbose": false,
-    "defaultVerboseRaw": false,
-    "defaultVerboseNoise": false
-  }
-}
-```
-
-### Why this exists
-
-The demo previously used hardcoded Redis and MongoDB connection strings.
-
-The runtime now loads infrastructure configuration dynamically from JSON.
-
-This makes the demo:
-
-- more portable
-- easier to distribute
-- installer-ready
-- easier to run on different machines
-- easier to integrate with Docker
-- future-ready for Kubernetes and bootstrap tooling
-
-### Changing ports
-
-You can change Redis and MongoDB ports directly from:
+The primary PowerShell launcher is:
 
 ```text
-config/demo-settings.json
+scripts/run-demo.ps1
 ```
 
-and the runtime will use the new values.
+This script replaces the older manual workflow of starting infrastructure, checking status, resetting state, and launching the console separately.
 
-Example Redis override:
+### Behavior without arguments
 
-```json
-{
-  "redis": {
-    "port": 6380,
-    "connectionString": "localhost:6380"
-  }
-}
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
-Example MongoDB override:
+Without arguments, the script:
 
-```json
-{
-  "mongo": {
-    "port": 27018,
-    "connectionString": "mongodb://localhost:27018"
-  }
-}
+```text
+loads enterprise-runtime-settings.json
+checks Docker
+starts Docker Compose infrastructure
+shows Redis and MongoDB status
+launches the console runner in interactive mode
 ```
 
-The Docker Compose file must use matching port mappings.
+### Launcher options
 
-Example Redis mapping:
+| Option | Purpose |
+|---|---|
+| `-Install` | Starts/verifies Docker infrastructure only, then exits. |
+| `-Infrastructure` | Explicitly starts infrastructure before running the demo. |
+| `-Reset` | Flushes Redis and drops the configured MongoDB demo database before running. |
+| `-Scenario <name>` | Runs a scenario directly instead of interactive scenario selection. |
+| `-Verbose` | Enables readable runtime logs. |
+| `-VerboseRaw` | Adds raw realtime event JSON output. |
+| `-VerboseNoise` | Adds noisy internal runtime events. |
+| `-NoDocker` | Skips Docker startup when infrastructure is already running. |
 
-```yaml
-ports:
-  - "6380:6379"
+Examples:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario json
 ```
 
-Example MongoDB mapping:
-
-```yaml
-ports:
-  - "27018:27017"
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
 ```
 
-This validates that the runtime no longer depends on hardcoded infrastructure values.
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
+```
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-500 -Verbose
+```
+
+---
+
+## Validation script
+
+The validation script is:
+
+```text
+scripts/validate-demo.ps1
+```
+
+Run:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
+It validates the main demo path by running:
+
+```text
+build runner
+install infrastructure
+json scenario
+chaos-100 scenario
+throttling-100 scenario
+chaos-500 scenario
+```
+
+A full debug validation mode is also available:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1 -FullDebug
+```
+
+Use this script before committing, merging, publishing a demo update, or recording a video.
 
 ---
 
@@ -319,13 +402,26 @@ You need:
 - Docker Compose
 - PowerShell or Bash
 - Redis and MongoDB running through the provided Docker Compose file
-- `config/demo-settings.json` copied with the console runner
 
 ---
 
 ## Start local infrastructure
 
-From the repository root:
+The recommended way to start infrastructure is:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+This reads:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+and starts Docker Compose using the configured infrastructure settings.
+
+Manual Docker Compose startup is still possible for advanced troubleshooting:
 
 ```powershell
 docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
@@ -347,7 +443,7 @@ deterministic-ai-runtime-demo-mongo
 The runtime reads Redis and MongoDB connection values from:
 
 ```text
-config/demo-settings.json
+config/enterprise-runtime-settings.json
 ```
 
 If you change Docker port mappings, update the matching connection strings in this file.
@@ -356,7 +452,9 @@ If you change Docker port mappings, update the matching connection strings in th
 
 ## Stop local infrastructure
 
-From the repository root:
+For normal demo usage, the infrastructure can remain running between executions.
+
+To stop it manually from the repository root:
 
 ```powershell
 docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml down
@@ -366,19 +464,19 @@ docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml down
 
 ## Reset demo state
 
-PowerShell:
+The recommended reset flow is:
 
 ```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
 ```
 
-Bash:
+This resets the configured Redis and MongoDB demo state before launching the interactive console.
 
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
+You can also combine reset with a direct scenario:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-500 -Verbose
 ```
-
-The reset scripts clear the local demo Redis database and drop the local demo MongoDB database used by the runtime demo.
 
 Use reset when you want a clean run.
 
@@ -396,7 +494,15 @@ dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.Enterprise
 
 ## Run interactive mode
 
-If no command-line arguments are provided, the console starts in interactive mode:
+The recommended way to run interactive mode is:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+This starts infrastructure automatically and then launches the console runner.
+
+You can still run the console project directly for advanced troubleshooting:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
@@ -851,6 +957,8 @@ Expected output:
 [CONTROL] paused
 ```
 
+When paused, realtime console logs are suspended so the console remains readable, even in noisy verbose mode.
+
 Pause does not kill already claimed work.
 
 It prevents new claims.
@@ -883,6 +991,8 @@ Expected output:
 ```text
 [CONTROL] resumed
 ```
+
+Realtime console logs resume when execution is resumed.
 
 Resume allows workers to claim work again.
 
@@ -1095,10 +1205,22 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 ### JSON scenario
 
 ```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario json
+```
+
+Advanced direct command:
+
+```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json
 ```
 
 ### JSON scenario with verbose logs
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario json -Verbose
+```
+
+Advanced direct command:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario json --verbose
@@ -1107,10 +1229,22 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 ### Chaos 100
 
 ```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100
+```
+
+Advanced direct command:
+
+```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100
 ```
 
 ### Chaos 100 with verbose logs
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+Advanced direct command:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
@@ -1131,10 +1265,22 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 ### Chaos 500
 
 ```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500
+```
+
+Advanced direct command:
+
+```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500
 ```
 
 ### Chaos 500 with verbose logs
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Advanced direct command:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
@@ -1155,10 +1301,22 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 ### Throttling 100
 
 ```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100
+```
+
+Advanced direct command:
+
+```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100
 ```
 
 ### Throttling 100 with verbose logs
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario throttling-100 -Verbose
+```
+
+Advanced direct command:
 
 ```powershell
 dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario throttling-100 --verbose
@@ -1189,25 +1347,15 @@ dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.En
 
 For a live demo, use this order:
 
-### 1. Start infrastructure
+### 1. Run the launcher
 
 ```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
-### 2. Build
+This starts infrastructure and opens interactive mode.
 
-```powershell
-dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
-```
-
-### 3. Run interactive mode
-
-```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
-```
-
-### 4. Select scenario
+### 2. Select scenario
 
 Choose:
 
@@ -1233,7 +1381,7 @@ throttling-100
 
 for the distributed provider throttling and bounded concurrency demo.
 
-### 5. Select log mode
+### 3. Select log mode
 
 Choose:
 
@@ -1243,7 +1391,7 @@ verbose
 
 for readable runtime events.
 
-### 6. Demonstrate controls
+### 4. Demonstrate controls
 
 During the run:
 
@@ -1252,6 +1400,8 @@ Space
 ```
 
 to pause.
+
+Realtime logs are suspended while paused.
 
 Then:
 
@@ -1283,16 +1433,22 @@ Yes
 
 to cancel and clean up.
 
+### 5. Run validation before commit
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
+```
+
 ---
 
 ## Troubleshooting
 
 ### Redis or MongoDB is not running
 
-Start infrastructure:
+Start infrastructure with the launcher:
 
 ```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
 ```
 
 Verify:
@@ -1301,42 +1457,10 @@ Verify:
 docker ps
 ```
 
-### Connection fails after changing Docker ports
+Manual Docker Compose startup is still possible for troubleshooting:
 
-Make sure the Docker Compose port mappings and `config/demo-settings.json` connection strings match.
-
-For example, if Redis is mapped as:
-
-```yaml
-ports:
-  - "6380:6379"
-```
-
-then the JSON setting must use:
-
-```json
-{
-  "redis": {
-    "connectionString": "localhost:6380"
-  }
-}
-```
-
-If MongoDB is mapped as:
-
-```yaml
-ports:
-  - "27018:27017"
-```
-
-then the JSON setting must use:
-
-```json
-{
-  "mongo": {
-    "connectionString": "mongodb://localhost:27018"
-  }
-}
+```powershell
+docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
 ```
 
 ### The demo state looks stale
@@ -1344,7 +1468,7 @@ then the JSON setting must use:
 Reset demo state:
 
 ```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
 ```
 
 ### The console seems to continue briefly after pause
@@ -1354,6 +1478,8 @@ This is expected.
 Pause stops new claims.
 
 Already claimed work is allowed to finish.
+
+Realtime logs are suspended while paused, but progress may still move briefly until in-flight work drains.
 
 ### Cancel stops the console but some worker logs appear briefly
 
@@ -1409,6 +1535,8 @@ Important engineering points demonstrated by this console:
 - hot state must remain bounded
 - replay must prove restore correctness
 - distributed workers must converge on one terminal result
+- the launcher script should remain the recommended entry point
+- the validation script should be used before commits and demo recordings
 
 ---
 

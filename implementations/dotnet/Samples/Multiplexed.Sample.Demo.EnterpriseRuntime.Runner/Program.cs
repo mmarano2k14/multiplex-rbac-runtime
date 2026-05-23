@@ -214,6 +214,8 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
 
             services.AddSingleton<EnterpriseRuntimeExecutionControlCommandExecutor>();
 
+            services.AddSingleton<EnterpriseRuntimeExecutionControlState>();
+
             services.AddSingleton<EnterpriseRuntimeExecutionControlHotkeyListener>();
 
             if (options.Verbose)

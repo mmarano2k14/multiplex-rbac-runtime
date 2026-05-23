@@ -18,7 +18,7 @@ Many AI workflow demos run in a single local loop.
 
 That is useful for prototyping, but it does not represent production execution.
 
-In a real enterprise environment, an AI workflow may need to be advanced by multiple workers or runtime instances. Those workers may run in parallel, compete for ready steps, process different parts of the DAG, retry failed steps, and converge toward one terminal execution result.
+In a real enterprise environment, an AI workflow may need to be advanced by multiple workers or runtime instances. Those workers may run in parallel, compete for ready steps, process different parts of the DAG, retry failed steps, respect throttling limits, and converge toward one terminal execution result.
 
 That creates several hard problems:
 
@@ -27,6 +27,7 @@ How do workers know which step they own?
 How do we prevent two workers from executing the same step?
 How do we make sure dependencies are respected?
 How do we recover if a step fails?
+How do we throttle shared provider capacity?
 How do we converge to one terminal result?
 How do we prove the execution was completed safely?
 ```
@@ -37,66 +38,99 @@ This scenario demonstrates those concerns locally through the enterprise runtime
 
 ## Executable console scenarios
 
-Multi-worker execution is demonstrated by the current console scenarios:
+The enterprise runtime demo currently includes:
 
 ```text
 json
 chaos-100
 chaos-500
+throttling-100
 ```
 
-The best scenario for a normal multi-worker demonstration is:
+Multi-worker execution is demonstrated most clearly by:
 
 ```text
 chaos-100
 ```
 
-The best scenario for an aggressive multi-worker stress demonstration is:
+The aggressive multi-worker stress scenario is:
 
 ```text
 chaos-500
 ```
 
----
-
-## Start local infrastructure
-
-From the repository root:
-
-```powershell
-docker compose -f demo/enterprise-runtime/deploy/docker/docker-compose.yml up -d
-```
-
-Verify that Redis and MongoDB are running:
-
-```powershell
-docker ps
-```
-
-Expected services:
+Provider throttling under distributed worker pressure is demonstrated by:
 
 ```text
-deterministic-ai-runtime-demo-redis
-deterministic-ai-runtime-demo-mongo
+throttling-100
 ```
+
+---
+
+## Recommended entry point
+
+Use the demo launcher:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1
+```
+
+This starts infrastructure automatically and opens interactive mode.
+
+Interactive mode lets you choose:
+
+```text
+json
+chaos-100
+chaos-500
+throttling-100
+```
+
+For this scenario, choose:
+
+```text
+chaos-100
+```
+
+For log mode, choose:
+
+```text
+verbose
+```
+
+---
+
+## Start infrastructure only
+
+To install or start Docker infrastructure without launching the runner:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Install
+```
+
+The launcher reads:
+
+```text
+config/enterprise-runtime-settings.json
+```
+
+and uses the configured Docker Compose and connection settings.
 
 ---
 
 ## Reset demo state
 
-PowerShell:
+To reset the configured Redis and MongoDB demo state:
 
 ```powershell
-.\demo\enterprise-runtime\scripts\reset-demo.ps1
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset
 ```
 
-Bash:
+To reset and run the multi-worker scenario directly:
 
-```bash
-./demo/enterprise-runtime/scripts/reset-demo.sh
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-100 -Verbose
 ```
-
-Use reset when you want a clean run.
 
 ---
 
@@ -112,10 +146,10 @@ dotnet build .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.Enterprise
 
 ## Run through interactive mode
 
-Run the console without arguments:
+Run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
 Then select:
@@ -134,7 +168,39 @@ This is the recommended live demo path because it shows readable realtime events
 
 ---
 
-## Run directly with command-line arguments
+## Run directly with launcher arguments
+
+Run the multi-worker chaos scenario directly:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+Run the aggressive 500-step version:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
+```
+
+Run without verbose output:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100
+```
+
+Run with reset:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Reset -Scenario chaos-100 -Verbose
+```
+
+---
+
+## Advanced direct project commands
+
+The launcher is recommended.
+
+Direct project execution is still possible for troubleshooting.
 
 Run the multi-worker chaos scenario directly:
 
@@ -228,6 +294,8 @@ With verbose mode enabled, observe readable runtime events such as:
 [RETRY]   chaos-step-011 | retry recovered
 [FINAL]   succeeded | status=Completed
 ```
+
+When execution is paused through the console, realtime logs are suspended so the console remains readable.
 
 ---
 
@@ -375,6 +443,24 @@ Use `chaos-500` when you want to prove that the runtime can keep working under s
 
 ---
 
+## Relationship with throttling-100
+
+The `throttling-100` scenario also uses distributed workers.
+
+Its main purpose is to prove that workers can respect shared provider capacity through distributed throttling.
+
+It is better for showing:
+
+```text
+provider-level throttling
+Redis lease-based admission control
+bounded provider concurrency
+realtime throttling visibility
+deterministic convergence under throttling pressure
+```
+
+---
+
 ## Relationship with pause and cancel
 
 The multi-worker scenario also supports interactive controls:
@@ -389,6 +475,8 @@ Pause does not kill already claimed work.
 Pause blocks new claims.
 
 Already claimed steps may finish after pause is requested.
+
+Realtime logs are suspended while paused to keep the console readable.
 
 That behavior is expected and safe.
 
@@ -416,20 +504,32 @@ terminal validation
 
 ## Recommended commands
 
-For a normal demonstration:
+For the recommended interactive demo:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1
 ```
 
-For an aggressive demonstration:
+For a normal multi-worker demonstration:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-500 --verbose
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100 -Verbose
+```
+
+For an aggressive multi-worker demonstration:
+
+```powershell
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-500 -Verbose
 ```
 
 For a clean summary-only run:
 
 ```powershell
-dotnet run --project .\implementations\dotnet\Samples\Multiplexed.Sample.Demo.EnterpriseRuntime.Runner -- --scenario chaos-100
+.\demo\enterprise-runtime\scripts\run-demo.ps1 -Scenario chaos-100
+```
+
+For full validation before commit:
+
+```powershell
+.\demo\enterprise-runtime\scripts\validate-demo.ps1
 ```

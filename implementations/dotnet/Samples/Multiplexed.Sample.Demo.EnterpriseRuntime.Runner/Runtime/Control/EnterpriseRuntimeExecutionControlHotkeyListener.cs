@@ -8,7 +8,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
     public sealed class EnterpriseRuntimeExecutionControlHotkeyListener
     {
         private readonly EnterpriseRuntimeExecutionControlCommandExecutor _commandExecutor;
-        private readonly EnterpriseRuntimeExecutionControlState _state = new();
+        private readonly EnterpriseRuntimeExecutionControlState _state;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="EnterpriseRuntimeExecutionControlHotkeyListener"/> class.
@@ -16,11 +16,18 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
         /// <param name="commandExecutor">
         /// The execution control command executor.
         /// </param>
+        /// <param name="state">
+        /// The shared execution control state.
+        /// </param>
         public EnterpriseRuntimeExecutionControlHotkeyListener(
-            EnterpriseRuntimeExecutionControlCommandExecutor commandExecutor)
+            EnterpriseRuntimeExecutionControlCommandExecutor commandExecutor,
+            EnterpriseRuntimeExecutionControlState state)
         {
             _commandExecutor = commandExecutor ?? throw new ArgumentNullException(
                 nameof(commandExecutor));
+
+            _state = state ?? throw new ArgumentNullException(
+                nameof(state));
         }
 
         /// <summary>
@@ -110,6 +117,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
                     .ConfigureAwait(false);
 
                 _state.IsPaused = false;
+                _state.RealtimeOutputSuspended = false;
 
                 WriteControlLine(
                     "[CONTROL] resumed");
@@ -123,6 +131,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
                 .ConfigureAwait(false);
 
             _state.IsPaused = true;
+            _state.RealtimeOutputSuspended = true;
 
             WriteControlLine(
                 "[CONTROL] paused");
@@ -149,6 +158,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
                     .ConfigureAwait(false);
 
                 _state.IsPaused = true;
+                _state.RealtimeOutputSuspended = true;
 
                 WriteControlLine(
                     "[CONTROL] paused before cancel confirmation");
@@ -159,6 +169,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
             if (confirmed)
             {
                 _state.IsCancelRequested = true;
+                _state.RealtimeOutputSuspended = true;
 
                 await _commandExecutor.CancelAsync(
                         handle,
@@ -179,6 +190,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
                 .ConfigureAwait(false);
 
             _state.IsPaused = false;
+            _state.RealtimeOutputSuspended = false;
 
             WriteControlLine(
                 "[CONTROL] cancel declined, resumed");
