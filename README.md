@@ -6,7 +6,7 @@ This repository provides a reference implementation of a distributed, state-driv
 
 The current runtime foundations are intentionally designed as the base for a broader AI execution and MLOps-oriented platform.
 
-[![Version](https://img.shields.io/badge/Version-1.0.5.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.5.1-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 ![AI Runtime](https://img.shields.io/badge/AI-Deterministic%20Execution-purple)
 ![Runtime](https://img.shields.io/badge/Runtime-distributed-brightgreen)
@@ -470,8 +470,8 @@ The full documentation map is available here:
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
 - [`docs/road-to-mlops.md`](docs/road-to-mlops.md) — Long-term evolution from deterministic AI runtime foundations toward a broader AI execution and MLOps-oriented platform.
 - [`demo/enterprise-runtime/README.md`](demo/enterprise-runtime/README.md) — Local enterprise runtime demo using Docker Compose, Redis, MongoDB, external demo steps, controller execution, distributed workers, and scenario documentation.
-- [`demo/enterprise-runtime/docs/scenarios/06-distributed-concurrency-and-throttling.md`](demo/enterprise-runtime/docs/scenarios/06-distributed-concurrency-and-throttling.md) — Executable distributed throttling scenario documentation.
-- [`demo/enterprise-runtime/docs/scenarios/08-deterministic-convergence.md`](demo/enterprise-runtime/docs/scenarios/08-deterministic-convergence.md) — Deterministic convergence scenario documentation.
+- [`demo/enterprise-runtime/scenarios/06-distributed-throttling.md`](demo/enterprise-runtime/scenarios/06-distributed-throttling.md) — Executable distributed throttling scenario documentation.
+- [`demo/enterprise-runtime/scenarios/08-deterministic-convergence.md`](demo/enterprise-runtime/scenarios/08-deterministic-convergence.md) — Deterministic convergence scenario documentation.
 
 Focused AI runtime documentation:
 
