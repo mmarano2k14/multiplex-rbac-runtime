@@ -1,7 +1,10 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.Runtime.AI.Concurrency;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 using System.Text.Json;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
@@ -329,6 +332,62 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 .Select(stepName => stepName!)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
+        }
+
+        /// <summary>
+        /// Records a decision ledger event for the current DAG claim flow.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="pipelineKey">The pipeline key.</param>
+        /// <param name="stepName">The step name.</param>
+        /// <param name="workerId">The worker identifier.</param>
+        /// <param name="claimToken">The optional claim token.</param>
+        /// <param name="concurrencyContext">The optional concurrency context.</param>
+        /// <param name="category">The ledger category.</param>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger event outcome.</param>
+        /// <param name="reason">The optional decision reason.</param>
+        /// <param name="metadata">The optional non-sensitive metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task representing the asynchronous record operation.</returns>
+        public static async Task RecordClaimLedgerEventAsync(
+            IAiDagExecutionEngineServices _services,
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            string? claimToken,
+            AiConcurrencyContext? concurrencyContext,
+            AiDecisionLedgerCategory category,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken cancellationToken)
+        {
+            if (_services.ObservabilityService?.Ledger is null)
+            {
+                return;
+            }
+
+            var correlationContext = AiRuntimeCorrelationContextHelper.Create(
+                executionId,
+                pipelineKey,
+                stepName,
+                workerId,
+                claimToken,
+                concurrencyContext);
+
+            await _services.ObservabilityService.Ledger
+                .RecordAsync(
+                    correlationContext,
+                    category,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
     }

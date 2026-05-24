@@ -2,12 +2,14 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 {
@@ -210,6 +212,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 if (!gateDecision.Allowed)
                 {
+
+                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        readyStep.StepName,
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Concurrency,
+                        AiDecisionLedgerEvents.Concurrency.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        gateDecision.Reason ?? "Concurrency admission denied.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["step.name"] = readyStep.StepName,
+                            ["worker.id"] = workerId
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+
                     LogThrottledStep(
                         executionId,
                         pipelineKey,
@@ -229,17 +254,84 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 if (claimed is null)
                 {
+
+                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        readyStep.StepName,
+                        workerId,
+                        concurrencyContext.LeaseId,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        "Step claim failed after concurrency lease was acquired.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["step.name"] = readyStep.StepName,
+                            ["worker.id"] = workerId,
+                            ["lease.id"] = concurrencyContext.LeaseId
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                     await _services.ConcurrencyGate.ReleaseAsync(
                             concurrencyContext,
                             concurrencyDefinition,
                             cancellationToken)
                         .ConfigureAwait(false);
 
+                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                       _services,
+                       executionId,
+                       pipelineKey,
+                       readyStep.StepName,
+                       workerId,
+                       concurrencyContext.LeaseId,
+                       concurrencyContext,
+                       AiDecisionLedgerCategory.Concurrency,
+                       AiDecisionLedgerEvents.Concurrency.LeaseReleased,
+                       AiDecisionLedgerOutcome.Released,
+                       "Concurrency lease released after failed step claim.",
+                       new Dictionary<string, string>
+                       {
+                           ["pipeline.key"] = pipelineKey,
+                           ["step.name"] = readyStep.StepName,
+                           ["worker.id"] = workerId,
+                           ["lease.id"] = concurrencyContext.LeaseId
+                       },
+                       cancellationToken)
+                   .ConfigureAwait(false);
+
                     _services.Logger.Engine.LogInformation(
                         $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
 
                     continue;
                 }
+
+                await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                    _services,
+                    executionId,
+                    pipelineKey,
+                    claimed.StepName,
+                    workerId,
+                    claimed.ClaimToken,
+                    concurrencyContext,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Acquired,
+                    AiDecisionLedgerOutcome.Allowed,
+                    "Step claim acquired.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.key"] = pipelineKey,
+                        ["step.name"] = claimed.StepName,
+                        ["worker.id"] = workerId,
+                        ["claim.token"] = claimed.ClaimToken
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
                 _services.Logger.Engine.StepClaimed(
                     executionId,
@@ -428,6 +520,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     claimed.StepName,
                     workerId,
                     claimed.ClaimToken);
+
+
+                await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                    _services,
+                    executionId,
+                    pipelineKey,
+                    claimed.StepName,
+                    workerId,
+                    claimed.ClaimToken,
+                    concurrencyContext,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Acquired,
+                    AiDecisionLedgerOutcome.Allowed,
+                    "Step claim acquired.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.key"] = pipelineKey,
+                        ["step.name"] = claimed.StepName,
+                        ["worker.id"] = workerId,
+                        ["claim.token"] = claimed.ClaimToken
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
                 claimedSteps.Add(claimed);
             }
@@ -851,51 +966,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         return result;
                     })
                 .ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Determines whether the execution is currently allowed to claim or advance work.
-        /// </summary>
-        /// <param name="executionId">The durable execution identifier.</param>
-        /// <param name="workerId">The runtime worker identifier.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns><c>true</c> when the execution may advance; otherwise, <c>false</c>.</returns>
-        private async Task<bool> CanAdvanceExecutionAsync(
-            string executionId,
-            string workerId,
-            CancellationToken cancellationToken)
-        {
-            var decision = await _services.ExecutionControlGate
-                .CheckBeforeAdvanceAsync(executionId, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (decision.CanContinue)
-            {
-                if (decision.Status == AiExecutionControlStatus.Resuming)
-                {
-                    await MarkRunningIfExecutionIsResumingAsync(
-                            executionId,
-                            workerId,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                return true;
-            }
-
-            if (decision.Status == AiExecutionControlStatus.Pausing)
-            {
-                await MarkPausedIfExecutionHasDrainedAsync(
-                        executionId,
-                        workerId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            _services.Logger.Engine.LogInformation(
-                $"[AI DAG] Execution advancement blocked by control state. ExecutionId='{executionId}', WorkerId='{workerId}', Status='{decision.Status}', StopClaiming='{decision.ShouldStopClaiming}', ShouldCancel='{decision.ShouldCancel}', WaitingForInput='{decision.IsWaitingForInput}', Reason='{decision.Reason}'.");
-
-            return false;
         }
 
         /// <summary>
