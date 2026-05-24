@@ -1,0 +1,122 @@
+﻿using System;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
+
+namespace Multiplexed.AI.Observability.Ledger
+{
+    /// <summary>
+    /// Provides dependency injection registration helpers for the AI decision ledger.
+    /// </summary>
+    public static class AiDecisionLedgerServiceCollectionExtensions
+    {
+        /// <summary>
+        /// Adds the AI decision ledger services using default best-effort no-op storage.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <returns>The updated service collection.</returns>
+        public static IServiceCollection AddAiDecisionLedger(
+            this IServiceCollection services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+
+            return services.AddAiDecisionLedger(options =>
+            {
+                options.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
+                options.StorageMode = AiDecisionLedgerStorageMode.None;
+            });
+        }
+
+        /// <summary>
+        /// Adds the AI decision ledger services using the specified recorder options.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="configure">The recorder options configuration delegate.</param>
+        /// <returns>The updated service collection.</returns>
+        public static IServiceCollection AddAiDecisionLedger(
+            this IServiceCollection services,
+            Action<AiDecisionLedgerRecorderOptions> configure)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(configure);
+
+            services.Configure(configure);
+
+            var options = new AiDecisionLedgerRecorderOptions();
+            configure(options);
+
+            RegisterLedgerStorage(services, options.StorageMode);
+
+            if (options.WriteMode == AiDecisionLedgerWriteMode.Disabled)
+            {
+                services.TryAddSingleton<IAiDecisionLedgerRecorder, NoOpAiDecisionLedgerRecorder>();
+            }
+            else
+            {
+                services.TryAddSingleton<IAiDecisionLedgerRecorder, DefaultAiDecisionLedgerRecorder>();
+            }
+
+            return services;
+        }
+
+        /// <summary>
+        /// Adds an in-memory AI decision ledger intended for tests and local demos.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <returns>The updated service collection.</returns>
+        public static IServiceCollection AddInMemoryAiDecisionLedger(
+            this IServiceCollection services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+
+            return services.AddAiDecisionLedger(options =>
+            {
+                options.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
+                options.StorageMode = AiDecisionLedgerStorageMode.InMemory;
+            });
+        }
+
+        /// <summary>
+        /// Adds a disabled AI decision ledger.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <returns>The updated service collection.</returns>
+        public static IServiceCollection AddDisabledAiDecisionLedger(
+            this IServiceCollection services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+
+            return services.AddAiDecisionLedger(options =>
+            {
+                options.WriteMode = AiDecisionLedgerWriteMode.Disabled;
+                options.StorageMode = AiDecisionLedgerStorageMode.None;
+            });
+        }
+
+        private static void RegisterLedgerStorage(
+            IServiceCollection services,
+            AiDecisionLedgerStorageMode storageMode)
+        {
+            switch (storageMode)
+            {
+                case AiDecisionLedgerStorageMode.None:
+                    services.TryAddSingleton<IAiDecisionLedger, NoOpAiDecisionLedger>();
+                    break;
+
+                case AiDecisionLedgerStorageMode.InMemory:
+                    services.TryAddSingleton<IAiDecisionLedger, InMemoryAiDecisionLedger>();
+                    break;
+
+                case AiDecisionLedgerStorageMode.Mongo:
+                    throw new NotSupportedException(
+                        "MongoDB decision ledger storage has not been implemented yet.");
+
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(storageMode),
+                        storageMode,
+                        "Unsupported AI decision ledger storage mode.");
+            }
+        }
+    }
+}

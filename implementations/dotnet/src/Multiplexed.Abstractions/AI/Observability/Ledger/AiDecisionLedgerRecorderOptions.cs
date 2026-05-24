@@ -9,5 +9,10 @@
         /// Gets or sets the write mode used by the decision ledger recorder.
         /// </summary>
         public AiDecisionLedgerWriteMode WriteMode { get; set; } = AiDecisionLedgerWriteMode.BestEffort;
+
+        /// <summary>
+        /// Gets or sets the storage mode used by the decision ledger.
+        /// </summary>
+        public AiDecisionLedgerStorageMode StorageMode { get; set; } = AiDecisionLedgerStorageMode.None;
     }
 }
