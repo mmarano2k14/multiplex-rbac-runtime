@@ -31,7 +31,7 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
             var entries = await ledger.GetByExecutionAsync("execution-1");
 
             entries.Should().HaveCount(2);
-            entries.Should().OnlyContain(entry => entry.ExecutionId == "execution-1");
+            entries.Should().OnlyContain(entry => entry.CorrelationContext.ExecutionId == "execution-1");
             entries[0].EventType.Should().Be(AiDecisionLedgerEvents.Execution.Started);
             entries[1].EventType.Should().Be(AiDecisionLedgerEvents.Execution.Completed);
         }
@@ -89,7 +89,7 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
 
             entries.Should().ContainSingle();
             entries[0].EventType.Should().Be(AiDecisionLedgerEvents.Concurrency.Denied);
-            entries[0].StepId.Should().Be("step-1");
+            entries[0].CorrelationContext.StepId.Should().Be("step-1");
         }
 
         /// <summary>
@@ -123,6 +123,10 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
                 Provider = "openai",
                 Model = "gpt-test",
                 Operation = "completion",
+                InputPayloadRef = "payload-input-1",
+                OutputPayloadRef = "payload-output-1",
+                HumanInputRef = "human-input-1",
+                PromptRef = "prompt-1",
                 TraceId = "trace-1",
                 CorrelationId = "correlation-1"
             };
@@ -144,22 +148,28 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
             entries.Should().ContainSingle();
 
             var entry = entries[0];
+            var correlation = entry.CorrelationContext;
 
-            entry.ExecutionId.Should().Be("execution-1");
-            entry.RunId.Should().Be("run-1");
-            entry.PipelineName.Should().Be("pipeline-a");
-            entry.PipelineVersion.Should().Be("1.0.0");
-            entry.StepId.Should().Be("step-1");
-            entry.StepKey.Should().Be("rag.retrieve");
-            entry.RuntimeInstanceId.Should().Be("runtime-a");
-            entry.WorkerId.Should().Be("worker-1");
-            entry.ClaimToken.Should().Be("claim-token-1");
-            entry.PolicyKey.Should().Be("retry.default");
-            entry.Provider.Should().Be("openai");
-            entry.Model.Should().Be("gpt-test");
-            entry.Operation.Should().Be("completion");
-            entry.TraceId.Should().Be("trace-1");
-            entry.CorrelationId.Should().Be("correlation-1");
+            correlation.ExecutionId.Should().Be("execution-1");
+            correlation.RunId.Should().Be("run-1");
+            correlation.PipelineName.Should().Be("pipeline-a");
+            correlation.PipelineVersion.Should().Be("1.0.0");
+            correlation.StepId.Should().Be("step-1");
+            correlation.StepKey.Should().Be("rag.retrieve");
+            correlation.RuntimeInstanceId.Should().Be("runtime-a");
+            correlation.WorkerId.Should().Be("worker-1");
+            correlation.ClaimToken.Should().Be("claim-token-1");
+            correlation.PolicyKey.Should().Be("retry.default");
+            correlation.Provider.Should().Be("openai");
+            correlation.Model.Should().Be("gpt-test");
+            correlation.Operation.Should().Be("completion");
+            correlation.InputPayloadRef.Should().Be("payload-input-1");
+            correlation.OutputPayloadRef.Should().Be("payload-output-1");
+            correlation.HumanInputRef.Should().Be("human-input-1");
+            correlation.PromptRef.Should().Be("prompt-1");
+            correlation.TraceId.Should().Be("trace-1");
+            correlation.CorrelationId.Should().Be("correlation-1");
+
             entry.Category.Should().Be(AiDecisionLedgerCategory.Retry);
             entry.EventType.Should().Be(AiDecisionLedgerEvents.Retry.Scheduled);
             entry.Outcome.Should().Be(AiDecisionLedgerOutcome.Applied);
@@ -209,13 +219,16 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
             return new AiDecisionLedgerEntry
             {
                 EntryId = Guid.NewGuid().ToString("N"),
-                ExecutionId = executionId,
+                CorrelationContext = new AiRuntimeCorrelationContext
+                {
+                    ExecutionId = executionId,
+                    StepId = stepId,
+                    PolicyKey = policyKey
+                },
                 Category = category,
                 EventType = eventType,
                 Outcome = outcome,
-                TimestampUtc = DateTimeOffset.UtcNow,
-                StepId = stepId,
-                PolicyKey = policyKey
+                TimestampUtc = DateTimeOffset.UtcNow
             };
         }
     }

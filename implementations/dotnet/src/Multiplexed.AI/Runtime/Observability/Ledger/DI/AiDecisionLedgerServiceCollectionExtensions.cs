@@ -2,8 +2,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.AI.Observability.Ledger;
 
-namespace Multiplexed.AI.Observability.Ledger
+namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
 {
     /// <summary>
     /// Provides dependency injection registration helpers for the AI decision ledger.

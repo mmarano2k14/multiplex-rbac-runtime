@@ -88,6 +88,26 @@
         public string? Operation { get; init; }
 
         /// <summary>
+        /// Gets the optional input payload reference associated with the runtime operation.
+        /// </summary>
+        public string? InputPayloadRef { get; init; }
+
+        /// <summary>
+        /// Gets the optional output payload reference associated with the runtime operation.
+        /// </summary>
+        public string? OutputPayloadRef { get; init; }
+
+        /// <summary>
+        /// Gets the optional human input reference associated with the runtime operation.
+        /// </summary>
+        public string? HumanInputRef { get; init; }
+
+        /// <summary>
+        /// Gets the optional prompt reference associated with the runtime operation.
+        /// </summary>
+        public string? PromptRef { get; init; }
+
+        /// <summary>
         /// Gets the distributed tracing identifier associated with the runtime operation.
         /// </summary>
         public string? TraceId { get; init; }

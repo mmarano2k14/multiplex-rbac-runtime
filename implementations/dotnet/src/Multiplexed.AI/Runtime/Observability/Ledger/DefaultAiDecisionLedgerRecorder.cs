@@ -61,27 +61,13 @@ namespace Multiplexed.AI.Observability.Ledger
             var entry = new AiDecisionLedgerEntry
             {
                 EntryId = Guid.NewGuid().ToString("N"),
-                ExecutionId = context.ExecutionId,
+                CorrelationContext = context,
                 Sequence = 0,
                 Category = category,
                 EventType = eventType,
                 Outcome = outcome,
                 TimestampUtc = DateTimeOffset.UtcNow,
-                RunId = context.RunId,
-                StepId = context.StepId,
-                StepKey = context.StepKey,
-                PipelineName = context.PipelineName,
-                PipelineVersion = context.PipelineVersion,
-                RuntimeInstanceId = context.RuntimeInstanceId,
-                WorkerId = context.WorkerId,
-                PolicyKey = context.PolicyKey,
-                Provider = context.Provider,
-                Model = context.Model,
-                Operation = context.Operation,
                 Reason = reason,
-                CorrelationId = context.CorrelationId,
-                TraceId = context.TraceId,
-                ClaimToken = context.ClaimToken,
                 Metadata = metadata
             };
 

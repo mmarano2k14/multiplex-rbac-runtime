@@ -27,42 +27,27 @@ namespace Multiplexed.AI.Observability.Ledger
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(entry);
+            ArgumentNullException.ThrowIfNull(entry.CorrelationContext);
             ArgumentException.ThrowIfNullOrWhiteSpace(entry.EntryId);
-            ArgumentException.ThrowIfNullOrWhiteSpace(entry.ExecutionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(entry.CorrelationContext.ExecutionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(entry.EventType);
 
             cancellationToken.ThrowIfCancellationRequested();
 
             lock (_syncRoot)
             {
-                var sequence = GetNextSequence(entry.ExecutionId);
+                var sequence = GetNextSequence(entry.CorrelationContext.ExecutionId);
 
                 var storedEntry = new AiDecisionLedgerEntry
                 {
                     EntryId = entry.EntryId,
-                    ExecutionId = entry.ExecutionId,
+                    CorrelationContext = entry.CorrelationContext,
                     Sequence = sequence,
                     Category = entry.Category,
                     EventType = entry.EventType,
                     Outcome = entry.Outcome,
                     TimestampUtc = entry.TimestampUtc,
-                    RunId = entry.RunId,
-                    StepId = entry.StepId,
-                    StepKey = entry.StepKey,
-                    PipelineName = entry.PipelineName,
-                    PipelineVersion = entry.PipelineVersion,
-                    RuntimeInstanceId = entry.RuntimeInstanceId,
-                    WorkerId = entry.WorkerId,
-                    PolicyKey = entry.PolicyKey,
-                    Provider = entry.Provider,
-                    Model = entry.Model,
-                    Operation = entry.Operation,
                     Reason = entry.Reason,
-                    CorrelationId = entry.CorrelationId,
-                    TraceId = entry.TraceId,
-                    ClaimToken = entry.ClaimToken,
-                    InputPayloadRef = entry.InputPayloadRef,
-                    OutputPayloadRef = entry.OutputPayloadRef,
                     Metadata = entry.Metadata
                 };
 
@@ -86,7 +71,10 @@ namespace Multiplexed.AI.Observability.Ledger
             lock (_syncRoot)
             {
                 result = _entries
-                    .Where(entry => string.Equals(entry.ExecutionId, executionId, StringComparison.Ordinal))
+                    .Where(entry => string.Equals(
+                        entry.CorrelationContext.ExecutionId,
+                        executionId,
+                        StringComparison.Ordinal))
                     .OrderBy(entry => entry.Sequence)
                     .ThenBy(entry => entry.TimestampUtc)
                     .ToArray();
@@ -113,7 +101,7 @@ namespace Multiplexed.AI.Observability.Ledger
                 entries = ApplyFilters(entries, query);
 
                 entries = entries
-                    .OrderBy(entry => entry.ExecutionId)
+                    .OrderBy(entry => entry.CorrelationContext.ExecutionId)
                     .ThenBy(entry => entry.Sequence)
                     .ThenBy(entry => entry.TimestampUtc);
 
@@ -148,22 +136,34 @@ namespace Multiplexed.AI.Observability.Ledger
         {
             if (!string.IsNullOrWhiteSpace(query.ExecutionId))
             {
-                entries = entries.Where(entry => string.Equals(entry.ExecutionId, query.ExecutionId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.ExecutionId,
+                    query.ExecutionId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.RunId))
             {
-                entries = entries.Where(entry => string.Equals(entry.RunId, query.RunId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.RunId,
+                    query.RunId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.StepId))
             {
-                entries = entries.Where(entry => string.Equals(entry.StepId, query.StepId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.StepId,
+                    query.StepId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.StepKey))
             {
-                entries = entries.Where(entry => string.Equals(entry.StepKey, query.StepKey, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.StepKey,
+                    query.StepKey,
+                    StringComparison.Ordinal));
             }
 
             if (query.Category.HasValue)
@@ -173,7 +173,10 @@ namespace Multiplexed.AI.Observability.Ledger
 
             if (!string.IsNullOrWhiteSpace(query.EventType))
             {
-                entries = entries.Where(entry => string.Equals(entry.EventType, query.EventType, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.EventType,
+                    query.EventType,
+                    StringComparison.Ordinal));
             }
 
             if (query.Outcome.HasValue)
@@ -183,42 +186,66 @@ namespace Multiplexed.AI.Observability.Ledger
 
             if (!string.IsNullOrWhiteSpace(query.RuntimeInstanceId))
             {
-                entries = entries.Where(entry => string.Equals(entry.RuntimeInstanceId, query.RuntimeInstanceId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.RuntimeInstanceId,
+                    query.RuntimeInstanceId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.WorkerId))
             {
-                entries = entries.Where(entry => string.Equals(entry.WorkerId, query.WorkerId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.WorkerId,
+                    query.WorkerId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.PolicyKey))
             {
-                entries = entries.Where(entry => string.Equals(entry.PolicyKey, query.PolicyKey, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.PolicyKey,
+                    query.PolicyKey,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.Provider))
             {
-                entries = entries.Where(entry => string.Equals(entry.Provider, query.Provider, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.Provider,
+                    query.Provider,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.Model))
             {
-                entries = entries.Where(entry => string.Equals(entry.Model, query.Model, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.Model,
+                    query.Model,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.Operation))
             {
-                entries = entries.Where(entry => string.Equals(entry.Operation, query.Operation, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.Operation,
+                    query.Operation,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.CorrelationId))
             {
-                entries = entries.Where(entry => string.Equals(entry.CorrelationId, query.CorrelationId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.CorrelationId,
+                    query.CorrelationId,
+                    StringComparison.Ordinal));
             }
 
             if (!string.IsNullOrWhiteSpace(query.TraceId))
             {
-                entries = entries.Where(entry => string.Equals(entry.TraceId, query.TraceId, StringComparison.Ordinal));
+                entries = entries.Where(entry => string.Equals(
+                    entry.CorrelationContext.TraceId,
+                    query.TraceId,
+                    StringComparison.Ordinal));
             }
 
             if (query.SequenceFrom.HasValue)

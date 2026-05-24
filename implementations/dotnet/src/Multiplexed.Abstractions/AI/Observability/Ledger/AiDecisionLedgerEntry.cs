@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Multiplexed.Abstractions.AI.Observability.Context;
 
 namespace Multiplexed.Abstractions.AI.Observability.Ledger
 {
@@ -19,9 +20,9 @@ namespace Multiplexed.Abstractions.AI.Observability.Ledger
         public required string EntryId { get; init; }
 
         /// <summary>
-        /// Gets the execution identifier used as the primary correlation key.
+        /// Gets the runtime correlation context associated with this ledger entry.
         /// </summary>
-        public required string ExecutionId { get; init; }
+        public required AiRuntimeCorrelationContext CorrelationContext { get; init; }
 
         /// <summary>
         /// Gets the monotonic sequence number of the entry within the execution ledger stream.
@@ -49,89 +50,9 @@ namespace Multiplexed.Abstractions.AI.Observability.Ledger
         public required DateTimeOffset TimestampUtc { get; init; }
 
         /// <summary>
-        /// Gets the optional controller run identifier associated with this entry.
-        /// </summary>
-        public string? RunId { get; init; }
-
-        /// <summary>
-        /// Gets the optional DAG step identifier associated with this entry.
-        /// </summary>
-        public string? StepId { get; init; }
-
-        /// <summary>
-        /// Gets the optional logical step key associated with this entry.
-        /// </summary>
-        public string? StepKey { get; init; }
-
-        /// <summary>
-        /// Gets the optional pipeline name associated with this entry.
-        /// </summary>
-        public string? PipelineName { get; init; }
-
-        /// <summary>
-        /// Gets the optional pipeline version associated with this entry.
-        /// </summary>
-        public string? PipelineVersion { get; init; }
-
-        /// <summary>
-        /// Gets the optional runtime instance identifier associated with this entry.
-        /// </summary>
-        public string? RuntimeInstanceId { get; init; }
-
-        /// <summary>
-        /// Gets the optional worker identifier associated with this entry.
-        /// </summary>
-        public string? WorkerId { get; init; }
-
-        /// <summary>
-        /// Gets the optional policy key associated with this entry.
-        /// </summary>
-        public string? PolicyKey { get; init; }
-
-        /// <summary>
-        /// Gets the optional provider associated with this entry.
-        /// </summary>
-        public string? Provider { get; init; }
-
-        /// <summary>
-        /// Gets the optional model associated with this entry.
-        /// </summary>
-        public string? Model { get; init; }
-
-        /// <summary>
-        /// Gets the optional operation associated with this entry.
-        /// </summary>
-        public string? Operation { get; init; }
-
-        /// <summary>
         /// Gets the optional reason explaining the runtime decision.
         /// </summary>
         public string? Reason { get; init; }
-
-        /// <summary>
-        /// Gets the optional general correlation identifier associated with this entry.
-        /// </summary>
-        public string? CorrelationId { get; init; }
-
-        /// <summary>
-        /// Gets the optional distributed tracing identifier associated with this entry.
-        /// </summary>
-        public string? TraceId { get; init; }
-
-        /// <summary>
-        /// Gets the optional distributed claim token associated with this entry.
-        /// </summary>
-        public string? ClaimToken { get; init; }
-
-        /// <summary>
-        /// Gets the optional input payload reference associated with this entry.
-        /// </summary>
-        public string? InputPayloadRef { get; init; }
-
-        /// <summary>
-        /// Gets the optional output payload reference associated with this entry.
-        /// </summary>
-        public string? OutputPayloadRef { get; init; }
 
         /// <summary>
         /// Gets additional non-sensitive metadata associated with this entry.

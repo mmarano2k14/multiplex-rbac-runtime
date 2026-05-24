@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Xunit;
+using Multiplexed.AI.Runtime.Observability.Ledger.DI;
 
 namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
 {
