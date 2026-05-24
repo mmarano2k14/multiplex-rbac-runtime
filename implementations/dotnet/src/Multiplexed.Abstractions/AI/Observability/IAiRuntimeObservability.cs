@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
 
 namespace Multiplexed.Abstractions.AI.Observability
@@ -31,5 +32,10 @@ namespace Multiplexed.Abstractions.AI.Observability
         /// Gets the runtime logger component.
         /// </summary>
         //IAiRuntimeLogger Logger { get; }
+
+        /// <summary>
+        /// Gets the decision ledger recorder used to record important runtime decisions.
+        /// </summary>
+        IAiDecisionLedgerRecorder Ledger { get; }
     }
 }

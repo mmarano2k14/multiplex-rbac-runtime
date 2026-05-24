@@ -129,14 +129,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                     cancellationToken)
                                 .ConfigureAwait(false);
 
-            if (controlDecision.ShouldCancel)
+            if (controlDecision is not null)
             {
-                return null;
-            }
+                if (controlDecision.ShouldCancel)
+                {
+                    return null;
+                }
 
-            if (!controlDecision.CanContinue)
-            {
-                return null;
+                if (!controlDecision.CanContinue)
+                {
+                    return null;
+                }
             }
 
             var recoveredCount = await RecoverTimedOutStepsAsync(
@@ -301,19 +304,22 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             */
 
             var controlDecision = await CheckExecutionControlAsync(
-                                            executionId,
-                                            workerId,
-                                            cancellationToken)
-                                        .ConfigureAwait(false);
+                    executionId,
+                    workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
-            if (controlDecision.ShouldCancel)
+            if (controlDecision is not null)
             {
-                return Array.Empty<AiClaimedStep>();
-            }
+                if (controlDecision.ShouldCancel)
+                {
+                    return Array.Empty<AiClaimedStep>();
+                }
 
-            if (!controlDecision.CanContinue)
-            {
-                return Array.Empty<AiClaimedStep>();
+                if (!controlDecision.CanContinue)
+                {
+                    return Array.Empty<AiClaimedStep>();
+                }
             }
 
             await RecoverTimedOutStepsAsync(
@@ -903,6 +909,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             string workerId,
             CancellationToken cancellationToken)
         {
+
+            if (_services.ExecutionControlService is null)
+            {
+                return;
+            }
+
             if (_services.DagStore is null)
             {
                 return;
@@ -951,10 +963,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="workerId">The runtime worker identifier observing the resumed state.</param>
         /// <param name="cancellationToken">A token used to cancel the operation.</param>
         private async Task MarkRunningIfExecutionIsResumingAsync(
-            string executionId,
-            string workerId,
-            CancellationToken cancellationToken)
+             string executionId,
+             string workerId,
+             CancellationToken cancellationToken)
         {
+            if (_services.ExecutionControlService is null)
+            {
+                return;
+            }
+
             var running = await _services.ExecutionControlService
                 .MarkRunningAsync(
                     executionId,
@@ -983,18 +1000,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// A token used to cancel the operation.
         /// </param>
         /// <returns>
-        /// The durable execution control decision.
+        /// The durable execution control decision when execution control is configured and returns a decision; otherwise, <c>null</c>.
         /// </returns>
-        private async Task<AiExecutionControlDecision> CheckExecutionControlAsync(
+        private async Task<AiExecutionControlDecision?> CheckExecutionControlAsync(
             string executionId,
             string workerId,
             CancellationToken cancellationToken)
         {
+            if (_services.ExecutionControlGate is null)
+            {
+                return null;
+            }
+
             var decision = await _services.ExecutionControlGate
                 .CheckBeforeAdvanceAsync(
                     executionId,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            if (decision is null)
+            {
+                return null;
+            }
 
             if (decision.CanContinue)
             {

@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
-using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Execution;
@@ -13,14 +13,18 @@ using Multiplexed.AI.Runtime.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.Workers;
 using Multiplexed.AI.Runtime.Observability;
 using Multiplexed.AI.Runtime.Tracing;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace Multiplexed.AI.Tests.Integration.Helpers
 {
+    /// <summary>
+    /// Provides factory helpers for creating AI runtime metrics and observability objects in tests.
+    /// </summary>
     public static class MetricsFactory
     {
+        /// <summary>
+        /// Creates a default <see cref="IAiRuntimeMetrics"/> instance for tests.
+        /// </summary>
+        /// <returns>A fully initialized runtime metrics instance.</returns>
         public static IAiRuntimeMetrics Create()
         {
             return new AiRuntimeMetrics(
@@ -39,7 +43,6 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
             );
         }
 
-
         /// <summary>
         /// Factory helper for creating a fully configured <see cref="IAiRuntimeObservability"/> instance.
         /// </summary>
@@ -49,8 +52,8 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
         /// - Used in tests, local runtime setups, and lightweight execution contexts.
         ///
         /// DESIGN:
-        /// - Composes Metrics, Tracer, and Logger into a single observability instance.
-        /// - Uses in-memory metrics and no-op tracing by default.
+        /// - Composes Metrics, Tracer, Logger, and Ledger recorder into a single observability instance.
+        /// - Uses in-memory metrics, no-op tracing, and no-op decision ledger recording by default.
         ///
         /// IMPORTANT:
         /// - This factory is not intended for production DI usage.
@@ -64,45 +67,19 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
             /// <returns>A fully initialized observability instance.</returns>
             public static IAiRuntimeObservability Create()
             {
-                // ------------------------------------------------------------
-                // Metrics
-                // ------------------------------------------------------------
-
-                var metrics = new AiRuntimeMetrics(
-                    new AiExecutionMetrics(),
-                    new AiRetentionMetrics(
-                        new AiRetentionTriggerMetrics(),
-                        new AiRetentionDecisionMetrics(),
-                        new AiRetentionPlanMetrics(),
-                        new AiRetentionExecutionMetrics()
-                    ),
-                    new AiStorageMetrics(),
-                    new AiHotStateMetrics(),
-                    new AiResolverMetrics(),
-                    new AiPolicyMetrics(),
-                    new AiRuntimeInstanceWorkerMetrics()
-                );
-
-                // ------------------------------------------------------------
-                // Tracing (NoOp by default)
-                // ------------------------------------------------------------
+                var metrics = MetricsFactory.Create();
 
                 IAiRuntimeTracer tracer = new NoOpAiRuntimeTracer();
 
-                // ------------------------------------------------------------
-                // Logger (runtime default)
-                // ------------------------------------------------------------
-
                 IAiRuntimeLogger logger = new NoopLogger();
 
-                // ------------------------------------------------------------
-                // Observability
-                // ------------------------------------------------------------
+                IAiDecisionLedgerRecorder ledger = new NoOpAiDecisionLedgerRecorder();
 
                 return new AiRuntimeObservability(
                     metrics,
                     tracer,
-                    logger
+                    logger,
+                    ledger
                 );
             }
         }

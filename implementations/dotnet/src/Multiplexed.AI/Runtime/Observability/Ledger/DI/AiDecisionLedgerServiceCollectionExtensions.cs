@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.Observability.Ledger.Mongo;
 
 namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
 {
@@ -47,15 +48,7 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
             configure(options);
 
             RegisterLedgerStorage(services, options.StorageMode);
-
-            if (options.WriteMode == AiDecisionLedgerWriteMode.Disabled)
-            {
-                services.TryAddSingleton<IAiDecisionLedgerRecorder, NoOpAiDecisionLedgerRecorder>();
-            }
-            else
-            {
-                services.TryAddSingleton<IAiDecisionLedgerRecorder, DefaultAiDecisionLedgerRecorder>();
-            }
+            RegisterLedgerRecorder(services, options.WriteMode);
 
             return services;
         }
@@ -74,6 +67,58 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
             {
                 options.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
                 options.StorageMode = AiDecisionLedgerStorageMode.InMemory;
+            });
+        }
+
+        /// <summary>
+        /// Adds a MongoDB-backed AI decision ledger.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="configureMongo">The MongoDB decision ledger options configuration delegate.</param>
+        /// <returns>The updated service collection.</returns>
+        /// <remarks>
+        /// This method requires an <c>IMongoClient</c> registration to already exist in the service collection.
+        /// </remarks>
+        public static IServiceCollection AddMongoAiDecisionLedger(
+            this IServiceCollection services,
+            Action<MongoAiDecisionLedgerOptions> configureMongo)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(configureMongo);
+
+            services.Configure(configureMongo);
+
+            return services.AddAiDecisionLedger(options =>
+            {
+                options.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
+                options.StorageMode = AiDecisionLedgerStorageMode.Mongo;
+            });
+        }
+
+        /// <summary>
+        /// Adds a MongoDB-backed AI decision ledger using the specified write mode.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="writeMode">The decision ledger write mode.</param>
+        /// <param name="configureMongo">The MongoDB decision ledger options configuration delegate.</param>
+        /// <returns>The updated service collection.</returns>
+        /// <remarks>
+        /// This method requires an <c>IMongoClient</c> registration to already exist in the service collection.
+        /// </remarks>
+        public static IServiceCollection AddMongoAiDecisionLedger(
+            this IServiceCollection services,
+            AiDecisionLedgerWriteMode writeMode,
+            Action<MongoAiDecisionLedgerOptions> configureMongo)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(configureMongo);
+
+            services.Configure(configureMongo);
+
+            return services.AddAiDecisionLedger(options =>
+            {
+                options.WriteMode = writeMode;
+                options.StorageMode = AiDecisionLedgerStorageMode.Mongo;
             });
         }
 
@@ -109,8 +154,8 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
                     break;
 
                 case AiDecisionLedgerStorageMode.Mongo:
-                    throw new NotSupportedException(
-                        "MongoDB decision ledger storage has not been implemented yet.");
+                    services.TryAddSingleton<IAiDecisionLedger, MongoAiDecisionLedger>();
+                    break;
 
                 default:
                     throw new ArgumentOutOfRangeException(
@@ -118,6 +163,19 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
                         storageMode,
                         "Unsupported AI decision ledger storage mode.");
             }
+        }
+
+        private static void RegisterLedgerRecorder(
+            IServiceCollection services,
+            AiDecisionLedgerWriteMode writeMode)
+        {
+            if (writeMode == AiDecisionLedgerWriteMode.Disabled)
+            {
+                services.TryAddSingleton<IAiDecisionLedgerRecorder, NoOpAiDecisionLedgerRecorder>();
+                return;
+            }
+
+            services.TryAddSingleton<IAiDecisionLedgerRecorder, DefaultAiDecisionLedgerRecorder>();
         }
     }
 }

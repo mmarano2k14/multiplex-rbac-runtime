@@ -24,6 +24,7 @@ using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
 using Multiplexed.Abstractions.AI.Metrics.Workers;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
@@ -35,6 +36,7 @@ using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Providers;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.AI.Concurrency;
@@ -78,6 +80,7 @@ using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.Workers;
 using Multiplexed.AI.Runtime.Observability;
+using Multiplexed.AI.Runtime.Observability.Ledger.DI;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
@@ -422,7 +425,48 @@ namespace Multiplexed.AI.DI
                     : new NoOpAiRuntimeTracer();
             });
 
+            // ------------------------------------------------------------
+            // Decision ledger
+            //
+            // PURPOSE:
+            // - Registers the execution-correlated decision ledger recorder.
+            // - Keeps ledger recording optional and controlled by observability options.
+            // - Uses the existing ledger DI extension to register NoOp, InMemory, or Mongo storage.
+            //
+            // IMPORTANT:
+            // - The ledger is not the source of truth.
+            // - BestEffort mode must not break runtime execution.
+            // - Strict mode may propagate ledger failures when audit durability is mandatory.
+            // - Mongo storage requires IMongoClient to already be registered in the container.
+            // ------------------------------------------------------------
+
+            var observability = options.Observability;
+
+            if (observability.DecisionLedger.StorageMode == AiDecisionLedgerStorageMode.Mongo)
+            {
+                services.AddMongoAiDecisionLedger(
+                    observability.DecisionLedger.WriteMode,
+                    mongoOptions =>
+                    {
+                        mongoOptions.DatabaseName = observability.MongoDecisionLedger.DatabaseName;
+                        mongoOptions.CollectionName = observability.MongoDecisionLedger.CollectionName;
+                        mongoOptions.SequenceCollectionName = observability.MongoDecisionLedger.SequenceCollectionName;
+                        mongoOptions.CreateIndexes = observability.MongoDecisionLedger.CreateIndexes;
+                    });
+            }
+            else
+            {
+                services.AddAiDecisionLedger(ledgerOptions =>
+                {
+                    ledgerOptions.WriteMode = observability.DecisionLedger.WriteMode;
+                    ledgerOptions.StorageMode = observability.DecisionLedger.StorageMode;
+                });
+            }
+
+            // ------------------------------------------------------------
             // Facade observability
+            // ------------------------------------------------------------
+
             services.AddScoped<IAiRuntimeObservability, AiRuntimeObservability>();
 
             // ------------------------------------------------------------

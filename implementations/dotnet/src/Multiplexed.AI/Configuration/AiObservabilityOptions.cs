@@ -1,11 +1,15 @@
-﻿namespace Multiplexed.AI.Configuration
+﻿using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.Tracing;
+
+namespace Multiplexed.AI.Configuration
 {
     /// <summary>
     /// Configuration options controlling AI runtime observability behavior.
     /// </summary>
     /// <remarks>
     /// PURPOSE:
-    /// - Centralizes all observability-related toggles (tracing, metrics, recording).
+    /// - Centralizes all observability-related toggles for tracing, metrics, recording, and decision ledger audit.
     /// - Allows switching implementations without modifying the runtime engine.
     ///
     /// DESIGN:
@@ -13,8 +17,8 @@
     /// - They must remain simple and side-effect free.
     ///
     /// IMPORTANT:
-    /// - Disabling tracing must not impact runtime correctness.
-    /// - Observability is always optional and must remain non-blocking.
+    /// - Disabling tracing, metrics, or ledger recording must not impact runtime correctness.
+    /// - Observability is always optional and must remain non-blocking unless strict ledger recording is explicitly enabled.
     /// </remarks>
     public sealed class AiObservabilityOptions
     {
@@ -46,5 +50,32 @@
         /// - Metric recording calls should be ignored.
         /// </remarks>
         public bool EnableMetrics { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets decision ledger recorder options.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Controls whether decision ledger writes are disabled, best-effort, or strict.
+        /// - Selects the ledger storage mode such as none, in-memory, or MongoDB.
+        ///
+        /// IMPORTANT:
+        /// - Best-effort ledger failures must not break execution.
+        /// - Strict ledger failures may fail or block execution when audit durability is mandatory.
+        /// </remarks>
+        public AiDecisionLedgerRecorderOptions DecisionLedger { get; set; } = new()
+        {
+            WriteMode = AiDecisionLedgerWriteMode.BestEffort,
+            StorageMode = AiDecisionLedgerStorageMode.None
+        };
+
+        /// <summary>
+        /// Gets or sets MongoDB-backed decision ledger storage options.
+        /// </summary>
+        /// <remarks>
+        /// These options are only used when <see cref="DecisionLedger"/> is configured
+        /// with <see cref="AiDecisionLedgerStorageMode.Mongo"/>.
+        /// </remarks>
+        public MongoAiDecisionLedgerOptions MongoDecisionLedger { get; set; } = new();
     }
 }
