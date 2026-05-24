@@ -1,12 +1,14 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 {
@@ -23,6 +25,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
     /// - This class does not claim steps.
     /// - This class does not finalize steps.
     /// - This class releases distributed concurrency capacity after execution.
+    /// - This class records execution-correlated ledger events without changing runtime behavior.
     ///
     /// DISTRIBUTED OWNERSHIP:
     /// - Step ownership is represented by the claim token.
@@ -102,21 +105,55 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     Enabled = false
                 };
 
+            var pipelineKey = $"{resolvedPipeline.Name}:{resolvedPipeline.Version}";
+            var runtimeInstanceId = _services.RuntimeInstanceIdentity.RuntimeInstanceId;
+
             var concurrencyContext = new AiConcurrencyContext
             {
                 ExecutionId = record.ExecutionId,
-                PipelineKey = $"{resolvedPipeline.Name}:{resolvedPipeline.Version}",
+                PipelineKey = pipelineKey,
                 StepId = claimedStep.StepName,
-                StepKey = resolvedStep.StepKey,
-                RuntimeInstanceId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
-                LeaseId = $"{record.ExecutionId}:{claimedStep.StepName}:{_services.RuntimeInstanceIdentity.RuntimeInstanceId}"
+                StepKey = string.IsNullOrWhiteSpace(resolvedStep.StepKey)
+                    ? claimedStep.StepName
+                    : resolvedStep.StepKey,
+                RuntimeInstanceId = runtimeInstanceId,
+                LeaseId = $"{record.ExecutionId}:{claimedStep.StepName}:{runtimeInstanceId}",
+                Provider = AiDagExecutionHelpers.TryReadString(stepState?.Config, "provider"),
+                Model = AiDagExecutionHelpers.TryReadString(stepState?.Config, "model"),
+                Operation =
+                    AiDagExecutionHelpers.TryReadString(stepState?.Config, "operation")
+                    ?? AiDagExecutionHelpers.TryReadString(stepState?.Config, "type")
             };
+
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _services,
+                    record.ExecutionId,
+                    pipelineKey,
+                    claimedStep.StepName,
+                    runtimeInstanceId,
+                    claimedStep.ClaimToken,
+                    concurrencyContext,
+                    AiDecisionLedgerCategory.Step,
+                    AiDecisionLedgerEvents.Step.Started,
+                    AiDecisionLedgerOutcome.Started,
+                    "Step execution started.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.name"] = resolvedPipeline.Name,
+                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["step.name"] = claimedStep.StepName,
+                        ["step.key"] = concurrencyContext.StepKey,
+                        ["worker.id"] = runtimeInstanceId,
+                        ["claim.token"] = claimedStep.ClaimToken
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             try
             {
                 try
                 {
-                    return await _services.ObservabilityService.Tracer.TraceStepAsync(
+                    var result = await _services.ObservabilityService.Tracer.TraceStepAsync(
                         new AiStepTraceContext
                         {
                             ExecutionId = record.ExecutionId,
@@ -125,7 +162,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             Status = "Running",
                             RetryCount = stepState?.RetryState?.RetryCount ?? 0,
                             RecoveryCount = stepState?.RecoveryCount ?? 0,
-                            WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId,
+                            WorkerId = runtimeInstanceId,
                             ClaimToken = claimedStep.ClaimToken
                         },
                         async () =>
@@ -140,6 +177,38 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                             return result;
                         }).ConfigureAwait(false);
+
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            record.ExecutionId,
+                            pipelineKey,
+                            claimedStep.StepName,
+                            runtimeInstanceId,
+                            claimedStep.ClaimToken,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Step,
+                            result.Success
+                                ? AiDecisionLedgerEvents.Step.Completed
+                                : AiDecisionLedgerEvents.Step.Failed,
+                            result.Success
+                                ? AiDecisionLedgerOutcome.Completed
+                                : AiDecisionLedgerOutcome.Failed,
+                            result.Success
+                                ? "Step execution completed."
+                                : result.Error ?? "Step execution failed.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.name"] = resolvedPipeline.Name,
+                                ["pipeline.version"] = resolvedPipeline.Version,
+                                ["step.name"] = claimedStep.StepName,
+                                ["step.key"] = concurrencyContext.StepKey,
+                                ["worker.id"] = runtimeInstanceId,
+                                ["claim.token"] = claimedStep.ClaimToken
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    return result;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -149,6 +218,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 {
                     _services.Logger.Engine.LogWarning(
                         $"[AI DAG] Step exception converted to failed result. ExecutionId='{record.ExecutionId}', StepName='{claimedStep.StepName}', ClaimToken='{claimedStep.ClaimToken}', Error='{ex.Message}'.");
+
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            record.ExecutionId,
+                            pipelineKey,
+                            claimedStep.StepName,
+                            runtimeInstanceId,
+                            claimedStep.ClaimToken,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Step,
+                            AiDecisionLedgerEvents.Step.Failed,
+                            AiDecisionLedgerOutcome.Failed,
+                            ex.Message,
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.name"] = resolvedPipeline.Name,
+                                ["pipeline.version"] = resolvedPipeline.Version,
+                                ["step.name"] = claimedStep.StepName,
+                                ["step.key"] = concurrencyContext.StepKey,
+                                ["worker.id"] = runtimeInstanceId,
+                                ["claim.token"] = claimedStep.ClaimToken,
+                                ["exception.type"] = ex.GetType().Name
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     return AiStepResult.Fail(
                         ex.Message);
@@ -160,6 +254,30 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     concurrencyContext,
                     concurrencyDefinition,
                     cancellationToken).ConfigureAwait(false);
+
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        record.ExecutionId,
+                        pipelineKey,
+                        claimedStep.StepName,
+                        runtimeInstanceId,
+                        claimedStep.ClaimToken,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Concurrency,
+                        AiDecisionLedgerEvents.Concurrency.LeaseReleased,
+                        AiDecisionLedgerOutcome.Released,
+                        "Concurrency lease released after step execution.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.name"] = resolvedPipeline.Name,
+                            ["pipeline.version"] = resolvedPipeline.Version,
+                            ["step.name"] = claimedStep.StepName,
+                            ["step.key"] = concurrencyContext.StepKey,
+                            ["worker.id"] = runtimeInstanceId,
+                            ["lease.id"] = concurrencyContext.LeaseId
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
     }

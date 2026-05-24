@@ -337,6 +337,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <summary>
         /// Records a decision ledger event for the current DAG claim flow.
         /// </summary>
+        /// <param name="services">The DAG execution engine services.</param>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The pipeline key.</param>
         /// <param name="stepName">The step name.</param>
@@ -350,8 +351,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="metadata">The optional non-sensitive metadata.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A task representing the asynchronous record operation.</returns>
-        public static async Task RecordClaimLedgerEventAsync(
-            IAiDagExecutionEngineServices _services,
+        public static async Task RecordDagLedgerEventAsync(
+            IAiDagExecutionEngineServices services,
             string executionId,
             string pipelineKey,
             string stepName,
@@ -365,7 +366,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             IReadOnlyDictionary<string, string>? metadata,
             CancellationToken cancellationToken)
         {
-            if (_services.ObservabilityService?.Ledger is null)
+            ArgumentNullException.ThrowIfNull(services);
+
+            if (services.ObservabilityService?.Ledger is null)
             {
                 return;
             }
@@ -378,7 +381,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 claimToken,
                 concurrencyContext);
 
-            await _services.ObservabilityService.Ledger
+            await services.ObservabilityService.Ledger
                 .RecordAsync(
                     correlationContext,
                     category,

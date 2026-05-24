@@ -213,7 +213,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 if (!gateDecision.Allowed)
                 {
 
-                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                         _services,
                         executionId,
                         pipelineKey,
@@ -255,7 +255,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 if (claimed is null)
                 {
 
-                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                         _services,
                         executionId,
                         pipelineKey,
@@ -283,7 +283,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                    await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                        _services,
                        executionId,
                        pipelineKey,
@@ -311,7 +311,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     continue;
                 }
 
-                await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                     _services,
                     executionId,
                     pipelineKey,
@@ -522,7 +522,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     claimed.ClaimToken);
 
 
-                await AiDagExecutionHelpers.RecordClaimLedgerEventAsync(
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                     _services,
                     executionId,
                     pipelineKey,
