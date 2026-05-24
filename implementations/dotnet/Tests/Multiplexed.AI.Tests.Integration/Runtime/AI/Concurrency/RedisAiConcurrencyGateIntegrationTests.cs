@@ -1,11 +1,15 @@
-﻿using Multiplexed.Abstractions.AI.Concurrency;
+﻿using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
+using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -2140,6 +2144,444 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         }
 
         /// <summary>
+        /// Verifies that the claim service records a decision ledger event when
+        /// concurrency admission is denied.
+        /// </summary>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Record_Ledger_Event_When_Concurrency_Gate_Denies()
+        {
+            // Arrange
+            var executionId = "exec-ledger-throttled";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "step-a";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var ledger = new InMemoryAiDecisionLedger();
+
+            var recorder = new DefaultAiDecisionLedgerRecorder(
+                ledger,
+                Options.Create(new AiDecisionLedgerRecorderOptions
+                {
+                    WriteMode = AiDecisionLedgerWriteMode.Strict,
+                    StorageMode = AiDecisionLedgerStorageMode.InMemory
+                }),
+                NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
+
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = stepConfig
+            }
+                ]
+            };
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = stepConfig
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Deny(
+                    "Concurrency limit reached for scope 'ai:concurrency:scope:global'. Current='1', Limit='1'.",
+                    TimeSpan.FromMilliseconds(100)));
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate,
+                ledgerRecorder: recorder);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipeline,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.Null(claimed);
+
+            var entries = await ledger.GetByExecutionAsync(executionId);
+
+            var entry = Assert.Single(entries);
+
+            Assert.Equal(AiDecisionLedgerCategory.Concurrency, entry.Category);
+            Assert.Equal(AiDecisionLedgerEvents.Concurrency.Denied, entry.EventType);
+            Assert.Equal(AiDecisionLedgerOutcome.Denied, entry.Outcome);
+            Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, entry.CorrelationContext.StepId);
+            Assert.Equal(stepName, entry.CorrelationContext.StepKey);
+            Assert.Equal(workerId, entry.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, entry.CorrelationContext.RuntimeInstanceId);
+            Assert.Contains("Concurrency limit reached", entry.Reason);
+        }
+
+        /// <summary>
+        /// Verifies that the claim service records a decision ledger event when
+        /// a DAG step claim is acquired.
+        /// </summary>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Record_Ledger_Event_When_Step_Claim_Is_Acquired()
+        {
+            // Arrange
+            var executionId = "exec-ledger-claim-acquired";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "llm-summary";
+            var claimToken = "claim-token";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var ledger = new InMemoryAiDecisionLedger();
+
+            var recorder = new DefaultAiDecisionLedgerRecorder(
+                ledger,
+                Options.Create(new AiDecisionLedgerRecorderOptions
+                {
+                    WriteMode = AiDecisionLedgerWriteMode.Strict,
+                    StorageMode = AiDecisionLedgerStorageMode.InMemory
+                }),
+                NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>
+                {
+                    ["provider"] = "openai",
+                    ["model"] = "gpt-4.1",
+                    ["operation"] = "llm.chat",
+                    ["concurrency"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["maxProviderConcurrency"] = 10
+                    }
+                }
+            }
+        }
+            };
+
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxProviderConcurrency"] = 10
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = stepConfig
+            }
+                ]
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Allow());
+
+            dagStore.TryClaimStepAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiClaimedStep
+                {
+                    ExecutionId = executionId,
+                    StepName = stepName,
+                    ClaimToken = claimToken
+                });
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate,
+                ledgerRecorder: recorder);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipeline,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.NotNull(claimed);
+
+            var entries = await ledger.GetByExecutionAsync(executionId);
+
+            var entry = Assert.Single(entries);
+
+            Assert.Equal(AiDecisionLedgerCategory.Claim, entry.Category);
+            Assert.Equal(AiDecisionLedgerEvents.Claim.Acquired, entry.EventType);
+            Assert.Equal(AiDecisionLedgerOutcome.Allowed, entry.Outcome);
+            Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, entry.CorrelationContext.StepId);
+            Assert.Equal(stepName, entry.CorrelationContext.StepKey);
+            Assert.Equal(workerId, entry.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, entry.CorrelationContext.RuntimeInstanceId);
+            Assert.Equal(claimToken, entry.CorrelationContext.ClaimToken);
+            Assert.Equal("openai", entry.CorrelationContext.Provider);
+            Assert.Equal("gpt-4.1", entry.CorrelationContext.Model);
+            Assert.Equal("llm.chat", entry.CorrelationContext.Operation);
+        }
+
+        /// <summary>
+        /// Verifies that the claim service records decision ledger events when
+        /// a concurrency lease is acquired but the DAG step claim is lost.
+        /// </summary>
+        [Fact]
+        public async Task ClaimNextAsync_Should_Record_Ledger_Events_When_Claim_Fails_After_Concurrency_Lease()
+        {
+            // Arrange
+            var executionId = "exec-ledger-claim-race";
+            var pipelineKey = "test-pipeline:v1";
+            var workerId = "worker-1";
+            var stepName = "step-a";
+
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
+
+            var ledger = new InMemoryAiDecisionLedger();
+
+            var recorder = new DefaultAiDecisionLedgerRecorder(
+                ledger,
+                Options.Create(new AiDecisionLedgerRecorderOptions
+                {
+                    WriteMode = AiDecisionLedgerWriteMode.Strict,
+                    StorageMode = AiDecisionLedgerStorageMode.InMemory
+                }),
+                NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
+
+            var stepConfig = new Dictionary<string, object?>
+            {
+                ["concurrency"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["maxGlobalConcurrency"] = 1
+                }
+            };
+
+            var pipeline = new ResolvedAiPipeline
+            {
+                Name = "test-pipeline",
+                Version = "v1",
+                ExecutionMode = AiExecutionMode.Dag,
+                Steps =
+                [
+                    new ResolvedAiPipelineStep
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = stepConfig
+            }
+                ]
+            };
+
+            var state = new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps =
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = stepConfig
+            }
+        }
+            };
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(0);
+
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(state);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new[]
+                {
+            new AiClaimedStep
+            {
+                ExecutionId = executionId,
+                StepName = stepName,
+                ClaimToken = "ready-token"
+            }
+                });
+
+            concurrencyGate.TryAcquireAsync(
+                    Arg.Any<AiConcurrencyContext>(),
+                    Arg.Any<AiConcurrencyDefinition>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(AiConcurrencyDecision.Allow());
+
+            dagStore.TryClaimStepAsync(
+                    executionId,
+                    stepName,
+                    workerId,
+                    Arg.Any<CancellationToken>())
+                .Returns((AiClaimedStep?)null);
+
+            var services = CreateEngineServices(
+                dagStore: dagStore,
+                concurrencyGate: concurrencyGate,
+                ledgerRecorder: recorder);
+
+            var service = new AiDagStepClaimService(services);
+
+            // Act
+            var claimed = await service.ClaimNextAsync(
+                executionId,
+                pipeline,
+                pipelineKey,
+                workerId);
+
+            // Assert
+            Assert.Null(claimed);
+
+            var entries = await ledger.GetByExecutionAsync(executionId);
+
+            Assert.Equal(2, entries.Count);
+
+            var claimDenied = Assert.Single(entries, entry =>
+                entry.Category == AiDecisionLedgerCategory.Claim &&
+                entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
+                entry.Outcome == AiDecisionLedgerOutcome.Denied);
+
+            Assert.Equal(executionId, claimDenied.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, claimDenied.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, claimDenied.CorrelationContext.StepId);
+            Assert.Equal(workerId, claimDenied.CorrelationContext.WorkerId);
+            Assert.Equal($"{executionId}:{stepName}:{workerId}", claimDenied.CorrelationContext.ClaimToken);
+            Assert.Contains("failed after concurrency lease", claimDenied.Reason);
+
+            var leaseReleased = Assert.Single(entries, entry =>
+                entry.Category == AiDecisionLedgerCategory.Concurrency &&
+                entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseReleased &&
+                entry.Outcome == AiDecisionLedgerOutcome.Released);
+
+            Assert.Equal(executionId, leaseReleased.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, leaseReleased.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, leaseReleased.CorrelationContext.StepId);
+            Assert.Equal(workerId, leaseReleased.CorrelationContext.WorkerId);
+            Assert.Equal($"{executionId}:{stepName}:{workerId}", leaseReleased.CorrelationContext.ClaimToken);
+            Assert.Contains("lease released after failed step claim", leaseReleased.Reason);
+        }
+
+        /// <summary>
         /// Creates the minimal engine service bundle required by the step claim service tests.
         /// </summary>
         /// <param name="dagStore">
@@ -2155,9 +2597,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
         /// A substituted <see cref="IAiDagExecutionEngineServices"/> instance.
         /// </returns>
         private static IAiDagExecutionEngineServices CreateEngineServices(
-    IAiDagExecutionStore dagStore,
-    IAiConcurrencyGate concurrencyGate,
-    IAiPolicyEngineFactory? policyEngineFactory = null)
+            IAiDagExecutionStore dagStore,
+            IAiConcurrencyGate concurrencyGate,
+            IAiPolicyEngineFactory? policyEngineFactory = null,
+            IAiDecisionLedgerRecorder? ledgerRecorder = null)
         {
             var services = Substitute.For<IAiDagExecutionEngineServices>();
 
@@ -2178,6 +2621,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             services.ObservabilityService.Returns(observability);
             observability.Tracer.Returns(tracer);
+            observability.Ledger.Returns(ledgerRecorder ?? new NoOpAiDecisionLedgerRecorder());
 
             return services;
         }

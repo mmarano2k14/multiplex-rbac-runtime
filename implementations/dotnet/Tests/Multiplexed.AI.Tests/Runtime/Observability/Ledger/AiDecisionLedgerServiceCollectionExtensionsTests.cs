@@ -1,9 +1,10 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
-using Xunit;
+using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Observability.Ledger.DI;
+using Multiplexed.AI.Runtime.Observability.Ledger.Mongo;
+using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
 {
@@ -73,21 +74,26 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
         }
 
         /// <summary>
-        /// Verifies that Mongo storage mode is explicit and not silently registered before implementation.
+        /// Verifies that Mongo storage mode registers the MongoDB-backed decision ledger.
         /// </summary>
         [Fact]
-        public void AddAiDecisionLedger_WithMongoStorageMode_ShouldThrowUntilImplemented()
+        public void AddAiDecisionLedger_WithMongoStorageMode_ShouldRegisterMongoLedger()
         {
             var services = new ServiceCollection();
 
-            var act = () => services.AddAiDecisionLedger(options =>
+            services.AddLogging();
+
+            services.AddAiDecisionLedger(options =>
             {
                 options.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
                 options.StorageMode = AiDecisionLedgerStorageMode.Mongo;
             });
 
-            act.Should().Throw<NotSupportedException>()
-                .WithMessage("MongoDB decision ledger storage has not been implemented yet.");
+            var descriptor = services.SingleOrDefault(descriptor =>
+                descriptor.ServiceType == typeof(IAiDecisionLedger));
+
+            descriptor.Should().NotBeNull();
+            descriptor!.ImplementationType.Should().Be(typeof(MongoAiDecisionLedger));
         }
     }
 }
