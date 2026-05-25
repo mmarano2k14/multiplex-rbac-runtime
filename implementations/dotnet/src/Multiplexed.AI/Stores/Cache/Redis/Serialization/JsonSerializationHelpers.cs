@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Multiplexed.AI.Runtime.Execution.Retention.Models;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
@@ -197,6 +198,75 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Serialization
             }
 
             return Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        /// <summary>
+        /// Deserializes the retention patch result returned by Redis Lua.
+        /// </summary>
+        /// <param name="json">
+        /// The JSON payload returned by the Lua script.
+        /// </param>
+        /// <returns>
+        /// The normalized retention patch result.
+        /// </returns>
+        /// <remarks>
+        /// Redis Lua cjson may encode empty Lua tables as JSON objects instead of arrays.
+        /// This helper treats non-array values as empty collections so that empty patch result
+        /// collections never fail deserialization.
+        /// </remarks>
+        public static AiRetentionPatchResult DeserializeRetentionPatchResult(
+            string json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new AiRetentionPatchResult();
+            }
+
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            return new AiRetentionPatchResult
+            {
+                CompactedSteps = ReadStringArray(root, nameof(AiRetentionPatchResult.CompactedSteps)),
+                EvictedSteps = ReadStringArray(root, nameof(AiRetentionPatchResult.EvictedSteps)),
+                SkippedSteps = ReadStringArray(root, nameof(AiRetentionPatchResult.SkippedSteps))
+            };
+        }
+
+        /// <summary>
+        /// Reads a string array from a JSON property.
+        /// </summary>
+        /// <param name="root">
+        /// The root JSON element.
+        /// </param>
+        /// <param name="propertyName">
+        /// The property name to read.
+        /// </param>
+        /// <returns>
+        /// The string values contained in the array, or an empty array when the property is missing
+        /// or is not represented as a JSON array.
+        /// </returns>
+        public static IReadOnlyCollection<string> ReadStringArray(
+            JsonElement root,
+            string propertyName)
+        {
+            if (!root.TryGetProperty(propertyName, out var property))
+            {
+                return Array.Empty<string>();
+            }
+
+            if (property.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<string>();
+            }
+
+            return property
+                .EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.String)
+                .Select(x => x.GetString())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!)
+                .ToArray();
         }
     }
 }

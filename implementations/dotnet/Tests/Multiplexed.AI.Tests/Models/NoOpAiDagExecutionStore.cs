@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
 using Multiplexed.AI.Stores;
 
 namespace Multiplexed.AI.Tests.Fakes
@@ -134,6 +135,18 @@ namespace Multiplexed.AI.Tests.Fakes
         public Task<AiClaimedStep?> TryClaimStepAsync(string executionId, string stepName, string workerId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<AiClaimedStep?>(null);
+        }
+
+        public Task<AiRetentionPatchResult> TryApplyRetentionPatchAsync(string executionId, IReadOnlyCollection<AiRetentionPatchCandidate> candidates, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+            new AiRetentionPatchResult
+            {
+                SkippedSteps = candidates
+                    .Select(x => x.StepName)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToArray()
+            });
         }
     }
 }

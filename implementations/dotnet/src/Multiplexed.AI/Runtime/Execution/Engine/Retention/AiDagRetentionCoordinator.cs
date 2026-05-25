@@ -418,7 +418,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
 
                     var result = await _engineServices.PolicyEngineFactory
                         .Create<IAiRetentionEngine>(AiPolicyKind.Retention, stepContext)
-                        .ApplyAsync(
+                        .ApplyAtomicAsync(
                             new AiRetentionContext
                             {
                                 ExecutionId = executionId,
@@ -617,19 +617,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                             executionId);
                     }
 
-                    if (_engineServices.DagStore is not null)
-                    {
-                        await _engineServices.DagStore.SaveStateAsync(
-                            executionId,
-                            state,
-                            cancellationToken).ConfigureAwait(false);
-
-                        trace.SetTag("statePersisted", true);
-                    }
-                    else
-                    {
-                        trace.SetTag("statePersisted", false);
-                    }
+                    trace.SetTag("statePersisted", false);
+                    trace.SetTag("statePersistenceMode", "atomic-retention-patch");
 
                     var warmStepIds = new HashSet<string>(
                         StringComparer.OrdinalIgnoreCase);

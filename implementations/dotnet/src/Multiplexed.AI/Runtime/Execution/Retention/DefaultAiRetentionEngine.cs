@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
+using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
 
 namespace Multiplexed.AI.Runtime.Execution.Retention.Services
@@ -25,6 +26,7 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
     {
         private readonly IAiRetentionCompactionService _compactionService;
         private readonly IAiRetentionEvictionService _evictionService;
+        private readonly IAiAtomicRetentionEvictionService _atomicEvictionService;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiRetentionEngine"/> class.
@@ -42,6 +44,11 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                 stepContext.Services.GetRequiredService<IAiStepResultPayloadCompactor>());
 
             _evictionService = new DefaultAiRetentionEvictionService(
+                stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
+                stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
+
+            _atomicEvictionService = new DefaultAiAtomicRetentionEvictionService(
+                stepContext.Services.GetRequiredService<IAiDagExecutionEngineServices>(),
                 stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
                 stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
         }
@@ -163,6 +170,57 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                 Decision = decision,
                 CompactedSteps = compactedSteps,
                 EvictedSteps = evictedSteps
+            };
+        }
+
+        /// <inheritdoc />
+        public async Task<AiRetentionApplyResult> ApplyAtomicAsync(
+            AiRetentionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(context.ExecutionState);
+
+            var definition = await ResolveRetentionDefinitionAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (definition is null)
+            {
+                return AiRetentionApplyResult.Empty(
+                    AiRetentionDecision.None("Retention configuration was not found."));
+            }
+
+            var decision = await DecideAsync(
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (decision.Kind == AiRetentionDecisionKind.None)
+            {
+                return AiRetentionApplyResult.Empty(decision);
+            }
+
+            var stepsToEvict = new HashSet<string>(
+                decision.StepsToEvict ?? Array.Empty<string>(),
+                StringComparer.Ordinal);
+
+            if (stepsToEvict.Count == 0)
+            {
+                return AiRetentionApplyResult.Empty(decision);
+            }
+
+            var patchResult = await _atomicEvictionService.EvictAsync(
+                    context.ExecutionState,
+                    stepsToEvict,
+                    definition.ArchiveReason,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return new AiRetentionApplyResult
+            {
+                Decision = decision,
+                CompactedSteps = Array.Empty<string>(),
+                EvictedSteps = patchResult.EvictedSteps
             };
         }
 

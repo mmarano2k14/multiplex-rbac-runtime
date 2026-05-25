@@ -2,8 +2,10 @@
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
 using Multiplexed.AI.Stores.Cache.Redis.Helpers;
 using Multiplexed.AI.Stores.Cache.Redis.Lua;
+using Multiplexed.AI.Stores.Cache.Redis.Serialization;
 using StackExchange.Redis;
 using System.Text.Json;
 
@@ -22,6 +24,7 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
         private LoadedLuaScript _completeLoadedScript;
         private LoadedLuaScript _failLoadedScript;
         private LoadedLuaScript _finalizeLoadedScript;
+        private LoadedLuaScript _retentionPatchLoadedScript;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RedisDagStoreTransitionService"/> class.
@@ -36,6 +39,7 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
             _completeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.CompletePreparedScript);
             _failLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FailPreparedScript);
             _finalizeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.FinalizeScript);
+            _retentionPatchLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.RetentionPatchPreparedScript);
         }
 
         /// <summary>
@@ -273,6 +277,85 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
         }
 
         /// <summary>
+        /// Applies atomic retention patches to hot DAG step state.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="candidates">
+        /// The retention patch candidates to apply.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The result of the retention patch operation.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method is safe for active distributed execution because it does not save the
+        /// full execution state. Each candidate is verified and patched atomically by Redis Lua.
+        /// </para>
+        ///
+        /// <para>
+        /// Steps that changed after the retention decision was made are skipped rather than
+        /// overwritten.
+        /// </para>
+        /// </remarks>
+        public async Task<AiRetentionPatchResult> TryApplyRetentionPatchAsync(
+            string executionId,
+            IReadOnlyCollection<AiRetentionPatchCandidate> candidates,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(executionId))
+            {
+                throw new ArgumentException(
+                    "Execution id cannot be null or empty.",
+                    nameof(executionId));
+            }
+
+            ArgumentNullException.ThrowIfNull(candidates);
+
+            if (candidates.Count == 0)
+            {
+                return new AiRetentionPatchResult();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var stepKeyPrefix = _services.KeyBuilder.GetDagStepKeyPrefix(executionId);
+            var stepIdsKey = _services.KeyBuilder.GetDagStepIdsKey(executionId);
+            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var candidatesJson = JsonSerializer.Serialize(
+                candidates,
+                _services.JsonOptions);
+
+            try
+            {
+                return await ExecuteRetentionPatchAsync(
+                        stepKeyPrefix,
+                        stepIdsKey,
+                        nowUnix,
+                        candidatesJson)
+                    .ConfigureAwait(false);
+            }
+            catch (RedisServerException exception)
+                when (exception.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+            {
+                _retentionPatchLoadedScript = _services.Helper.LoadScript(
+                    RedisDagLuaScripts.RetentionPatchPreparedScript);
+
+                return await ExecuteRetentionPatchAsync(
+                        stepKeyPrefix,
+                        stepIdsKey,
+                        nowUnix,
+                        candidatesJson)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
         /// Executes the prepared step completion Lua script.
         /// </summary>
         /// <param name="stepKey">The Redis key of the step to complete.</param>
@@ -325,5 +408,50 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
 
             return (int)result! == 1;
         }
+
+
+        /// <summary>
+        /// Executes the prepared retention patch Lua script.
+        /// </summary>
+        /// <param name="stepKeyPrefix">
+        /// The Redis key prefix for DAG step keys.
+        /// </param>
+        /// <param name="stepIdsKey">
+        /// The Redis key containing indexed DAG step ids.
+        /// </param>
+        /// <param name="nowUnix">
+        /// The current UTC timestamp expressed in Unix milliseconds.
+        /// </param>
+        /// <param name="candidatesJson">
+        /// The serialized retention patch candidates.
+        /// </param>
+        /// <returns>
+        /// The retention patch result returned by Redis.
+        /// </returns>
+        private async Task<AiRetentionPatchResult> ExecuteRetentionPatchAsync(
+            string stepKeyPrefix,
+            string stepIdsKey,
+            long nowUnix,
+            string candidatesJson)
+        {
+            var result = await _retentionPatchLoadedScript.EvaluateAsync(
+                    _services.Database,
+                    new
+                    {
+                        stepKeyPrefix = (RedisKey)stepKeyPrefix,
+                        stepIdsKey = (RedisKey)stepIdsKey,
+                        nowUnix = (RedisValue)nowUnix,
+                        candidatesJson = (RedisValue)candidatesJson
+                    })
+                .ConfigureAwait(false);
+
+            if (result.IsNull)
+            {
+                return new AiRetentionPatchResult();
+            }
+
+            return JsonSerializationHelpers.DeserializeRetentionPatchResult(result.ToString());
+        }
+
     }
 }

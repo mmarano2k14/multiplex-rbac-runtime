@@ -7,6 +7,7 @@ using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Finalization;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
+using Multiplexed.AI.Runtime.Execution.Engine.Retention;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
@@ -51,6 +52,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         private readonly AiDagClaimedStepExecutor _claimedStepExecutor;
         private readonly AiDagExecutionFinalizationService _finalizationService;
         private readonly AiDagExecutionLifecycleHelper _lifecycleHelper;
+        private readonly AiDagRetentionCoordinator _retentionCoordinator;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiDagBatchExecutionRunner"/> class.
@@ -70,6 +72,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
         /// <param name="lifecycleHelper">
         /// The helper responsible for terminal snapshot persistence and cleanup operations.
         /// </param>
+        /// <param name="retentionCoordinator">
+        /// The coordinator responsible for applying policy-driven retention after batch transitions.
+        /// </param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when one of the required dependencies is <see langword="null"/>.
         /// </exception>
@@ -78,7 +83,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
             AiDagStepClaimService claimService,
             AiDagClaimedStepExecutor claimedStepExecutor,
             AiDagExecutionFinalizationService finalizationService,
-            AiDagExecutionLifecycleHelper lifecycleHelper)
+            AiDagExecutionLifecycleHelper lifecycleHelper,
+            AiDagRetentionCoordinator retentionCoordinator)
         {
             _engineServices = engineServices
                 ?? throw new ArgumentNullException(nameof(engineServices));
@@ -94,6 +100,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
 
             _lifecycleHelper = lifecycleHelper
                 ?? throw new ArgumentNullException(nameof(lifecycleHelper));
+
+            _retentionCoordinator = retentionCoordinator
+                ?? throw new ArgumentNullException(nameof(retentionCoordinator));
         }
 
         /// <summary>
@@ -411,9 +420,34 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                 }
             }
 
-            var finalState = await _engineServices.DagStore.GetStateAsync(
+            var retentionState = await _engineServices.DagStore.GetStateAsync(
                 executionId,
                 cancellationToken) ?? state;
+
+            var retentionStep = resolvedPipeline.Steps.FirstOrDefault()
+                ?? throw new InvalidOperationException(
+                    $"Pipeline '{resolvedPipeline.Name}' does not contain any resolved step for retention context creation.");
+
+            var retentionExecutionContext = buildExecutionContext(
+                record,
+                retentionState,
+                cancellationToken);
+
+            var retentionStepContext = new AiStepExecutionContext(
+                retentionExecutionContext,
+                retentionStep);
+
+            await _retentionCoordinator.ApplyBatchRetentionPersistAndWarmAsync(
+                    executionId,
+                    retentionState,
+                    retentionStepContext,
+                    claimedSteps.Select(x => x.StepName).ToArray(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var finalState = await _engineServices.DagStore.GetStateAsync(
+                executionId,
+                cancellationToken) ?? retentionState;
 
             record.Steps = resolvedPipeline.Steps
                 .Select(x => x.Name)

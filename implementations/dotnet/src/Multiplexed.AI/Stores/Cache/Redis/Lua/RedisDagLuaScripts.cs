@@ -746,5 +746,166 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
             return 1
             """);
 
+        /// <summary>
+        /// Applies atomic retention patches to selected DAG step keys.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This script is used for active distributed retention. It never overwrites the full
+        /// execution state. Each candidate is checked against the current stored step before
+        /// being compacted or evicted.
+        /// </para>
+        ///
+        /// <para>
+        /// A candidate is skipped when the step is missing, non-terminal, running, claimed,
+        /// or no longer matches the expected status or claim token.
+        /// </para>
+        ///
+        /// <para>
+        /// Eviction deletes the individual step key and removes the step id from the DAG step id set.
+        /// Compaction preserves the step shell and only records archive metadata / removes inline payload.
+        /// </para>
+        /// </remarks>
+        public static readonly LuaScript RetentionPatchPreparedScript = LuaScript.Prepare(
+            """
+            local candidates = cjson.decode(@candidatesJson)
+            local stepKeyPrefix = @stepKeyPrefix
+            local stepIdsKey = @stepIdsKey
+            local nowUnix = tonumber(@nowUnix)
+
+            local compacted = {}
+            local evicted = {}
+            local skipped = {}
+
+            local function is_null_or_empty(value)
+                return value == nil or value == cjson.null or value == ''
+            end
+
+            local function add_skipped(stepName)
+                if not is_null_or_empty(stepName) then
+                    table.insert(skipped, stepName)
+                end
+            end
+
+            local function normalize_action(action)
+                if action == 0 or action == '0' or action == 'Compact' then
+                    return 'Compact'
+                end
+
+                if action == 1 or action == '1' or action == 'Evict' then
+                    return 'Evict'
+                end
+
+                return ''
+            end
+
+            local function is_terminal(status)
+                return status == 'Completed' or status == 'Failed'
+            end
+
+            for _, candidate in ipairs(candidates) do
+                local stepName = candidate.StepName
+                local action = normalize_action(candidate.Action)
+
+                if is_null_or_empty(stepName) or is_null_or_empty(action) then
+                    add_skipped(stepName)
+                else
+                    local stepKey = stepKeyPrefix .. stepName
+                    local raw = redis.call('GET', stepKey)
+
+                    if not raw then
+                        add_skipped(stepName)
+                    else
+                        local step = cjson.decode(raw)
+
+                        if not step then
+                            add_skipped(stepName)
+                        else
+                            local safe = true
+
+                            local expectedExecutionId = candidate.ExpectedExecutionId
+                            local expectedStatus = candidate.ExpectedStatus
+                            local expectedClaimToken = candidate.ExpectedClaimToken
+
+                            local currentExecutionId = step.ExecutionId
+                            local currentStatus = step.Status
+                            local currentClaimToken = step.ClaimToken
+
+                            if not is_null_or_empty(expectedExecutionId) then
+                                if not is_null_or_empty(currentExecutionId) and currentExecutionId ~= expectedExecutionId then
+                                    safe = false
+                                end
+                            end
+
+                            if not is_null_or_empty(expectedStatus) then
+                                if currentStatus ~= expectedStatus then
+                                    safe = false
+                                end
+                            end
+
+                            if is_null_or_empty(expectedClaimToken) then
+                                if not is_null_or_empty(currentClaimToken) then
+                                    safe = false
+                                end
+                            else
+                                if currentClaimToken ~= expectedClaimToken then
+                                    safe = false
+                                end
+                            end
+
+                            if not is_terminal(currentStatus) then
+                                safe = false
+                            end
+
+                            if currentStatus == 'Running' then
+                                safe = false
+                            end
+
+                            if not is_null_or_empty(step.ClaimToken) then
+                                safe = false
+                            end
+
+                            if not safe then
+                                add_skipped(stepName)
+                            else
+                                if action == 'Evict' then
+                                    redis.call('DEL', stepKey)
+                                    redis.call('SREM', stepIdsKey, stepName)
+                                    table.insert(evicted, stepName)
+                                elseif action == 'Compact' then
+                                    step.ArchivePayloadId = candidate.ArchivePayloadId
+                                    step.RetentionReason = candidate.Reason
+                                    step.IsCompacted = true
+                                    step.CompactedAtUnixMs = nowUnix
+                                    step.UpdatedAtUnixMs = nowUnix
+
+                                    if step.Version ~= nil and step.Version ~= cjson.null then
+                                        step.Version = tonumber(step.Version) + 1
+                                    else
+                                        step.Version = 1
+                                    end
+
+                                    if step.Result ~= nil and step.Result ~= cjson.null then
+                                        step.Result = cjson.null
+                                    end
+
+                                    redis.call('SET', stepKey, cjson.encode(step))
+                                    table.insert(compacted, stepName)
+                                else
+                                    add_skipped(stepName)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            return cjson.encode({
+                CompactedSteps = compacted,
+                EvictedSteps = evicted,
+                SkippedSteps = skipped
+            })
+            """);
+
     }
 }

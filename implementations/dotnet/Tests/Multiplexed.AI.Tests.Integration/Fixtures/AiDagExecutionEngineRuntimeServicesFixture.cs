@@ -65,9 +65,8 @@ namespace Multiplexed.AI.Tests.Integration.Fixtures
                 engineServices,
                 claimService,
                 claimedStepExecutor,
-                //retentionCoordinator,
                 finalizationService,
-                lifecycleHelper);
+                lifecycleHelper, retentionCoordinator);
 
             return new AiDagExecutionEngineRuntimeServices(
                 creator,

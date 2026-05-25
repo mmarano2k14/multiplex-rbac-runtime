@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Stores.Cache.Redis
@@ -323,6 +324,33 @@ namespace Multiplexed.AI.Stores.Cache.Redis
             CancellationToken cancellationToken = default)
         {
             return await _services.ClaimService.TryClaimStepAsync(executionId, stepName, workerId, cancellationToken);
+        }
+
+        /// <summary>
+        /// Applies atomic retention patches to hot DAG step state.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="candidates">
+        /// The retention patch candidates to apply.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The result of the retention patch operation.
+        /// </returns>
+        public async Task<AiRetentionPatchResult> TryApplyRetentionPatchAsync(
+            string executionId,
+            IReadOnlyCollection<AiRetentionPatchCandidate> candidates,
+            CancellationToken cancellationToken = default)
+        {
+            return await _services.TransitionService.TryApplyRetentionPatchAsync(
+                    executionId,
+                    candidates,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 }

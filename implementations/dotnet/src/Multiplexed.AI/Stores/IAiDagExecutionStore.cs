@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
+using Multiplexed.AI.Runtime.Execution.Retention.Models;
 
 namespace Multiplexed.AI.Stores
 {
@@ -231,6 +232,54 @@ namespace Multiplexed.AI.Stores
             string executionId,
             string stepName,
             string workerId,
+            CancellationToken cancellationToken = default);
+
+
+        /// <summary>
+        /// Applies a distributed-safe atomic retention patch to the hot execution state.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="candidates">
+        /// The retention patch candidates to evaluate against the current stored execution state.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The result of the atomic retention patch operation.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// Implementations must not overwrite the full execution state.
+        /// Instead, they must atomically inspect and patch only the selected step entries.
+        /// </para>
+        ///
+        /// <para>
+        /// A candidate may be applied only when the current stored step still matches the expected
+        /// status, claim token, and worker id provided by the candidate.
+        /// </para>
+        ///
+        /// <para>
+        /// For <see cref="AiRetentionPatchAction.Compact"/>, the implementation should preserve
+        /// the step shell in hot state while removing or replacing heavy inline payload data with
+        /// an archived payload reference.
+        /// </para>
+        ///
+        /// <para>
+        /// For <see cref="AiRetentionPatchAction.Evict"/>, the implementation should remove the
+        /// step from hot state only when it is still terminal and unclaimed.
+        /// </para>
+        ///
+        /// <para>
+        /// If a candidate is no longer safe to modify, the implementation must skip it rather than
+        /// throwing or replacing state owned by another worker.
+        /// </para>
+        /// </remarks>
+        Task<AiRetentionPatchResult> TryApplyRetentionPatchAsync(
+            string executionId,
+            IReadOnlyCollection<AiRetentionPatchCandidate> candidates,
             CancellationToken cancellationToken = default);
     }
 }
