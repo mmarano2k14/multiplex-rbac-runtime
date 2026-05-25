@@ -146,6 +146,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             var recoveredCount = await RecoverTimedOutStepsAsync(
                     executionId,
+                    pipelineKey,
                     workerId,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -416,6 +417,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             await RecoverTimedOutStepsAsync(
                     executionId,
+                    pipelineKey,
                     workerId,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -931,6 +933,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="executionId">
         /// The execution identifier.
         /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key used for ledger correlation.
+        /// </param>
         /// <param name="workerId">
         /// The worker identifier.
         /// </param>
@@ -942,9 +947,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </returns>
         private async Task<int> RecoverTimedOutStepsAsync(
             string executionId,
+            string pipelineKey,
             string workerId,
             CancellationToken cancellationToken)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
                     new AiStorageTraceContext
                     {
@@ -954,6 +964,18 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     },
                     async trace =>
                     {
+                        var beforeState = await _services.DagStore!.GetStateAsync(
+                                executionId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        var beforeRecoveryCounts = beforeState?.Steps
+                            .ToDictionary(
+                                pair => pair.Key,
+                                pair => pair.Value.RecoveryCount,
+                                StringComparer.Ordinal)
+                            ?? new Dictionary<string, int>(StringComparer.Ordinal);
+
                         var result = await _services.DagStore!.RecoverTimedOutStepsAsync(
                                 executionId,
                                 cancellationToken)
@@ -962,6 +984,115 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         trace.SetTag("recoveredCount", result);
                         trace.SetTag("workerId", workerId);
                         trace.SetTag("recovered", result > 0);
+
+                        if (result <= 0)
+                        {
+                            return result;
+                        }
+
+                        var afterState = await _services.DagStore.GetStateAsync(
+                                executionId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        var recoveredStepNames = AiDagExecutionHelpers.ResolveRecoveredStepNames(
+                            beforeRecoveryCounts,
+                            afterState);
+
+                        var recoveredStepNamesText = string.Join(",", recoveredStepNames);
+
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _services,
+                                executionId,
+                                pipelineKey,
+                                "_recovery",
+                                workerId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Recovery,
+                                AiDecisionLedgerEvents.Recovery.Detected,
+                                AiDecisionLedgerOutcome.Started,
+                                "Timed-out running DAG steps detected during recovery scan.",
+                                new Dictionary<string, string>
+                                {
+                                    ["pipeline.key"] = pipelineKey,
+                                    ["worker.id"] = workerId,
+                                    ["recovered.count"] = result.ToString(),
+                                    ["recovered.steps"] = recoveredStepNamesText
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _services,
+                                executionId,
+                                pipelineKey,
+                                "_recovery",
+                                workerId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Recovery,
+                                AiDecisionLedgerEvents.Recovery.Applied,
+                                AiDecisionLedgerOutcome.Applied,
+                                "Timed-out running DAG steps were recovered.",
+                                new Dictionary<string, string>
+                                {
+                                    ["pipeline.key"] = pipelineKey,
+                                    ["worker.id"] = workerId,
+                                    ["recovered.count"] = result.ToString(),
+                                    ["recovered.steps"] = recoveredStepNamesText
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        foreach (var recoveredStepName in recoveredStepNames)
+                        {
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _services,
+                                    executionId,
+                                    pipelineKey,
+                                    recoveredStepName,
+                                    workerId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Recovery,
+                                    AiDecisionLedgerEvents.Recovery.StepRecovered,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Timed-out DAG step was moved back to a recoverable state.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["pipeline.key"] = pipelineKey,
+                                        ["worker.id"] = workerId,
+                                        ["step.name"] = recoveredStepName,
+                                        ["recovered.count"] = result.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        if (recoveredStepNames.Count == 0)
+                        {
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _services,
+                                    executionId,
+                                    pipelineKey,
+                                    "_recovery",
+                                    workerId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Recovery,
+                                    AiDecisionLedgerEvents.Recovery.StepRecovered,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Timed-out DAG steps were recovered, but recovered step names could not be inferred from state.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["pipeline.key"] = pipelineKey,
+                                        ["worker.id"] = workerId,
+                                        ["recovered.count"] = result.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
 
                         return result;
                     })

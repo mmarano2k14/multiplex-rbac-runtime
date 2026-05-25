@@ -1,6 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
@@ -323,6 +324,25 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                             executionId,
                             cancellationToken).ConfigureAwait(false) ?? state;
 
+                        var failedStepState = failedState.Steps.TryGetValue(
+                            claimed.StepName,
+                            out var reloadedFailedStep)
+                            ? reloadedFailedStep
+                            : null;
+
+                        await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
+                                 _engineServices,
+                                 executionId,
+                                 pipelineKey,
+                                 claimed.StepName,
+                                 workerId,
+                                 claimed.ClaimToken,
+                                 failedStepState,
+                                 ex.Message,
+                                 "exception",
+                                 cancellationToken)
+                             .ConfigureAwait(false);
+
                         var claimedStep = resolvedPipeline.Steps.First(
                             x => x.Name == claimed.StepName);
 
@@ -438,6 +458,19 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                             out var reloadedFailedStep)
                             ? reloadedFailedStep
                             : null;
+
+                        await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                claimed.StepName,
+                                workerId,
+                                claimed.ClaimToken,
+                                failedStepState,
+                                stepResult.Error,
+                                "result",
+                                cancellationToken)
+                            .ConfigureAwait(false);
 
                         if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
                         {

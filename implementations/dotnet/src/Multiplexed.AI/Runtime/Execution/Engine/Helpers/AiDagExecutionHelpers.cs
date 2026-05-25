@@ -12,7 +12,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
     /// <summary>
     /// Provides small shared helper methods for DAG execution.
     /// </summary>
-    internal static class AiDagExecutionHelpers
+    public static class AiDagExecutionHelpers
     {
         /// <summary>
         /// Gets the required optimistic execution step key.
@@ -335,12 +335,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         }
 
         /// <summary>
-        /// Records a decision ledger event for the current DAG claim flow.
+        /// Records a decision ledger event for the current DAG runtime flow.
         /// </summary>
         /// <param name="services">The DAG execution engine services.</param>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The pipeline key.</param>
-        /// <param name="stepName">The step name.</param>
+        /// <param name="stepName">The DAG step name, or a stable synthetic scope such as "_execution" for execution-level events..</param>
         /// <param name="workerId">The worker identifier.</param>
         /// <param name="claimToken">The optional claim token.</param>
         /// <param name="concurrencyContext">The optional concurrency context.</param>
@@ -391,6 +391,196 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     metadata,
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records retry ledger events after a failed step transition has been persisted.
+        /// </summary>
+        /// <param name="services">The DAG execution engine services.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="pipelineKey">The stable pipeline key.</param>
+        /// <param name="stepName">The failed step name.</param>
+        /// <param name="workerId">The worker identifier.</param>
+        /// <param name="claimToken">The claim token associated with the failed step.</param>
+        /// <param name="stepState">The reloaded step state after failure persistence.</param>
+        /// <param name="error">The failure error.</param>
+        /// <param name="failureSource">The failure source.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task representing the asynchronous ledger operation.</returns>
+        public static async Task RecordRetryLedgerEventsAsync(
+            IAiDagExecutionEngineServices services,
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            string? claimToken,
+            AiStepState? stepState,
+            string? error,
+            string failureSource,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(failureSource);
+
+            await RecordDagLedgerEventAsync(
+                    services,
+                    executionId,
+                    pipelineKey,
+                    stepName,
+                    workerId,
+                    claimToken,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Retry,
+                    AiDecisionLedgerEvents.Retry.Evaluated,
+                    AiDecisionLedgerOutcome.Started,
+                    "Retry decision evaluated after step failure.",
+                    new Dictionary<string, string>
+                    {
+                        ["step.name"] = stepName,
+                        ["failure.source"] = failureSource,
+                        ["error"] = error ?? string.Empty,
+                        ["step.status"] = stepState?.Status.ToString() ?? "unknown",
+                        ["retry.count"] = (stepState?.RetryState?.RetryCount ?? 0).ToString(),
+                        ["retry.max"] = (stepState?.Retry?.MaxRetries ?? 0).ToString()
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (stepState is null)
+            {
+                await RecordDagLedgerEventAsync(
+                        services,
+                        executionId,
+                        pipelineKey,
+                        stepName,
+                        workerId,
+                        claimToken,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Retry,
+                        AiDecisionLedgerEvents.Retry.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        "Retry decision could not be resolved because the step state was not found after failure persistence.",
+                        new Dictionary<string, string>
+                        {
+                            ["step.name"] = stepName,
+                            ["failure.source"] = failureSource,
+                            ["error"] = error ?? string.Empty
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                return;
+            }
+
+            if (stepState.Status == AiStepExecutionStatus.WaitingForRetry)
+            {
+                await RecordDagLedgerEventAsync(
+                        services,
+                        executionId,
+                        pipelineKey,
+                        stepName,
+                        workerId,
+                        claimToken,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Retry,
+                        AiDecisionLedgerEvents.Retry.Scheduled,
+                        AiDecisionLedgerOutcome.Applied,
+                        stepState.RetryState?.RetryReason ?? "Step retry scheduled.",
+                        new Dictionary<string, string>
+                        {
+                            ["step.name"] = stepName,
+                            ["failure.source"] = failureSource,
+                            ["error"] = error ?? string.Empty,
+                            ["retry.count"] = (stepState.RetryState?.RetryCount ?? 0).ToString(),
+                            ["retry.max"] = (stepState.Retry?.MaxRetries ?? 0).ToString(),
+                            ["next.retry.at.utc"] = stepState.RetryState?.NextRetryAtUtc?.ToString("O") ?? string.Empty
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                return;
+            }
+
+            var retryCount = stepState.RetryState?.RetryCount ?? 0;
+            var maxRetries = stepState.Retry?.MaxRetries;
+            var budgetExhausted = maxRetries.HasValue && retryCount >= maxRetries.Value;
+
+            await RecordDagLedgerEventAsync(
+                    services,
+                    executionId,
+                    pipelineKey,
+                    stepName,
+                    workerId,
+                    claimToken,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Retry,
+                    budgetExhausted
+                        ? AiDecisionLedgerEvents.Retry.BudgetExhausted
+                        : AiDecisionLedgerEvents.Retry.Denied,
+                    AiDecisionLedgerOutcome.Denied,
+                    budgetExhausted
+                        ? "Retry budget exhausted."
+                        : "Retry was denied or the failure was not retryable.",
+                    new Dictionary<string, string>
+                    {
+                        ["step.name"] = stepName,
+                        ["failure.source"] = failureSource,
+                        ["error"] = error ?? string.Empty,
+                        ["step.status"] = stepState.Status.ToString(),
+                        ["retry.count"] = retryCount.ToString(),
+                        ["retry.max"] = maxRetries?.ToString() ?? string.Empty
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Resolves recovered step names by comparing recovery counters before and after recovery.
+        /// </summary>
+        /// <param name="beforeRecoveryCounts">
+        /// The recovery count per step before the recovery operation.
+        /// </param>
+        /// <param name="afterState">
+        /// The execution state after recovery.
+        /// </param>
+        /// <returns>
+        /// The step names whose recovery count increased.
+        /// </returns>
+        public static IReadOnlyList<string> ResolveRecoveredStepNames(
+            IReadOnlyDictionary<string, int> beforeRecoveryCounts,
+            AiExecutionState? afterState)
+        {
+            ArgumentNullException.ThrowIfNull(beforeRecoveryCounts);
+
+            if (afterState is null || afterState.Steps.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var recoveredStepNames = new List<string>();
+
+            foreach (var pair in afterState.Steps)
+            {
+                var stepName = pair.Key;
+                var stepState = pair.Value;
+
+                beforeRecoveryCounts.TryGetValue(
+                    stepName,
+                    out var previousRecoveryCount);
+
+                if (stepState.RecoveryCount > previousRecoveryCount)
+                {
+                    recoveredStepNames.Add(stepName);
+                }
+            }
+
+            return recoveredStepNames
+                .OrderBy(stepName => stepName, StringComparer.Ordinal)
+                .ToArray();
         }
 
     }

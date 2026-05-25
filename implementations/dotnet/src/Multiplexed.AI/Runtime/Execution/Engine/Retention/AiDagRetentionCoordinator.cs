@@ -1,8 +1,10 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
 
@@ -15,6 +17,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
     /// - Apply retention policies after step lifecycle mutations.
     /// - Persist the updated distributed execution state.
     /// - Warm the archive-aware resolver for evicted steps.
+    /// - Record execution-correlated retention ledger events.
     ///
     /// IMPORTANT:
     /// - This coordinator does not execute steps.
@@ -72,6 +75,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                 async trace =>
                 {
                     var stepsBefore = state.Steps.Count;
+                    var policyName = "policy-driven-retention";
+                    var runtimeInstanceId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
+                    var pipelineKey = string.IsNullOrWhiteSpace(state.PipelineName)
+                        ? "unknown"
+                        : state.PipelineName;
+
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _engineServices,
+                            executionId,
+                            pipelineKey,
+                            "_retention",
+                            runtimeInstanceId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Retention,
+                            AiDecisionLedgerEvents.Retention.Evaluated,
+                            AiDecisionLedgerOutcome.Started,
+                            "Retention evaluation started.",
+                            new Dictionary<string, string>
+                            {
+                                ["policy.name"] = policyName,
+                                ["steps.count"] = state.Steps.Count.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordTriggered(
                         executionId,
@@ -93,16 +121,39 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
 
                     if (result.IsEmpty)
                     {
+                        var reason = result.Decision?.Reason ?? "no-policy-or-no-op";
+
                         _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordSkipped(
                             executionId,
-                            result.Decision.Reason ?? "no-policy-or-no-op");
+                            reason);
 
                         trace.SetTag("skipped", true);
-                        trace.SetTag("reason", result.Decision.Reason ?? "no-policy-or-no-op");
+                        trace.SetTag("reason", reason);
+
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                "_retention",
+                                runtimeInstanceId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Retention,
+                                AiDecisionLedgerEvents.Retention.Skipped,
+                                AiDecisionLedgerOutcome.Skipped,
+                                reason,
+                                new Dictionary<string, string>
+                                {
+                                    ["policy.name"] = policyName,
+                                    ["steps.count"] = state.Steps.Count.ToString()
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     else
                     {
-                        var compactedCount = result.CompactedSteps?.Count ?? 0;
+                        var compactedSteps = result.CompactedSteps ?? Array.Empty<string>();
+                        var compactedCount = compactedSteps.Count;
                         var evictedCount = evictedSteps.Count;
 
                         trace.SetTag("skipped", false);
@@ -110,12 +161,76 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                         trace.SetTag("evictedCount", evictedCount);
                         trace.SetTag("totalSteps", state.Steps.Count);
 
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                "_retention",
+                                runtimeInstanceId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Retention,
+                                AiDecisionLedgerEvents.Retention.Triggered,
+                                AiDecisionLedgerOutcome.Triggered,
+                                result.Decision?.Reason ?? "Retention policy triggered.",
+                                new Dictionary<string, string>
+                                {
+                                    ["policy.name"] = policyName,
+                                    ["steps.count"] = state.Steps.Count.ToString(),
+                                    ["compacted.count"] = compactedCount.ToString(),
+                                    ["evicted.count"] = evictedCount.ToString()
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
                         if (compactedCount > 0)
                         {
                             _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordCompactionRequired(
                                 executionId,
                                 state.Steps.Count,
                                 compactedCount);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Retention,
+                                    AiDecisionLedgerEvents.Retention.Compacted,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Retention compacted step payloads.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["compacted.count"] = compactedCount.ToString(),
+                                        ["compacted.steps"] = string.Join(",", compactedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Payload,
+                                    AiDecisionLedgerEvents.Payload.Externalized,
+                                    AiDecisionLedgerOutcome.Persisted,
+                                    "Step payloads externalized during retention compaction.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["payload.externalized.count"] = compactedCount.ToString(),
+                                        ["compacted.steps"] = string.Join(",", compactedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         }
 
                         if (evictedCount > 0)
@@ -124,6 +239,27 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                                 executionId,
                                 state.Steps.Count,
                                 evictedCount);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Retention,
+                                    AiDecisionLedgerEvents.Retention.Evicted,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Retention evicted archived steps from hot state.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["evicted.count"] = evictedCount.ToString(),
+                                        ["evicted.steps"] = string.Join(",", evictedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         }
 
                         if (compactedCount == 0 && evictedCount == 0)
@@ -202,12 +338,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                     trace.SetTag("stepsBefore", stepsBefore);
                     trace.SetTag("stepsAfter", stepsAfter);
                     trace.SetTag("removedSteps", stepsBefore - stepsAfter);
-                    trace.SetTag("workerId", _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId);
+                    trace.SetTag("workerId", runtimeInstanceId);
 
                     return true;
-                });
+                }).ConfigureAwait(false);
         }
-
 
         /// <summary>
         /// Applies retention once for a completed batch of DAG step transitions, persists state,
@@ -243,6 +378,32 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                 async trace =>
                 {
                     var stepsBefore = state.Steps.Count;
+                    var policyName = "policy-driven-batch-retention";
+                    var runtimeInstanceId = _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId;
+                    var pipelineKey = string.IsNullOrWhiteSpace(state.PipelineName)
+                        ? "unknown"
+                        : state.PipelineName;
+
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _engineServices,
+                            executionId,
+                            pipelineKey,
+                            "_retention",
+                            runtimeInstanceId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Retention,
+                            AiDecisionLedgerEvents.Retention.Evaluated,
+                            AiDecisionLedgerOutcome.Started,
+                            "Batch retention evaluation started.",
+                            new Dictionary<string, string>
+                            {
+                                ["policy.name"] = policyName,
+                                ["steps.count"] = state.Steps.Count.ToString(),
+                                ["candidate.steps.count"] = candidateStepIds.Count.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordTriggered(
                         executionId,
@@ -265,12 +426,35 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
 
                     if (result.IsEmpty)
                     {
+                        var reason = result.Decision?.Reason ?? "no-policy-or-no-op";
+
                         _engineServices.ObservabilityService.Metrics.Retention.Trigger.RecordSkipped(
                             executionId,
-                            result.Decision.Reason ?? "no-policy-or-no-op");
+                            reason);
 
                         trace.SetTag("skipped", true);
-                        trace.SetTag("reason", result.Decision.Reason ?? "no-policy-or-no-op");
+                        trace.SetTag("reason", reason);
+
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                "_retention",
+                                runtimeInstanceId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Retention,
+                                AiDecisionLedgerEvents.Retention.Skipped,
+                                AiDecisionLedgerOutcome.Skipped,
+                                reason,
+                                new Dictionary<string, string>
+                                {
+                                    ["policy.name"] = policyName,
+                                    ["steps.count"] = state.Steps.Count.ToString(),
+                                    ["candidate.steps.count"] = candidateStepIds.Count.ToString()
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     else
                     {
@@ -282,12 +466,77 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                         trace.SetTag("evictedCount", evictedCount);
                         trace.SetTag("totalSteps", state.Steps.Count);
 
+                        await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                "_retention",
+                                runtimeInstanceId,
+                                claimToken: null,
+                                concurrencyContext: null,
+                                AiDecisionLedgerCategory.Retention,
+                                AiDecisionLedgerEvents.Retention.Triggered,
+                                AiDecisionLedgerOutcome.Triggered,
+                                result.Decision?.Reason ?? "Batch retention policy triggered.",
+                                new Dictionary<string, string>
+                                {
+                                    ["policy.name"] = policyName,
+                                    ["steps.count"] = state.Steps.Count.ToString(),
+                                    ["candidate.steps.count"] = candidateStepIds.Count.ToString(),
+                                    ["compacted.count"] = compactedCount.ToString(),
+                                    ["evicted.count"] = evictedCount.ToString()
+                                },
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
                         if (compactedCount > 0)
                         {
                             _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordCompactionRequired(
                                 executionId,
                                 state.Steps.Count,
                                 compactedCount);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Retention,
+                                    AiDecisionLedgerEvents.Retention.Compacted,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Batch retention compacted step payloads.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["compacted.count"] = compactedCount.ToString(),
+                                        ["compacted.steps"] = string.Join(",", compactedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Payload,
+                                    AiDecisionLedgerEvents.Payload.Externalized,
+                                    AiDecisionLedgerOutcome.Persisted,
+                                    "Step payloads externalized during batch retention compaction.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["payload.externalized.count"] = compactedCount.ToString(),
+                                        ["compacted.steps"] = string.Join(",", compactedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         }
 
                         if (evictedCount > 0)
@@ -296,6 +545,27 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                                 executionId,
                                 state.Steps.Count,
                                 evictedCount);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    "_retention",
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Retention,
+                                    AiDecisionLedgerEvents.Retention.Evicted,
+                                    AiDecisionLedgerOutcome.Applied,
+                                    "Batch retention evicted archived steps from hot state.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["evicted.count"] = evictedCount.ToString(),
+                                        ["evicted.steps"] = string.Join(",", evictedSteps)
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         }
 
                         if (compactedCount == 0 && evictedCount == 0)
@@ -398,12 +668,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                     trace.SetTag("stepsBefore", stepsBefore);
                     trace.SetTag("stepsAfter", stepsAfter);
                     trace.SetTag("removedSteps", stepsBefore - stepsAfter);
-                    trace.SetTag("workerId", _engineServices.RuntimeInstanceIdentity.RuntimeInstanceId);
+                    trace.SetTag("workerId", runtimeInstanceId);
 
                     return true;
                 }).ConfigureAwait(false);
         }
-
-
     }
 }

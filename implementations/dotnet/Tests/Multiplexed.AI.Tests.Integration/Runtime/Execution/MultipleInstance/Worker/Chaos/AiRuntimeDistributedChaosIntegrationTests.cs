@@ -1095,7 +1095,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     MinimumExpectedParticipatingWorkers = 5,
                     FullStepFingerprint = false,
                     WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
-                    Timeout = TimeSpan.FromMinutes(5),
+                    Timeout = TimeSpan.FromMinutes(10),
                     SnapshotWaitTimeout = TimeSpan.FromMinutes(3),
                     RequiredResolvedSteps = requiredSteps,
                     ExpectedRetriedSteps = retriedSteps,

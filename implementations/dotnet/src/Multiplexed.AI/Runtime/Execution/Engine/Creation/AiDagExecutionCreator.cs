@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
@@ -7,6 +8,7 @@ using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
 using Multiplexed.AI.Runtime.Logging;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
@@ -22,7 +24,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
         /// Initializes a new instance of the <see cref="AiDagExecutionCreator"/> class.
         /// </summary>
         /// <param name="services">The DAG execution engine services.</param>
-        public AiDagExecutionCreator(IAiDagExecutionEngineServices services)
+        public AiDagExecutionCreator(
+            IAiDagExecutionEngineServices services)
         {
             _services = services ?? throw new ArgumentNullException(nameof(services));
         }
@@ -123,6 +126,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
 
             var newContextKey = Guid.NewGuid().ToString("N");
             var aiOwnedContext = _services.ContextFactory.CreateCopy(current, newContextKey);
+
             newContextKey = await _services.ContextStore.SeedAsync(aiOwnedContext);
 
             var record = new AiExecutionRecord
@@ -133,7 +137,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                 Status = AiExecutionStatus.Pending,
                 ExecutionContextSnapshot = _services.ContextFactory.CreateSnapshot(current),
                 Steps = preparedPipeline.Steps.Select(x => x.Name).ToList(),
-
                 CurrentStep = string.Empty,
                 CurrentStepIndex = 0
             };
@@ -164,7 +167,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                 var stepState = _services.StateWriter.GetOrCreateStep(state, step.Name);
                 stepState.DependsOn = step.DependsOn?.ToList() ?? new List<string>();
 
-                var stepContext = new AiStepExecutionContext(executionContext, step);
+                var stepContext = new AiStepExecutionContext(
+                    executionContext,
+                    step);
 
                 var retryDefinition = await _services.ObservabilityService.Tracer.TraceStepAsync(
                     new AiStepTraceContext
@@ -226,16 +231,53 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
 
             if (_services.DagStore is not null)
             {
-                await _services.DagStore.CreateAsync(record, state, cancellationToken);
+                await _services.DagStore
+                    .CreateAsync(
+                        record,
+                        state,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             else
             {
-                await _services.Store.CreateAsync(record, state, cancellationToken);
+                await _services.Store
+                    .CreateAsync(
+                        record,
+                        state,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
+
+            var pipelineKey = $"{preparedPipeline.Name}:{preparedPipeline.Version}";
+            var runtimeInstanceId = _services.RuntimeInstanceIdentity.RuntimeInstanceId;
+
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _services,
+                    record.ExecutionId,
+                    pipelineKey,
+                    "_execution",
+                    runtimeInstanceId,
+                    claimToken: null,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Execution,
+                    AiDecisionLedgerEvents.Execution.Created,
+                    AiDecisionLedgerOutcome.Persisted,
+                    "DAG execution created and persisted.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.name"] = record.PipelineName,
+                        ["pipeline.version"] = preparedPipeline.Version,
+                        ["execution.mode"] = record.ExecutionMode.ToString(),
+                        ["step.count"] = preparedPipeline.Steps.Count.ToString(),
+                        ["context.key"] = record.ContextKey
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             _services.Logger.Engine.ExecutionCreated(record);
 
-            _services.ObservabilityService.Metrics.Execution.RecordExecutionStarted(record.ExecutionId);
+            _services.ObservabilityService.Metrics.Execution.RecordExecutionStarted(
+                record.ExecutionId);
 
             _services.Logger.Engine.LogInformation(
                 $"[AI DAG] Execution created. ExecutionId='{record.ExecutionId}', Pipeline='{record.PipelineName}', Mode='{record.ExecutionMode}', StepCount='{preparedPipeline.Steps.Count}', ContextKey='{record.ContextKey}'.");

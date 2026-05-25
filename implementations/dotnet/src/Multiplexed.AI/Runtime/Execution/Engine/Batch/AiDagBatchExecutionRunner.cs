@@ -356,6 +356,43 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
 
                         _engineServices.Logger.Engine.LogInformation(
                             $"[AI DAG BATCH] Step failed. ExecutionId='{executionId}', StepName='{claimedStep.StepName}', Error='{error}'.");
+
+                        var failedState = await _engineServices.DagStore.GetStateAsync(
+                                executionId,
+                                cancellationToken)
+                            .ConfigureAwait(false) ?? state;
+
+                        var failedStepState = failedState.Steps.TryGetValue(
+                            claimedStep.StepName,
+                            out var reloadedFailedStep)
+                            ? reloadedFailedStep
+                            : null;
+
+                        await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
+                                _engineServices,
+                                executionId,
+                                pipelineKey,
+                                claimedStep.StepName,
+                                workerId,
+                                claimedStep.ClaimToken,
+                                failedStepState,
+                                error,
+                                "batch-result",
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (failedStepState?.Status == AiStepExecutionStatus.WaitingForRetry)
+                        {
+                            _engineServices.ObservabilityService.Metrics.Execution.RecordStepRetried(
+                                executionId,
+                                claimedStep.StepName);
+
+                            _engineServices.Logger.Engine.StepRetryScheduled(
+                                executionId,
+                                claimedStep.StepName,
+                                failedStepState.RetryState?.RetryCount ?? 0,
+                                failedStepState.RetryState?.NextRetryAtUtc);
+                        }
                     }
                 }
                 finally
