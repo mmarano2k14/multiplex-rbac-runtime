@@ -256,6 +256,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                     record.ExecutionId,
                     pipelineKey,
                     "_execution",
+                    "_execution",
                     runtimeInstanceId,
                     claimToken: null,
                     concurrencyContext: null,

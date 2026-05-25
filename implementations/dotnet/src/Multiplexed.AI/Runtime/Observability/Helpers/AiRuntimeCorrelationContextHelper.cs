@@ -38,14 +38,9 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
         /// </param>
         /// <returns>The runtime correlation context.</returns>
         /// <remarks>
-        /// <para>
-        /// <c>StepId</c> is the logical DAG step identity, for example
-        /// <c>chaos-step-001</c>.
-        /// </para>
-        /// <para>
-        /// <c>StepKey</c> is the implementation/type key, for example
-        /// <c>hello-world</c> or <c>distributed.chaos.flaky-provider</c>.
-        /// </para>
+        /// This overload is kept for backward compatibility.
+        /// When no explicit technical step key is supplied, the helper falls back to
+        /// <paramref name="stepName"/> unless the concurrency context provides a step key.
         /// </remarks>
         public static AiRuntimeCorrelationContext Create(
             string executionId,
@@ -55,10 +50,75 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
             string? claimToken = null,
             AiConcurrencyContext? concurrencyContext = null)
         {
+            var resolvedStepKey = !string.IsNullOrWhiteSpace(concurrencyContext?.StepKey)
+                ? concurrencyContext.StepKey
+                : stepName;
+
+            return Create(
+                executionId,
+                pipelineKey,
+                stepName,
+                resolvedStepKey,
+                workerId,
+                claimToken,
+                concurrencyContext);
+        }
+
+        /// <summary>
+        /// Creates a runtime correlation context from execution, logical step identity,
+        /// technical step key, worker, claim, and optional concurrency information.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="pipelineKey">The stable pipeline key.</param>
+        /// <param name="stepName">
+        /// The logical DAG step name. In the correlation model this maps to <c>StepId</c>.
+        /// Example: <c>chaos-step-001</c>.
+        /// </param>
+        /// <param name="stepKey">
+        /// The technical implementation/type key. In the correlation model this maps to <c>StepKey</c>.
+        /// Example: <c>hello-world</c> or <c>distributed.chaos.flaky-provider</c>.
+        /// </param>
+        /// <param name="workerId">The worker or runtime instance identifier.</param>
+        /// <param name="claimToken">The optional distributed claim token.</param>
+        /// <param name="concurrencyContext">
+        /// The optional concurrency context used to enrich provider, model, operation,
+        /// runtime instance, and optionally override the technical step key when present.
+        /// </param>
+        /// <returns>The runtime correlation context.</returns>
+        /// <remarks>
+        /// <para>
+        /// <c>StepId</c> is the logical DAG step identity.
+        /// </para>
+        /// <para>
+        /// <c>StepKey</c> is the runtime implementation/type key.
+        /// </para>
+        /// <para>
+        /// This overload should be preferred when the caller knows both the logical
+        /// DAG step name and the technical step key.
+        /// </para>
+        /// </remarks>
+        public static AiRuntimeCorrelationContext Create(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string stepKey,
+            string workerId,
+            string? claimToken = null,
+            AiConcurrencyContext? concurrencyContext = null)
+        {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+
+            var resolvedStepKey = !string.IsNullOrWhiteSpace(concurrencyContext?.StepKey)
+                ? concurrencyContext.StepKey
+                : stepKey;
+
+            var resolvedRuntimeInstanceId = !string.IsNullOrWhiteSpace(concurrencyContext?.RuntimeInstanceId)
+                ? concurrencyContext.RuntimeInstanceId
+                : workerId;
 
             return new AiRuntimeCorrelationContext
             {
@@ -69,9 +129,9 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
                 StepId = stepName,
 
                 // Technical implementation/type key.
-                StepKey = concurrencyContext?.StepKey ?? stepName,
+                StepKey = resolvedStepKey,
 
-                RuntimeInstanceId = concurrencyContext?.RuntimeInstanceId ?? workerId,
+                RuntimeInstanceId = resolvedRuntimeInstanceId,
                 WorkerId = workerId,
                 ClaimToken = claimToken,
                 Provider = concurrencyContext?.Provider,

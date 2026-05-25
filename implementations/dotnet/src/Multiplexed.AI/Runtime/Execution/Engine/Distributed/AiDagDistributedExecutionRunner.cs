@@ -330,11 +330,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                             ? reloadedFailedStep
                             : null;
 
+                        var claimedStep = resolvedPipeline.Steps.First(
+                           x => x.Name == claimed.StepName);
+
                         await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
                                  _engineServices,
                                  executionId,
                                  pipelineKey,
-                                 claimed.StepName,
+                                 claimedStep.Name,
+                                 claimedStep.StepKey,
                                  workerId,
                                  claimed.ClaimToken,
                                  failedStepState,
@@ -342,9 +346,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                                  "exception",
                                  cancellationToken)
                              .ConfigureAwait(false);
-
-                        var claimedStep = resolvedPipeline.Steps.First(
-                            x => x.Name == claimed.StepName);
 
                         var executionContext = buildExecutionContext(
                             record,
@@ -459,11 +460,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Distributed
                             ? reloadedFailedStep
                             : null;
 
+                        var claimedStep = AiDagExecutionHelpers.FindPipelineStep(resolvedPipeline, claimed.StepName);
+
                         await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
                                 _engineServices,
                                 executionId,
                                 pipelineKey,
-                                claimed.StepName,
+                                claimedStep.Name,
+                                claimedStep.StepKey,
                                 workerId,
                                 claimed.ClaimToken,
                                 failedStepState,

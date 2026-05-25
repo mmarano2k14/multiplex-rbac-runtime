@@ -116,7 +116,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="stepName">The claimed step name.</param>
+        /// <param name="stepName">The claimed logical DAG step name.</param>
         /// <param name="runtimeInstanceId">The stable runtime instance identifier participating in distributed execution.</param>
         /// <param name="stepState">The step state containing optional provider, model, and operation metadata.</param>
         /// <returns>The concurrency context used to release the lease.</returns>
@@ -127,9 +127,37 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             string runtimeInstanceId,
             AiStepState stepState)
         {
+            return CreateConcurrencyContext(
+                executionId,
+                pipelineKey,
+                stepName,
+                stepKey: stepName,
+                runtimeInstanceId,
+                stepState);
+        }
+
+        /// <summary>
+        /// Creates the concurrency context matching the lease acquired by the claim service.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="pipelineKey">The stable pipeline key.</param>
+        /// <param name="stepName">The claimed logical DAG step name.</param>
+        /// <param name="stepKey">The technical step implementation key.</param>
+        /// <param name="runtimeInstanceId">The stable runtime instance identifier participating in distributed execution.</param>
+        /// <param name="stepState">The step state containing optional provider, model, and operation metadata.</param>
+        /// <returns>The concurrency context used to release the lease.</returns>
+        public static AiConcurrencyContext CreateConcurrencyContext(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string stepKey,
+            string runtimeInstanceId,
+            AiStepState stepState)
+        {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
             ArgumentNullException.ThrowIfNull(stepState);
 
@@ -138,7 +166,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 ExecutionId = executionId,
                 PipelineKey = pipelineKey,
                 StepId = stepName,
-                StepKey = stepName,
+                StepKey = stepKey,
                 RuntimeInstanceId = runtimeInstanceId,
                 LeaseId = $"{executionId}:{stepName}:{runtimeInstanceId}",
                 Provider = TryReadString(stepState.Config, "provider"),
@@ -178,7 +206,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="stepName">The concrete step name.</param>
+        /// <param name="stepName">The concrete logical step name.</param>
         /// <param name="runtimeInstanceId">The stable runtime instance identifier participating in distributed execution.</param>
         /// <param name="stepState">The step state containing concurrency, provider, model, and operation config.</param>
         /// <param name="pipelineConfig">The optional pipeline-level configuration used to resolve effective concurrency rules.</param>
@@ -203,6 +231,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             ArgumentNullException.ThrowIfNull(stepDefinition);
             ArgumentNullException.ThrowIfNull(definitionResolver);
 
+            var effectiveStepKey = string.IsNullOrWhiteSpace(stepDefinition.StepKey)
+                ? stepName
+                : stepDefinition.StepKey;
+
             var pipelineDefinition = new AiPipelineDefinition
             {
                 Name = pipelineKey,
@@ -223,6 +255,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 executionId,
                 pipelineKey,
                 stepName,
+                effectiveStepKey,
                 runtimeInstanceId,
                 stepState);
 
@@ -271,12 +304,17 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="reason">The optional decision reason.</param>
         /// <param name="metadata">The optional non-sensitive metadata.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
+        /// <param name="stepKey">
+        /// The optional technical step implementation key. When omitted, the value is resolved
+        /// from the concurrency context or falls back to <paramref name="stepName"/>.
+        /// </param>
         /// <returns>A task representing the asynchronous record operation.</returns>
         public static async Task RecordDagLedgerEventAsync(
             IAiDagExecutionEngineServices services,
             string executionId,
             string pipelineKey,
             string stepName,
+            string stepKey,
             string workerId,
             string? claimToken,
             AiConcurrencyContext? concurrencyContext,
@@ -285,7 +323,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             AiDecisionLedgerOutcome outcome,
             string? reason,
             IReadOnlyDictionary<string, string>? metadata,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -294,10 +333,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 return;
             }
 
+            var resolvedStepKey = !string.IsNullOrWhiteSpace(stepKey)
+                ? stepKey
+                : concurrencyContext?.StepKey ?? stepName;
+
             var correlationContext = AiRuntimeCorrelationContextHelper.Create(
                 executionId,
                 pipelineKey,
                 stepName,
+                resolvedStepKey,
                 workerId,
                 claimToken,
                 concurrencyContext);
@@ -320,7 +364,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="services">The DAG execution engine services.</param>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="stepName">The failed step name.</param>
+        /// <param name="stepName">The failed logical DAG step name.</param>
+        /// <param name="stepKey">The failed technical step implementation key.</param>
         /// <param name="workerId">The worker identifier.</param>
         /// <param name="claimToken">The claim token associated with the failed step.</param>
         /// <param name="stepState">The reloaded step state after failure persistence.</param>
@@ -333,6 +378,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             string executionId,
             string pipelineKey,
             string stepName,
+            string stepKey,
             string workerId,
             string? claimToken,
             AiStepState? stepState,
@@ -347,11 +393,16 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
             ArgumentException.ThrowIfNullOrWhiteSpace(failureSource);
 
+            var resolvedStepKey = string.IsNullOrWhiteSpace(stepKey)
+                ? stepName
+                : stepKey;
+
             await RecordDagLedgerEventAsync(
                     services,
                     executionId,
                     pipelineKey,
                     stepName,
+                    resolvedStepKey,
                     workerId,
                     claimToken,
                     concurrencyContext: null,
@@ -362,6 +413,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     new Dictionary<string, string>
                     {
                         ["step.name"] = stepName,
+                        ["step.key"] = resolvedStepKey,
                         ["failure.source"] = failureSource,
                         ["error"] = error ?? string.Empty,
                         ["step.status"] = stepState?.Status.ToString() ?? "unknown",
@@ -378,6 +430,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                         executionId,
                         pipelineKey,
                         stepName,
+                        resolvedStepKey,
                         workerId,
                         claimToken,
                         concurrencyContext: null,
@@ -388,6 +441,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                         new Dictionary<string, string>
                         {
                             ["step.name"] = stepName,
+                            ["step.key"] = resolvedStepKey,
                             ["failure.source"] = failureSource,
                             ["error"] = error ?? string.Empty
                         },
@@ -404,6 +458,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                         executionId,
                         pipelineKey,
                         stepName,
+                        resolvedStepKey,
                         workerId,
                         claimToken,
                         concurrencyContext: null,
@@ -414,6 +469,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                         new Dictionary<string, string>
                         {
                             ["step.name"] = stepName,
+                            ["step.key"] = resolvedStepKey,
                             ["failure.source"] = failureSource,
                             ["error"] = error ?? string.Empty,
                             ["retry.count"] = (stepState.RetryState?.RetryCount ?? 0).ToString(),
@@ -442,6 +498,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     executionId,
                     pipelineKey,
                     stepName,
+                    resolvedStepKey,
                     workerId,
                     claimToken,
                     concurrencyContext: null,
@@ -456,6 +513,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                     new Dictionary<string, string>
                     {
                         ["step.name"] = stepName,
+                        ["step.key"] = resolvedStepKey,
                         ["failure.source"] = failureSource,
                         ["error"] = error ?? string.Empty,
                         ["step.status"] = stepState.Status.ToString(),
@@ -503,6 +561,33 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
             return recoveredStepNames
                 .OrderBy(stepName => stepName, StringComparer.Ordinal)
                 .ToArray();
+        }
+
+        public static AiPipelineStepDefinition FindPipelineStep(
+            ResolvedAiPipeline pipeline,
+            string stepName)
+        {
+            var step = pipeline.Steps.FirstOrDefault(x =>
+                string.Equals(x.Name, stepName, StringComparison.OrdinalIgnoreCase));
+
+            if (step is not null)
+            {
+                return new AiPipelineStepDefinition
+                {
+                    Name = step.Name,
+                    StepKey = step.StepKey,
+                    Config = step.Config ?? new Dictionary<string, object?>(),
+                    DependsOn = step.DependsOn ?? Array.Empty<string>()
+                };
+            }
+
+            return new AiPipelineStepDefinition
+            {
+                Name = stepName,
+                StepKey = stepName,
+                Config = new Dictionary<string, object?>(),
+                DependsOn = Array.Empty<string>()
+            };
         }
     }
 }

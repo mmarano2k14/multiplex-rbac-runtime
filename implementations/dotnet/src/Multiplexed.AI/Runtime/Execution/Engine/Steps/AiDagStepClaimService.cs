@@ -149,6 +149,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     executionId,
                     pipelineKey,
                     workerId,
+                    pipeline,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -219,7 +220,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         _services,
                         executionId,
                         pipelineKey,
-                        readyStep.StepName,
+                        stepDefinition.Name,
+                        stepDefinition.StepKey,
                         workerId,
                         claimToken: null,
                         concurrencyContext,
@@ -230,7 +232,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         new Dictionary<string, string>
                         {
                             ["pipeline.key"] = pipelineKey,
-                            ["step.name"] = readyStep.StepName,
+                            ["step.name"] = stepDefinition.Name,
+                            ["step.key"] = stepDefinition.StepKey,
                             ["worker.id"] = workerId
                         },
                         cancellationToken)
@@ -261,7 +264,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         _services,
                         executionId,
                         pipelineKey,
-                        readyStep.StepName,
+                        stepDefinition.Name,
+                        stepDefinition.StepKey,
                         workerId,
                         concurrencyContext.LeaseId,
                         concurrencyContext,
@@ -272,7 +276,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         new Dictionary<string, string>
                         {
                             ["pipeline.key"] = pipelineKey,
-                            ["step.name"] = readyStep.StepName,
+                            ["step.name"] = stepDefinition.Name,
+                            ["step.key"] = stepDefinition.StepKey,
                             ["worker.id"] = workerId,
                             ["lease.id"] = concurrencyContext.LeaseId
                         },
@@ -289,7 +294,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                        _services,
                        executionId,
                        pipelineKey,
-                       readyStep.StepName,
+                       stepDefinition.Name,
+                       stepDefinition.StepKey,
                        workerId,
                        concurrencyContext.LeaseId,
                        concurrencyContext,
@@ -300,7 +306,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                        new Dictionary<string, string>
                        {
                            ["pipeline.key"] = pipelineKey,
-                           ["step.name"] = readyStep.StepName,
+                           ["step.name"] = stepDefinition.Name,
+                           ["step.key"] = stepDefinition.StepKey,
                            ["worker.id"] = workerId,
                            ["lease.id"] = concurrencyContext.LeaseId
                        },
@@ -317,7 +324,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     _services,
                     executionId,
                     pipelineKey,
-                    claimed.StepName,
+                    stepDefinition.Name,
+                    stepDefinition.StepKey,
                     workerId,
                     claimed.ClaimToken,
                     concurrencyContext,
@@ -328,7 +336,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     new Dictionary<string, string>
                     {
                         ["pipeline.key"] = pipelineKey,
-                        ["step.name"] = claimed.StepName,
+                        ["step.name"] = stepDefinition.Name,
+                        ["step.key"] = stepDefinition.StepKey,
                         ["worker.id"] = workerId,
                         ["claim.token"] = claimed.ClaimToken
                     },
@@ -337,7 +346,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 _services.Logger.Engine.StepClaimed(
                     executionId,
-                    claimed.StepName,
+                    stepDefinition.Name,
                     workerId,
                     claimed.ClaimToken);
 
@@ -421,6 +430,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     executionId,
                     pipelineKey,
                     workerId,
+                    pipeline,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -530,7 +540,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     _services,
                     executionId,
                     pipelineKey,
-                    claimed.StepName,
+                    stepDefinition.Name,
+                    stepDefinition.StepKey,
                     workerId,
                     claimed.ClaimToken,
                     concurrencyContext,
@@ -541,7 +552,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     new Dictionary<string, string>
                     {
                         ["pipeline.key"] = pipelineKey,
-                        ["step.name"] = claimed.StepName,
+                        ["step.name"] = stepDefinition.Name,
+                        ["step.key"] = stepDefinition.StepKey,
                         ["worker.id"] = workerId,
                         ["claim.token"] = claimed.ClaimToken
                     },
@@ -951,6 +963,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             string executionId,
             string pipelineKey,
             string workerId,
+            ResolvedAiPipeline pipeline,
             CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
@@ -1008,6 +1021,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                 executionId,
                                 pipelineKey,
                                 "_recovery",
+                                "_recovery",
                                 workerId,
                                 claimToken: null,
                                 concurrencyContext: null,
@@ -1030,6 +1044,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                 executionId,
                                 pipelineKey,
                                 "_recovery",
+                                "_recovery",
                                 workerId,
                                 claimToken: null,
                                 concurrencyContext: null,
@@ -1049,11 +1064,16 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                         foreach (var recoveredStepName in recoveredStepNames)
                         {
+                            var stepDefinition = FindPipelineStep(
+                                pipeline,
+                                recoveredStepName);
+
                             await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                                     _services,
                                     executionId,
                                     pipelineKey,
-                                    recoveredStepName,
+                                    stepDefinition.Name,
+                                    stepDefinition.StepKey,
                                     workerId,
                                     claimToken: null,
                                     concurrencyContext: null,
@@ -1078,6 +1098,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                     _services,
                                     executionId,
                                     pipelineKey,
+                                    "_recovery",
                                     "_recovery",
                                     workerId,
                                     claimToken: null,
@@ -1260,6 +1281,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         executionId,
                         pipelineKey,
                         "_control",
+                        "_control",
                         workerId,
                         claimToken: null,
                         concurrencyContext: null,
@@ -1288,6 +1310,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         _services,
                         executionId,
                         pipelineKey,
+                        "_human_input",
                         "_human_input",
                         workerId,
                         claimToken: null,

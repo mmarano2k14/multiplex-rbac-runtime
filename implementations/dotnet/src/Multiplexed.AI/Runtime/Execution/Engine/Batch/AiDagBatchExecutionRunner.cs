@@ -368,11 +368,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Batch
                             ? reloadedFailedStep
                             : null;
 
+                        var pipelineStep = AiDagExecutionHelpers.FindPipelineStep(resolvedPipeline, claimedStep.StepName);
+
                         await AiDagExecutionHelpers.RecordRetryLedgerEventsAsync(
                                 _engineServices,
                                 executionId,
                                 pipelineKey,
-                                claimedStep.StepName,
+                                pipelineStep.Name,
+                                pipelineStep.StepKey,
                                 workerId,
                                 claimedStep.ClaimToken,
                                 failedStepState,
