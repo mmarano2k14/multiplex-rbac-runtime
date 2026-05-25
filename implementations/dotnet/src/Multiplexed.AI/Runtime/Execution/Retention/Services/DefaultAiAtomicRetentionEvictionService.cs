@@ -119,7 +119,7 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                         StepName = stepName,
                         Action = AiRetentionPatchAction.Evict,
                         ExpectedStatus = step.Status,
-                        ExpectedClaimToken = step.ClaimToken,
+                        ExpectedClaimToken = null,
                         ExpectedExecutionId = state.ExecutionId,
                         ArchivePayloadId = payload.ArtifactId,
                         Reason = reason
@@ -145,28 +145,24 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// The step state from the local execution state snapshot.
         /// </param>
         /// <returns>
-        /// <c>true</c> when the snapshot represents a terminal, unclaimed step; otherwise, <c>false</c>.
+        /// <c>true</c> when the snapshot represents a terminal step; otherwise, <c>false</c>.
         /// </returns>
         /// <remarks>
+        /// <para>
         /// This method is only a pre-filter. The distributed DAG store must still re-check the
         /// current stored state atomically before applying the patch.
+        /// </para>
+        ///
+        /// <para>
+        /// A completed or failed step may still contain an old claim token as audit metadata.
+        /// Therefore this method intentionally does not reject terminal steps based only on
+        /// <c>ClaimToken</c>.
+        /// </para>
         /// </remarks>
         private static bool IsSafeCandidateSnapshot(
             AiStepState step)
         {
-            if (step.Status is not AiStepExecutionStatus.Completed and not AiStepExecutionStatus.Failed)
-            {
-                return false;
-            }
-
-            if (!string.IsNullOrWhiteSpace(step.ClaimToken))
-            {
-                return false;
-            }
-
-            return true;
+            return step.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed;
         }
-
-        
     }
 }

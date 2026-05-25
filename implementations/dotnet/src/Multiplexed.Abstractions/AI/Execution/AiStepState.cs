@@ -285,6 +285,15 @@ namespace Multiplexed.Abstractions.AI.Execution
         /// </remarks>
         public long? InlinePayloadSizeBytes { get; set; }
 
+        /// <summary>
+        /// Gets or sets a value indicating whether the step payload has been evicted from hot state.
+        /// </summary>
+        /// <remarks>
+        /// The step shell remains in the DAG state so that scheduling, convergence,
+        /// dependencies, retry diagnostics, and replay metadata remain structurally stable.
+        /// </remarks>
+        public bool IsEvictedFromHotState { get; set; }
+
         // ---------------------------------------------------------------------
         // SETTERS
         // ---------------------------------------------------------------------

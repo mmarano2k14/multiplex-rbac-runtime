@@ -753,17 +753,18 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
         /// <para>
         /// This script is used for active distributed retention. It never overwrites the full
         /// execution state. Each candidate is checked against the current stored step before
-        /// being compacted or evicted.
+        /// being compacted or logically evicted.
         /// </para>
         ///
         /// <para>
-        /// A candidate is skipped when the step is missing, non-terminal, running, claimed,
-        /// or no longer matches the expected status or claim token.
+        /// Active eviction is logical: the step shell remains in Redis, while heavy payload/result
+        /// data is cleared and replaced by archive metadata.
         /// </para>
         ///
         /// <para>
-        /// Eviction deletes the individual step key and removes the step id from the DAG step id set.
-        /// Compaction preserves the step shell and only records archive metadata / removes inline payload.
+        /// This script intentionally does not delete step keys and does not remove step ids from
+        /// the DAG step id set during active execution. Physical deletion is reserved for terminal
+        /// winner-only retention after finalization.
         /// </para>
         /// </remarks>
         public static readonly LuaScript RetentionPatchPreparedScript = LuaScript.Prepare(
@@ -803,6 +804,32 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                 return status == 'Completed' or status == 'Failed'
             end
 
+            local function increment_version(step)
+                if step.Version ~= nil and step.Version ~= cjson.null then
+                    step.Version = tonumber(step.Version) + 1
+                else
+                    step.Version = 1
+                end
+            end
+
+            local function clear_heavy_payload(step)
+                if step.Result ~= nil and step.Result ~= cjson.null then
+                    step.Result = cjson.null
+                end
+
+                if step.Output ~= nil and step.Output ~= cjson.null then
+                    step.Output = cjson.null
+                end
+
+                if step.Payload ~= nil and step.Payload ~= cjson.null then
+                    step.Payload = cjson.null
+                end
+
+                if step.Data ~= nil and step.Data ~= cjson.null then
+                    step.Data = cjson.null
+                end
+            end
+
             for _, candidate in ipairs(candidates) do
                 local stepName = candidate.StepName
                 local action = normalize_action(candidate.Action)
@@ -825,11 +852,9 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
 
                             local expectedExecutionId = candidate.ExpectedExecutionId
                             local expectedStatus = candidate.ExpectedStatus
-                            local expectedClaimToken = candidate.ExpectedClaimToken
 
                             local currentExecutionId = step.ExecutionId
                             local currentStatus = step.Status
-                            local currentClaimToken = step.ClaimToken
 
                             if not is_null_or_empty(expectedExecutionId) then
                                 if not is_null_or_empty(currentExecutionId) and currentExecutionId ~= expectedExecutionId then
@@ -843,16 +868,6 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                                 end
                             end
 
-                            if is_null_or_empty(expectedClaimToken) then
-                                if not is_null_or_empty(currentClaimToken) then
-                                    safe = false
-                                end
-                            else
-                                if currentClaimToken ~= expectedClaimToken then
-                                    safe = false
-                                end
-                            end
-
                             if not is_terminal(currentStatus) then
                                 safe = false
                             end
@@ -861,7 +876,7 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                                 safe = false
                             end
 
-                            if not is_null_or_empty(step.ClaimToken) then
+                            if step.IsEvictedFromHotState == true then
                                 safe = false
                             end
 
@@ -869,8 +884,16 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                                 add_skipped(stepName)
                             else
                                 if action == 'Evict' then
-                                    redis.call('DEL', stepKey)
-                                    redis.call('SREM', stepIdsKey, stepName)
+                                    step.ArchivePayloadId = candidate.ArchivePayloadId
+                                    step.RetentionReason = candidate.Reason
+                                    step.IsEvictedFromHotState = true
+                                    step.EvictedAtUnixMs = nowUnix
+                                    step.UpdatedAtUnixMs = nowUnix
+
+                                    clear_heavy_payload(step)
+                                    increment_version(step)
+
+                                    redis.call('SET', stepKey, cjson.encode(step))
                                     table.insert(evicted, stepName)
                                 elseif action == 'Compact' then
                                     step.ArchivePayloadId = candidate.ArchivePayloadId
@@ -879,15 +902,8 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                                     step.CompactedAtUnixMs = nowUnix
                                     step.UpdatedAtUnixMs = nowUnix
 
-                                    if step.Version ~= nil and step.Version ~= cjson.null then
-                                        step.Version = tonumber(step.Version) + 1
-                                    else
-                                        step.Version = 1
-                                    end
-
-                                    if step.Result ~= nil and step.Result ~= cjson.null then
-                                        step.Result = cjson.null
-                                    end
+                                    clear_heavy_payload(step)
+                                    increment_version(step)
 
                                     redis.call('SET', stepKey, cjson.encode(step))
                                     table.insert(compacted, stepName)
