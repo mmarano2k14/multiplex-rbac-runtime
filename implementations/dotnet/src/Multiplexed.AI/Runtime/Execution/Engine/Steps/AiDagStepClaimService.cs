@@ -127,6 +127,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             var controlDecision = await CheckExecutionControlAsync(
                                     executionId,
+                                    pipelineKey,
                                     workerId,
                                     cancellationToken)
                                 .ConfigureAwait(false);
@@ -398,6 +399,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             var controlDecision = await CheckExecutionControlAsync(
                     executionId,
+                    pipelineKey,
                     workerId,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -1194,6 +1196,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <param name="executionId">
         /// The durable execution identifier.
         /// </param>
+        /// <param name="pipelineKey">
+        /// The stable pipeline key used for ledger correlation.
+        /// </param>
         /// <param name="workerId">
         /// The runtime worker identifier.
         /// </param>
@@ -1205,6 +1210,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// </returns>
         private async Task<AiExecutionControlDecision?> CheckExecutionControlAsync(
             string executionId,
+            string pipelineKey,
             string workerId,
             CancellationToken cancellationToken)
         {
@@ -1243,6 +1249,63 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 await MarkPausedIfExecutionHasDrainedAsync(
                         executionId,
                         workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (decision.ShouldCancel)
+            {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_control",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Control,
+                        AiDecisionLedgerEvents.Control.CancelObserved,
+                        AiDecisionLedgerOutcome.Blocked,
+                        decision.Reason ?? "Execution cancellation observed by DAG claim service.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["status"] = decision.Status.ToString(),
+                            ["stop.claiming"] = decision.ShouldStopClaiming.ToString(),
+                            ["should.cancel"] = decision.ShouldCancel.ToString(),
+                            ["waiting.for.input"] = decision.IsWaitingForInput.ToString(),
+                            ["reason"] = decision.Reason ?? string.Empty
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (decision.IsWaitingForInput ||
+                decision.Status == AiExecutionControlStatus.WaitingForInput)
+            {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_human_input",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.HumanInput,
+                        AiDecisionLedgerEvents.HumanInput.Waiting,
+                        AiDecisionLedgerOutcome.Blocked,
+                        decision.Reason ?? "Execution is waiting for human input.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["status"] = decision.Status.ToString(),
+                            ["stop.claiming"] = decision.ShouldStopClaiming.ToString(),
+                            ["should.cancel"] = decision.ShouldCancel.ToString(),
+                            ["waiting.for.input"] = decision.IsWaitingForInput.ToString(),
+                            ["reason"] = decision.Reason ?? string.Empty
+                        },
                         cancellationToken)
                     .ConfigureAwait(false);
             }

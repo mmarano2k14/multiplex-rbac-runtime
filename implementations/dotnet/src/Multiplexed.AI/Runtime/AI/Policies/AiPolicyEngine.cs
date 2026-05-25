@@ -1,8 +1,10 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Context;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -15,12 +17,20 @@ namespace Multiplexed.AI.Runtime.AI.Policies
     /// </summary>
     /// <remarks>
     /// This base class is responsible for resolving step-scoped policy configuration,
-    /// resolving registered policies, and executing those policies. It does not own
-    /// domain-specific decisions such as retry, retention, eviction, or recovery.
+    /// resolving registered policies, executing those policies, recording policy metrics,
+    /// recording policy traces, and recording execution-correlated policy ledger events.
+    ///
+    /// It does not own domain-specific decisions such as retry, retention, eviction,
+    /// concurrency admission, or recovery. Domain-specific runtime consequences remain
+    /// owned by the caller.
     /// </remarks>
     public abstract class AiPolicyEngine : IAiPolicyEngine
     {
+        private const string PolicyPipelineFallback = "policy-engine";
+        private const string PolicyWorkerFallback = "policy-engine";
+
         private readonly IAiPolicyRegistry policyRegistry;
+
         public readonly IAiRuntimeObservability _obs;
 
         /// <summary>
@@ -30,7 +40,8 @@ namespace Multiplexed.AI.Runtime.AI.Policies
         /// <param name="stepContext">The step execution context bound to this engine instance.</param>
         /// <param name="obs">The runtime observability facade.</param>
         /// <exception cref="ArgumentNullException">
-        /// Thrown when <paramref name="policyRegistry"/> or <paramref name="stepContext"/> is <see langword="null"/>.
+        /// Thrown when <paramref name="policyRegistry"/>, <paramref name="stepContext"/>,
+        /// or <paramref name="obs"/> is <see langword="null"/>.
         /// </exception>
         protected AiPolicyEngine(
             IAiPolicyRegistry policyRegistry,
@@ -108,6 +119,8 @@ namespace Multiplexed.AI.Runtime.AI.Policies
 
             var executionId = StepContext.ExecutionId;
             var stepName = StepContext.StepName;
+            var pipelineKey = ResolvePipelineKey();
+            var workerId = ResolveWorkerId();
 
             foreach (var policy in policies)
             {
@@ -125,6 +138,19 @@ namespace Multiplexed.AI.Runtime.AI.Policies
                 using var scope = _obs.Tracer.StartStep(traceContext);
 
                 var start = DateTime.UtcNow;
+
+                await RecordPolicyLedgerEventAsync(
+                        executionId,
+                        pipelineKey,
+                        stepName,
+                        workerId,
+                        policyName,
+                        AiDecisionLedgerEvents.Policy.Evaluated,
+                        AiDecisionLedgerOutcome.Started,
+                        "Policy evaluation started.",
+                        null,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 try
                 {
@@ -154,6 +180,23 @@ namespace Multiplexed.AI.Runtime.AI.Policies
                         policyName,
                         result.Kind);
 
+                    await RecordPolicyLedgerEventAsync(
+                            executionId,
+                            pipelineKey,
+                            stepName,
+                            workerId,
+                            policyName,
+                            ResolvePolicyDecisionEventType(result),
+                            ResolvePolicyDecisionOutcome(result),
+                            result.Message ?? ResolvePolicyDecisionReason(result),
+                            new Dictionary<string, string>
+                            {
+                                ["duration.ms"] = duration.TotalMilliseconds.ToString("F2"),
+                                ["result.kind"] = result.Kind.ToString(),
+                                ["result.success"] = result.IsSuccess.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -166,11 +209,156 @@ namespace Multiplexed.AI.Runtime.AI.Policies
                         executionId,
                         policyName);
 
+                    await RecordPolicyLedgerEventAsync(
+                            executionId,
+                            pipelineKey,
+                            stepName,
+                            workerId,
+                            policyName,
+                            AiDecisionLedgerEvents.Policy.Failed,
+                            AiDecisionLedgerOutcome.Failed,
+                            ex.Message,
+                            new Dictionary<string, string>
+                            {
+                                ["exception.type"] = ex.GetType().Name
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     throw;
                 }
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Records a policy decision ledger event.
+        /// </summary>
+        private async Task RecordPolicyLedgerEventAsync(
+            string executionId,
+            string pipelineKey,
+            string stepName,
+            string workerId,
+            string policyName,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? additionalMetadata,
+            CancellationToken cancellationToken)
+        {
+            if (_obs.Ledger is null)
+            {
+                return;
+            }
+
+            var metadata = new Dictionary<string, string>
+            {
+                ["policy.name"] = policyName,
+                ["policy.kind"] = Kind.ToString(),
+                ["pipeline.key"] = pipelineKey,
+                ["step.name"] = stepName,
+                ["worker.id"] = workerId
+            };
+
+            if (additionalMetadata is not null)
+            {
+                foreach (var pair in additionalMetadata)
+                {
+                    metadata[pair.Key] = pair.Value;
+                }
+            }
+
+            var correlationContext = AiRuntimeCorrelationContextHelper.Create(
+                executionId,
+                pipelineKey,
+                stepName,
+                workerId,
+                claimToken: null,
+                concurrencyContext: null);
+
+            await _obs.Ledger
+                .RecordAsync(
+                    correlationContext,
+                    AiDecisionLedgerCategory.Policy,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Resolves the policy decision ledger event type from a policy result.
+        /// </summary>
+        private static string ResolvePolicyDecisionEventType(
+            AiPolicyResult result)
+        {
+            if (result.Kind == AiPolicyResultKind.Block)
+            {
+                return AiDecisionLedgerEvents.Policy.Denied;
+            }
+
+            return result.IsSuccess
+                ? AiDecisionLedgerEvents.Policy.Allowed
+                : AiDecisionLedgerEvents.Policy.Failed;
+        }
+
+        /// <summary>
+        /// Resolves the policy decision ledger outcome from a policy result.
+        /// </summary>
+        private static AiDecisionLedgerOutcome ResolvePolicyDecisionOutcome(
+            AiPolicyResult result)
+        {
+            if (result.Kind == AiPolicyResultKind.Block)
+            {
+                return AiDecisionLedgerOutcome.Denied;
+            }
+
+            return result.IsSuccess
+                ? AiDecisionLedgerOutcome.Allowed
+                : AiDecisionLedgerOutcome.Failed;
+        }
+
+        /// <summary>
+        /// Resolves a fallback policy decision reason.
+        /// </summary>
+        private static string ResolvePolicyDecisionReason(
+            AiPolicyResult result)
+        {
+            if (result.Kind == AiPolicyResultKind.Block)
+            {
+                return "Policy denied execution.";
+            }
+
+            return result.IsSuccess
+                ? "Policy allowed execution."
+                : "Policy evaluation failed.";
+        }
+
+        /// <summary>
+        /// Resolves the best available pipeline key for policy ledger correlation.
+        /// </summary>
+        private string ResolvePipelineKey()
+        {
+            var pipelineName = StepContext.Execution.Record.PipelineName;
+
+            return string.IsNullOrWhiteSpace(pipelineName)
+                ? PolicyPipelineFallback
+                : pipelineName!;
+        }
+
+        /// <summary>
+        /// Resolves the best available worker identifier for policy ledger correlation.
+        /// </summary>
+        private string ResolveWorkerId()
+        {
+            var workerId = StepContext.Execution.Record.CurrentStep;
+
+            return string.IsNullOrWhiteSpace(workerId)
+                ? PolicyWorkerFallback
+                : workerId!;
         }
     }
 }

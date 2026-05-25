@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Multiplexed.Abstractions.AI.Execution.Control;
+using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 
 namespace Multiplexed.AI.Runtime.Execution.Control
 {
@@ -18,8 +21,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
     public sealed class AiExecutionControlService : IAiExecutionControlService
     {
         private const int MaxUpdateAttempts = 8;
+        private const string ControlPipelineKey = "execution-control";
+        private const string ControlScope = "_control";
+        private const string HumanInputScope = "_human_input";
 
         private readonly IAiExecutionControlStore _store;
+        private readonly IAiRuntimeObservability? _observability;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiExecutionControlService"/> class.
@@ -35,8 +42,24 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             _store = store;
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiExecutionControlService"/> class.
+        /// </summary>
+        /// <param name="store">The durable execution control store.</param>
+        /// <param name="observability">The runtime observability facade.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="store"/> is null.
+        /// </exception>
+        public AiExecutionControlService(
+            IAiExecutionControlStore store,
+            IAiRuntimeObservability observability)
+            : this(store)
+        {
+            _observability = observability;
+        }
+
         /// <inheritdoc />
-        public Task<AiExecutionControlState> PauseExecutionAsync(
+        public async Task<AiExecutionControlState> PauseExecutionAsync(
             string executionId,
             string? reason = null,
             string? requestedBy = null,
@@ -44,28 +67,52 @@ namespace Multiplexed.AI.Runtime.Execution.Control
         {
             ValidateExecutionId(executionId);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyPause(existing, executionId, reason, requestedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyPause(existing, executionId, reason, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.PauseRequested,
+                    AiDecisionLedgerOutcome.Applied,
+                    reason ?? "Execution pause requested.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> ResumeExecutionAsync(
+        public async Task<AiExecutionControlState> ResumeExecutionAsync(
             string executionId,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
             ValidateExecutionId(executionId);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyResume(existing, executionId, requestedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyResume(existing, executionId, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.ResumeRequested,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Execution resume requested.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> CancelExecutionAsync(
+        public async Task<AiExecutionControlState> CancelExecutionAsync(
             string executionId,
             string? reason = null,
             string? requestedBy = null,
@@ -73,14 +120,26 @@ namespace Multiplexed.AI.Runtime.Execution.Control
         {
             ValidateExecutionId(executionId);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyCancel(existing, executionId, reason, requestedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyCancel(existing, executionId, reason, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.CancelRequested,
+                    AiDecisionLedgerOutcome.Applied,
+                    reason ?? "Execution cancellation requested.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> MarkWaitingForInputAsync(
+        public async Task<AiExecutionControlState> MarkWaitingForInputAsync(
             string executionId,
             string waitingKey,
             string? waitingStepName = null,
@@ -95,20 +154,43 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 throw new ArgumentException("Waiting key cannot be null, empty, or whitespace.", nameof(waitingKey));
             }
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyWaitingForInput(
-                    existing,
+            var state = await ApplyTransitionAsync(
                     executionId,
-                    waitingKey,
-                    waitingStepName,
-                    reason,
-                    requestedBy),
-                cancellationToken);
+                    existing => ApplyWaitingForInput(
+                        existing,
+                        executionId,
+                        waitingKey,
+                        waitingStepName,
+                        reason,
+                        requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var metadata = CreateHumanInputMetadata(state);
+
+            await RecordHumanInputLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.HumanInput.Requested,
+                    AiDecisionLedgerOutcome.Applied,
+                    reason ?? "Human input requested.",
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordHumanInputLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.HumanInput.Waiting,
+                    AiDecisionLedgerOutcome.Applied,
+                    reason ?? "Execution is waiting for human input.",
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> SubmitHumanInputAsync(
+        public async Task<AiExecutionControlState> SubmitHumanInputAsync(
             string executionId,
             string waitingKey,
             IReadOnlyDictionary<string, object?> input,
@@ -124,10 +206,22 @@ namespace Multiplexed.AI.Runtime.Execution.Control
 
             ArgumentNullException.ThrowIfNull(input);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyHumanInput(existing, executionId, waitingKey, input, submittedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyHumanInput(existing, executionId, waitingKey, input, submittedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordHumanInputLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.HumanInput.Submitted,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Human input submitted.",
+                    CreateHumanInputMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
@@ -185,31 +279,55 @@ namespace Multiplexed.AI.Runtime.Execution.Control
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> MarkPausedAsync(
+        public async Task<AiExecutionControlState> MarkPausedAsync(
             string executionId,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
             ValidateExecutionId(executionId);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyMarkPaused(existing, executionId, requestedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyMarkPaused(existing, executionId, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.Paused,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Execution marked as paused after active work drained.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlState> MarkRunningAsync(
+        public async Task<AiExecutionControlState> MarkRunningAsync(
             string executionId,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
             ValidateExecutionId(executionId);
 
-            return ApplyTransitionAsync(
-                executionId,
-                existing => ApplyMarkRunning(existing, executionId, requestedBy),
-                cancellationToken);
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyMarkRunning(existing, executionId, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.Resumed,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Execution marked as running after resume or human input.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
         }
 
         private async Task<AiExecutionControlState> ApplyTransitionAsync(
@@ -456,6 +574,123 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             state.RequestedBy = requestedBy ?? state.RequestedBy;
 
             return state;
+        }
+
+        private async Task RecordControlLedgerEventAsync(
+            AiExecutionControlState state,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken cancellationToken)
+        {
+            await RecordLedgerEventAsync(
+                    state,
+                    ControlScope,
+                    AiDecisionLedgerCategory.Control,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private async Task RecordHumanInputLedgerEventAsync(
+            AiExecutionControlState state,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken cancellationToken)
+        {
+            var stepName = !string.IsNullOrWhiteSpace(state.WaitingStepName)
+                ? state.WaitingStepName!
+                : !string.IsNullOrWhiteSpace(state.WaitingKey)
+                    ? state.WaitingKey!
+                    : HumanInputScope;
+
+            await RecordLedgerEventAsync(
+                    state,
+                    stepName,
+                    AiDecisionLedgerCategory.HumanInput,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private async Task RecordLedgerEventAsync(
+            AiExecutionControlState state,
+            string stepName,
+            AiDecisionLedgerCategory category,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+
+            if (_observability?.Ledger is null)
+            {
+                return;
+            }
+
+            var workerId = string.IsNullOrWhiteSpace(state.RequestedBy)
+                ? "execution-control"
+                : state.RequestedBy!;
+
+            var correlationContext = AiRuntimeCorrelationContextHelper.Create(
+                state.ExecutionId,
+                ControlPipelineKey,
+                stepName,
+                workerId,
+                claimToken: null,
+                concurrencyContext: null);
+
+            await _observability.Ledger
+                .RecordAsync(
+                    correlationContext,
+                    category,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private static IReadOnlyDictionary<string, string> CreateControlMetadata(
+            AiExecutionControlState state)
+        {
+            return new Dictionary<string, string>
+            {
+                ["status"] = state.Status.ToString(),
+                ["pending.action"] = state.PendingAction.ToString(),
+                ["requested.by"] = state.RequestedBy ?? string.Empty,
+                ["reason"] = state.Reason ?? string.Empty,
+                ["version"] = state.Version.ToString()
+            };
+        }
+
+        private static IReadOnlyDictionary<string, string> CreateHumanInputMetadata(
+            AiExecutionControlState state)
+        {
+            return new Dictionary<string, string>
+            {
+                ["status"] = state.Status.ToString(),
+                ["pending.action"] = state.PendingAction.ToString(),
+                ["requested.by"] = state.RequestedBy ?? string.Empty,
+                ["waiting.key"] = state.WaitingKey ?? string.Empty,
+                ["waiting.step.name"] = state.WaitingStepName ?? string.Empty,
+                ["input.keys.count"] = state.Input.Count.ToString(),
+                ["version"] = state.Version.ToString()
+            };
         }
 
         private static AiExecutionControlState CloneOrCreate(
