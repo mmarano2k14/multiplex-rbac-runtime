@@ -11,25 +11,11 @@ using Multiplexed.AI.Runtime.Execution.Engine.Retention;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 {
-    /// <summary>
-    /// Coordinates distributed execution convergence persistence and terminal finalization.
-    /// </summary>
-    /// <remarks>
-    /// This service is responsible for persisting converged execution records in a
-    /// distributed-safe manner. It also applies durable execution control state before
-    /// terminal finalization so that cancellation requests take precedence over normal
-    /// DAG completion.
-    /// </remarks>
     public sealed class AiDagExecutionFinalizationService
     {
         private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly AiDagRetentionCoordinator _retentionCoordinator;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="AiDagExecutionFinalizationService"/> class.
-        /// </summary>
-        /// <param name="engineServices">The DAG execution engine services.</param>
-        /// <param name="retentionCoordinator">The retention coordinator.</param>
         public AiDagExecutionFinalizationService(
             IAiDagExecutionEngineServices engineServices,
             AiDagRetentionCoordinator retentionCoordinator)
@@ -38,18 +24,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
             _retentionCoordinator = retentionCoordinator ?? throw new ArgumentNullException(nameof(retentionCoordinator));
         }
 
-        /// <summary>
-        /// Persists a converged execution record in a distributed-safe manner.
-        /// </summary>
-        /// <param name="record">The execution record projection to persist.</param>
-        /// <param name="convergence">The evaluated convergence result.</param>
-        /// <param name="expectedStepKey">The optimistic execution step key.</param>
-        /// <param name="state">The authoritative execution state.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="buildExecutionContext">Factory used to build execution contexts.</param>
-        /// <param name="persistAsync">Fallback persistence delegate for non-distributed execution.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous persistence operation.</returns>
         public async Task PersistDistributedConvergedRecordAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -77,11 +51,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 record.TouchVersion();
                 record.RenewExecutionStepKey();
 
-                await persistAsync(
-                        record,
-                        expectedStepKey,
-                        state,
-                        cancellationToken)
+                await persistAsync(record, expectedStepKey, state, cancellationToken)
                     .ConfigureAwait(false);
 
                 return;
@@ -126,31 +96,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                         .ConfigureAwait(false);
                 }
 
-                _engineServices.Logger.Engine.LogInformation(
-                    $"[AI DAG] Finalization attempt. ExecutionId='{record.ExecutionId}', Status='{finalStatus}', ExpectedStepKey='{expectedStepKey}'.");
-
                 try
                 {
-                    var retentionStep = resolvedPipeline.Steps.FirstOrDefault()
-                        ?? throw new InvalidOperationException(
-                            $"Pipeline '{resolvedPipeline.Name}' does not contain any resolved step for retention context creation.");
-
-                    var executionContext = buildExecutionContext(
-                        record,
-                        state,
-                        cancellationToken);
-
-                    var retentionStepContext = new AiStepExecutionContext(
-                        executionContext,
-                        retentionStep);
-
-                    await _retentionCoordinator.ApplyRetentionPersistAndWarmAsync(
-                            record.ExecutionId,
-                            state,
-                            retentionStepContext,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
                     var request = new AiDagExecutionFinalizationRequest
                     {
                         ExecutionId = record.ExecutionId,
@@ -210,9 +157,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
                         if (refreshed is not null)
                         {
-                            AiDagExecutionRecordFinalizer.ApplyAuthoritativeRecord(
-                                record,
-                                refreshed);
+                            AiDagExecutionRecordFinalizer.ApplyAuthoritativeRecord(record, refreshed);
                         }
 
                         return;
@@ -239,6 +184,26 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                             cancellationToken)
                         .ConfigureAwait(false);
 
+                    var retentionStep = resolvedPipeline.Steps.FirstOrDefault()
+                        ?? throw new InvalidOperationException(
+                            $"Pipeline '{resolvedPipeline.Name}' does not contain any resolved step for retention context creation.");
+
+                    var executionContext = buildExecutionContext(
+                        record,
+                        state,
+                        cancellationToken);
+
+                    var retentionStepContext = new AiStepExecutionContext(
+                        executionContext,
+                        retentionStep);
+
+                    await _retentionCoordinator.ApplyRetentionPersistAndWarmAsync(
+                            record.ExecutionId,
+                            state,
+                            retentionStepContext,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     _engineServices.Logger.Engine.FinalizationSucceeded(
                         record.ExecutionId,
                         finalStatus);
@@ -250,9 +215,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
                     if (updated is not null)
                     {
-                        AiDagExecutionRecordFinalizer.ApplyAuthoritativeRecord(
-                            record,
-                            updated);
+                        AiDagExecutionRecordFinalizer.ApplyAuthoritativeRecord(record, updated);
                     }
 
                     return;
@@ -278,24 +241,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
             record.TouchVersion();
             record.RenewExecutionStepKey();
 
-            await _engineServices.DagStore.SaveRecordAsync(
-                    record,
-                    cancellationToken)
+            await _engineServices.DagStore.SaveRecordAsync(record, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Resolves the terminal execution status by applying durable execution control state.
-        /// </summary>
-        /// <param name="executionId">The durable execution identifier.</param>
-        /// <param name="convergedStatus">The status produced by DAG convergence.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The final terminal status that should be persisted.</returns>
-        /// <remarks>
-        /// Cancellation control has precedence over normal completion. This prevents an
-        /// execution that has received a distributed cancellation request from converging
-        /// as completed simply because already-claimed work finished safely.
-        /// </remarks>
         private async Task<AiExecutionStatus> ResolveFinalStatusAsync(
             string executionId,
             AiExecutionStatus convergedStatus,
@@ -312,25 +261,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
             }
 
             var decision = await _engineServices.ExecutionControlGate
-                .CheckBeforeAdvanceAsync(
-                    executionId,
-                    cancellationToken)
+                .CheckBeforeAdvanceAsync(executionId, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (decision is null || !decision.ShouldCancel)
-            {
-                return convergedStatus;
-            }
-
-            _engineServices.Logger.Engine.LogInformation(
-                $"[AI DAG] Final status overridden by execution control cancellation. ExecutionId='{executionId}', ConvergedStatus='{convergedStatus}', ControlStatus='{decision.Status}', Reason='{decision.Reason}'.");
-
-            return AiExecutionStatus.Cancelled;
+            return decision is { ShouldCancel: true }
+                ? AiExecutionStatus.Cancelled
+                : convergedStatus;
         }
 
-        /// <summary>
-        /// Records a finalization started ledger event.
-        /// </summary>
         private async Task RecordFinalizationStartedAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -349,8 +287,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_finalization",
                     "_finalization",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Finalization,
                     AiDecisionLedgerEvents.Finalization.Started,
                     AiDecisionLedgerOutcome.Started,
@@ -368,9 +306,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Records a cancellation override ledger event.
-        /// </summary>
         private async Task RecordCancellationOverrideAppliedAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -388,8 +323,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_finalization",
                     "_finalization",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Finalization,
                     AiDecisionLedgerEvents.Finalization.CancellationOverrideApplied,
                     AiDecisionLedgerOutcome.Applied,
@@ -406,9 +341,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Records a finalization completed ledger event.
-        /// </summary>
         private async Task RecordFinalizationCompletedAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -426,8 +358,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_finalization",
                     "_finalization",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Finalization,
                     AiDecisionLedgerEvents.Finalization.Completed,
                     AiDecisionLedgerOutcome.Completed,
@@ -444,9 +376,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Records a finalization race-lost ledger event.
-        /// </summary>
         private async Task RecordFinalizationRaceLostAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -465,8 +394,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_finalization",
                     "_finalization",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Finalization,
                     AiDecisionLedgerEvents.Finalization.RaceLost,
                     AiDecisionLedgerOutcome.Denied,
@@ -484,9 +413,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Records a finalization failed ledger event.
-        /// </summary>
         private async Task RecordFinalizationFailedAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -505,8 +431,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_finalization",
                     "_finalization",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Finalization,
                     AiDecisionLedgerEvents.Finalization.Failed,
                     AiDecisionLedgerOutcome.Failed,
@@ -523,9 +449,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Records execution terminal ledger events after successful finalization.
-        /// </summary>
         private async Task RecordExecutionTerminalEventsAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -542,8 +465,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_execution",
                     "_execution",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Execution,
                     AiDecisionLedgerEvents.Execution.Finalized,
                     ToExecutionOutcome(finalStatus),
@@ -565,8 +488,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "_execution",
                     "_execution",
                     runtimeInstanceId,
-                    claimToken: null,
-                    concurrencyContext: null,
+                    null,
+                    null,
                     AiDecisionLedgerCategory.Execution,
                     ToExecutionEventType(finalStatus),
                     ToExecutionOutcome(finalStatus),
@@ -582,11 +505,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                 .ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Converts a terminal execution status into a decision ledger event type.
-        /// </summary>
-        private static string ToExecutionEventType(
-            AiExecutionStatus status)
+        private static string ToExecutionEventType(AiExecutionStatus status)
         {
             return status switch
             {
@@ -597,11 +516,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
             };
         }
 
-        /// <summary>
-        /// Converts a terminal execution status into a decision ledger outcome.
-        /// </summary>
-        private static AiDecisionLedgerOutcome ToExecutionOutcome(
-            AiExecutionStatus status)
+        private static AiDecisionLedgerOutcome ToExecutionOutcome(AiExecutionStatus status)
         {
             return status switch
             {
