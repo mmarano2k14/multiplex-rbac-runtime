@@ -114,46 +114,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <summary>
         /// Creates the concurrency context matching the lease acquired by the claim service.
         /// </summary>
-        /// <param name="executionId">
-        /// The execution identifier.
-        /// </param>
-        /// <param name="pipelineKey">
-        /// The stable pipeline key.
-        /// </param>
-        /// <param name="stepName">
-        /// The claimed step name.
-        /// </param>
-        /// <param name="runtimeInstanceId">
-        /// The stable runtime instance identifier participating in distributed execution.
-        /// </param>
-        /// <param name="stepState">
-        /// The step state containing optional provider, model, and operation metadata.
-        /// </param>
-        /// <returns>
-        /// The concurrency context used to release the lease.
-        /// </returns>
-        /// <remarks>
-        /// <para>
-        /// The lease id format must stay aligned with <c>AiDagStepClaimService</c>.
-        /// </para>
-        ///
-        /// <para>
-        /// The runtime instance id identifies the runtime host/process that owns the
-        /// concurrency lease. It must remain stable for the lifetime of the runtime instance.
-        /// </para>
-        ///
-        /// <para>
-        /// The lease id identifies one concrete concurrency admission for one execution step.
-        /// It is deterministic for the tuple execution id, step name, and runtime instance id
-        /// so the same context can be reconstructed later for release.
-        /// </para>
-        ///
-        /// <para>
-        /// Provider, model, and operation must be reconstructed from the same step configuration
-        /// used during admission. This ensures provider/model/operation scopes are released
-        /// together with the existing global, pipeline, step, execution, and instance scopes.
-        /// </para>
-        /// </remarks>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="pipelineKey">The stable pipeline key.</param>
+        /// <param name="stepName">The claimed step name.</param>
+        /// <param name="runtimeInstanceId">The stable runtime instance identifier participating in distributed execution.</param>
+        /// <param name="stepState">The step state containing optional provider, model, and operation metadata.</param>
+        /// <returns>The concurrency context used to release the lease.</returns>
         public static AiConcurrencyContext CreateConcurrencyContext(
             string executionId,
             string pipelineKey,
@@ -186,20 +152,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <summary>
         /// Attempts to read a string value from a step configuration dictionary.
         /// </summary>
-        /// <param name="config">
-        /// The step configuration dictionary.
-        /// </param>
-        /// <param name="key">
-        /// The configuration key to read.
-        /// </param>
-        /// <returns>
-        /// The string value when present and non-empty; otherwise, <c>null</c>.
-        /// </returns>
-        /// <remarks>
-        /// Step configuration values may come from strongly typed objects, JSON deserialization,
-        /// or dictionary-based pipeline definitions. This helper supports plain strings,
-        /// <see cref="JsonElement"/> string values, and simple scalar JSON values.
-        /// </remarks>
+        /// <param name="config">The step configuration dictionary.</param>
+        /// <param name="key">The configuration key to read.</param>
+        /// <returns>The string value when present and non-empty; otherwise, <c>null</c>.</returns>
         public static string? TryReadString(
             IReadOnlyDictionary<string, object?>? config,
             string key)
@@ -221,49 +176,15 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <summary>
         /// Creates the effective concurrency admission data for a DAG step.
         /// </summary>
-        /// <param name="executionId">
-        /// The execution identifier.
-        /// </param>
-        /// <param name="pipelineKey">
-        /// The stable pipeline key.
-        /// </param>
-        /// <param name="stepName">
-        /// The concrete step name.
-        /// </param>
-        /// <param name="runtimeInstanceId">
-        /// The stable runtime instance identifier participating in distributed execution.
-        /// </param>
-        /// <param name="stepState">
-        /// The step state containing concurrency, provider, model, and operation config.
-        /// </param>
-        /// <param name="pipelineConfig">
-        /// The optional pipeline-level configuration used to resolve effective concurrency rules.
-        /// </param>
-        /// <param name="stepDefinition">
-        /// The pipeline step definition used to resolve step-level concurrency rules.
-        /// </param>
-        /// <param name="definitionResolver">
-        /// The concurrency definition resolver.
-        /// </param>
-        /// <returns>
-        /// The concurrency context and effective concurrency definition.
-        /// </returns>
-        /// <remarks>
-        /// <para>
-        /// This helper centralizes the full admission preparation flow:
-        /// </para>
-        ///
-        /// <list type="number">
-        /// <item><description>Resolve <see cref="AiConcurrencyDefinition"/> from step config.</description></item>
-        /// <item><description>Create <see cref="AiConcurrencyContext"/> from runtime and step metadata.</description></item>
-        /// <item><description>Apply matching generic throttle rules using the runtime context.</description></item>
-        /// </list>
-        ///
-        /// <para>
-        /// It is important that acquire and release paths use the same effective definition
-        /// so Redis scope acquisition and release remain aligned.
-        /// </para>
-        /// </remarks>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="pipelineKey">The stable pipeline key.</param>
+        /// <param name="stepName">The concrete step name.</param>
+        /// <param name="runtimeInstanceId">The stable runtime instance identifier participating in distributed execution.</param>
+        /// <param name="stepState">The step state containing concurrency, provider, model, and operation config.</param>
+        /// <param name="pipelineConfig">The optional pipeline-level configuration used to resolve effective concurrency rules.</param>
+        /// <param name="stepDefinition">The pipeline step definition used to resolve step-level concurrency rules.</param>
+        /// <param name="definitionResolver">The concurrency definition resolver.</param>
+        /// <returns>The concurrency context and effective concurrency definition.</returns>
         public static AiDagConcurrencyAdmission CreateConcurrencyAdmission(
             string executionId,
             string pipelineKey,
@@ -290,8 +211,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 Config = pipelineConfig ?? new Dictionary<string, object?>(),
                 Steps = new[]
                 {
-            stepDefinition
-        }
+                    stepDefinition
+                }
             };
 
             var definition = definitionResolver.Resolve(
@@ -340,7 +261,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <param name="services">The DAG execution engine services.</param>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="pipelineKey">The pipeline key.</param>
-        /// <param name="stepName">The DAG step name, or a stable synthetic scope such as "_execution" for execution-level events..</param>
+        /// <param name="stepName">The DAG step name, or a stable synthetic scope such as "_execution" for execution-level events.</param>
         /// <param name="workerId">The worker identifier.</param>
         /// <param name="claimToken">The optional claim token.</param>
         /// <param name="concurrencyContext">The optional concurrency context.</param>
@@ -505,6 +426,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 return;
             }
 
+            if (stepState.Status == AiStepExecutionStatus.Completed ||
+                stepState.Status == AiStepExecutionStatus.Running ||
+                stepState.Status == AiStepExecutionStatus.Ready)
+            {
+                return;
+            }
+
             var retryCount = stepState.RetryState?.RetryCount ?? 0;
             var maxRetries = stepState.Retry?.MaxRetries;
             var budgetExhausted = maxRetries.HasValue && retryCount >= maxRetries.Value;
@@ -541,15 +469,9 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
         /// <summary>
         /// Resolves recovered step names by comparing recovery counters before and after recovery.
         /// </summary>
-        /// <param name="beforeRecoveryCounts">
-        /// The recovery count per step before the recovery operation.
-        /// </param>
-        /// <param name="afterState">
-        /// The execution state after recovery.
-        /// </param>
-        /// <returns>
-        /// The step names whose recovery count increased.
-        /// </returns>
+        /// <param name="beforeRecoveryCounts">The recovery count per step before the recovery operation.</param>
+        /// <param name="afterState">The execution state after recovery.</param>
+        /// <returns>The step names whose recovery count increased.</returns>
         public static IReadOnlyList<string> ResolveRecoveredStepNames(
             IReadOnlyDictionary<string, int> beforeRecoveryCounts,
             AiExecutionState? afterState)
@@ -582,6 +504,5 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Helpers
                 .OrderBy(stepName => stepName, StringComparer.Ordinal)
                 .ToArray();
         }
-
     }
 }

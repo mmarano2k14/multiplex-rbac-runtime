@@ -27,11 +27,26 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
         /// </summary>
         /// <param name="executionId">The durable execution identifier.</param>
         /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="stepName">The DAG step name.</param>
+        /// <param name="stepName">
+        /// The logical DAG step name. In the correlation model this maps to <c>StepId</c>.
+        /// </param>
         /// <param name="workerId">The worker or runtime instance identifier.</param>
         /// <param name="claimToken">The optional distributed claim token.</param>
-        /// <param name="concurrencyContext">The optional concurrency context.</param>
+        /// <param name="concurrencyContext">
+        /// The optional concurrency context used to enrich step key, provider, model,
+        /// operation, and runtime instance correlation.
+        /// </param>
         /// <returns>The runtime correlation context.</returns>
+        /// <remarks>
+        /// <para>
+        /// <c>StepId</c> is the logical DAG step identity, for example
+        /// <c>chaos-step-001</c>.
+        /// </para>
+        /// <para>
+        /// <c>StepKey</c> is the implementation/type key, for example
+        /// <c>hello-world</c> or <c>distributed.chaos.flaky-provider</c>.
+        /// </para>
+        /// </remarks>
         public static AiRuntimeCorrelationContext Create(
             string executionId,
             string pipelineKey,
@@ -49,8 +64,13 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
             {
                 ExecutionId = executionId,
                 PipelineName = pipelineKey,
+
+                // Logical DAG step identity.
                 StepId = stepName,
+
+                // Technical implementation/type key.
                 StepKey = concurrencyContext?.StepKey ?? stepName,
+
                 RuntimeInstanceId = concurrencyContext?.RuntimeInstanceId ?? workerId,
                 WorkerId = workerId,
                 ClaimToken = claimToken,

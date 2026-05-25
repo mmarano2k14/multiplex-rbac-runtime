@@ -560,6 +560,18 @@
             /// Indicates that cancellation finalization override was applied.
             /// </summary>
             public const string CancellationOverrideApplied = "finalization.cancellation_override_applied";
+
+            /// <summary>
+            /// Indicates that a distributed finalization attempt lost the optimistic
+            /// finalization race because another worker already finalized or updated
+            /// the execution.
+            /// </summary>
+            /// <remarks>
+            /// This is not a system failure. It is an expected distributed coordination
+            /// outcome when multiple workers observe terminal convergence at the same time.
+            /// Only one worker can successfully finalize the execution.
+            /// </remarks>
+            public const string RaceLost = "finalization.race_lost";
         }
     }
 }

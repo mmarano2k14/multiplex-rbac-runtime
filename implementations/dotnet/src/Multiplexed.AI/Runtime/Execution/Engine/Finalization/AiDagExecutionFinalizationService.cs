@@ -187,7 +187,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 
                     if (!success)
                     {
-                        await RecordFinalizationFailedAsync(
+                        await RecordFinalizationRaceLostAsync(
                                 record,
                                 finalStatus,
                                 expectedStepKey,
@@ -331,16 +331,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Records a finalization started ledger event.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="convergence">The convergence result.</param>
-        /// <param name="finalStatus">The resolved final status.</param>
-        /// <param name="expectedStepKey">The expected optimistic execution step key.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="completedStepsCount">The completed steps count.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous record operation.</returns>
         private async Task RecordFinalizationStartedAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -380,15 +370,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Records a cancellation override ledger event.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="convergence">The convergence result.</param>
-        /// <param name="finalStatus">The resolved final status.</param>
-        /// <param name="expectedStepKey">The expected optimistic execution step key.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous record operation.</returns>
         private async Task RecordCancellationOverrideAppliedAsync(
             AiExecutionRecord record,
             AiDagExecutionConvergenceResult convergence,
@@ -426,15 +407,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Records a finalization completed ledger event.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="finalStatus">The resolved final status.</param>
-        /// <param name="expectedStepKey">The expected optimistic execution step key.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="completedStepsCount">The completed steps count.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous record operation.</returns>
         private async Task RecordFinalizationCompletedAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -470,18 +442,47 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         }
 
         /// <summary>
+        /// Records a finalization race-lost ledger event.
+        /// </summary>
+        private async Task RecordFinalizationRaceLostAsync(
+            AiExecutionRecord record,
+            AiExecutionStatus finalStatus,
+            string expectedStepKey,
+            ResolvedAiPipeline resolvedPipeline,
+            int completedStepsCount,
+            string pipelineKey,
+            string runtimeInstanceId,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _engineServices,
+                    record.ExecutionId,
+                    pipelineKey,
+                    "_finalization",
+                    runtimeInstanceId,
+                    claimToken: null,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Finalization,
+                    AiDecisionLedgerEvents.Finalization.RaceLost,
+                    AiDecisionLedgerOutcome.Denied,
+                    reason,
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.name"] = resolvedPipeline.Name,
+                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["final.status"] = finalStatus.ToString(),
+                        ["expected.step.key"] = expectedStepKey,
+                        ["completed.steps.count"] = completedStepsCount.ToString(),
+                        ["race.type"] = "distributed-finalization"
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Records a finalization failed ledger event.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="finalStatus">The resolved final status.</param>
-        /// <param name="expectedStepKey">The expected optimistic execution step key.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="completedStepsCount">The completed steps count.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
-        /// <param name="reason">The failure reason.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous record operation.</returns>
         private async Task RecordFinalizationFailedAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -520,14 +521,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Records execution terminal ledger events after successful finalization.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="finalStatus">The terminal final status.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline.</param>
-        /// <param name="completedStepsCount">The completed steps count.</param>
-        /// <param name="pipelineKey">The stable pipeline key.</param>
-        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task representing the asynchronous record operation.</returns>
         private async Task RecordExecutionTerminalEventsAsync(
             AiExecutionRecord record,
             AiExecutionStatus finalStatus,
@@ -585,8 +578,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Converts a terminal execution status into a decision ledger event type.
         /// </summary>
-        /// <param name="status">The terminal execution status.</param>
-        /// <returns>The matching decision ledger event type.</returns>
         private static string ToExecutionEventType(
             AiExecutionStatus status)
         {
@@ -602,8 +593,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
         /// <summary>
         /// Converts a terminal execution status into a decision ledger outcome.
         /// </summary>
-        /// <param name="status">The terminal execution status.</param>
-        /// <returns>The matching decision ledger outcome.</returns>
         private static AiDecisionLedgerOutcome ToExecutionOutcome(
             AiExecutionStatus status)
         {

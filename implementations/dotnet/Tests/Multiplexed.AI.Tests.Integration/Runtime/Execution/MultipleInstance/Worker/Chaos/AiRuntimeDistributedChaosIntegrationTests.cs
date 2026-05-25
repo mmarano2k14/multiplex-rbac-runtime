@@ -3,17 +3,20 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
+using Multiplexed.AI.Runtime.Observability.Ledger.DI;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
@@ -264,6 +267,209 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Runs a distributed chaos execution and prints the full execution-correlated
+        /// decision ledger grouped by category, event type, outcome, and chronological timeline.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This test is intentionally diagnostic. It is designed to validate and display the
+        /// complete decision ledger produced by a real distributed DAG execution.
+        /// </para>
+        /// <para>
+        /// The scenario exercises distributed workers, step claiming, step execution,
+        /// retry scheduling, retention evaluation, compaction or eviction, finalization,
+        /// execution completion, and policy decisions.
+        /// </para>
+        /// <para>
+        /// The test is skipped by default because it produces verbose output and depends on
+        /// Redis-backed distributed execution infrastructure.
+        /// </para>
+        /// </remarks>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Print_Execution_Correlated_Decision_Ledger()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            audit = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var entries = await ledger.GetByExecutionAsync(
+                    executionId);
+
+                Assert.NotEmpty(entries);
+
+                _output.WriteLine("");
+                _output.WriteLine("============================================================");
+                _output.WriteLine("EXECUTION-CORRELATED DECISION LEDGER");
+                _output.WriteLine("============================================================");
+                _output.WriteLine($"ExecutionId: {executionId}");
+                _output.WriteLine($"Pipeline:    {scenario.PipelineName}");
+                _output.WriteLine($"Steps:       {scenario.StepCount}");
+                _output.WriteLine($"Workers:     {scenario.WorkerCount}");
+                _output.WriteLine($"Events:      {entries.Count}");
+                _output.WriteLine("");
+
+                _output.WriteLine("SUMMARY BY CATEGORY / EVENT / OUTCOME");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in entries
+                    .GroupBy(entry => new
+                    {
+                        entry.Category,
+                        entry.EventType,
+                        entry.Outcome
+                    })
+                    .OrderBy(group => group.Key.Category.ToString(), StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.EventType, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome.ToString(), StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.EventType,-40} | {group.Key.Outcome,-12} | Count={group.Count()}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("TIMELINE");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var entry in entries
+                    .OrderBy(entry => entry.TimestampUtc)
+                    .ThenBy(entry => entry.EventType, StringComparer.Ordinal))
+                {
+                    var metadata = entry.Metadata is null || entry.Metadata.Count == 0
+                        ? string.Empty
+                        : string.Join(
+                            ", ",
+                            entry.Metadata
+                                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                                .Select(pair => $"{pair.Key}={pair.Value}"));
+
+                    _output.WriteLine(
+                        $"{entry.TimestampUtc:O} | " +
+                        $"{entry.Category,-16} | " +
+                        $"{entry.EventType,-40} | " +
+                        $"{entry.Outcome,-12} | " +
+                        $"StepId={entry.CorrelationContext.StepId} | " +
+                        $"StepKey={entry.CorrelationContext.StepKey} | " +
+                        $"Worker={entry.CorrelationContext.WorkerId} | " +
+                        $"Reason={entry.Reason ?? string.Empty} | " +
+                        $"Metadata=[{metadata}]");
+                }
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Execution,
+                    AiDecisionLedgerEvents.Execution.Created);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Acquired);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Step,
+                    AiDecisionLedgerEvents.Step.Started);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Step,
+                    AiDecisionLedgerEvents.Step.Completed);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retry,
+                    AiDecisionLedgerEvents.Retry.Evaluated);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retry,
+                    AiDecisionLedgerEvents.Retry.Scheduled);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evaluated);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Finalization,
+                    AiDecisionLedgerEvents.Finalization.Started);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Finalization,
+                    AiDecisionLedgerEvents.Finalization.Completed);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Execution,
+                    AiDecisionLedgerEvents.Execution.Finalized);
+
+                Assert.All(entries, entry =>
+                {
+                    Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+                    Assert.False(string.IsNullOrWhiteSpace(entry.CorrelationContext.StepId));
+                    Assert.False(string.IsNullOrWhiteSpace(entry.CorrelationContext.StepKey));
+                    Assert.False(string.IsNullOrWhiteSpace(entry.EventType));
+                });
+
+                var record = await dagStore.GetRecordAsync(
+                    executionId);
+
+                Assert.NotNull(record);
+                Assert.Equal(AiExecutionStatus.Completed, record!.Status);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
         /// Runs the distributed chaos scenario end-to-end.
         /// </summary>
         /// <param name="scenario">The distributed chaos scenario.</param>
@@ -486,6 +692,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     services.AddSingleton<IAiRuntimePipelineRunLifecycleHook>(
                         finalizedHook);
 
+                    services.AddInMemoryAiDecisionLedger();
+
                     services.AddAiStepsFromAssemblies(
                         typeof(AiRuntimeAssemblyMarker).Assembly,
                         typeof(AiRuntimeDistributedChaosIntegrationTests).Assembly);
@@ -531,6 +739,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             options.Observability.EnableTracing = true;
             options.Observability.EnableInMemoryRecording = true;
 
+            options.Observability.DecisionLedger.WriteMode = AiDecisionLedgerWriteMode.BestEffort;
+            options.Observability.DecisionLedger.StorageMode = AiDecisionLedgerStorageMode.InMemory;
+
             options.Snapshots.Enabled = true;
             options.Snapshots.Mongo.Enabled = true;
             options.Snapshots.Mongo.ConnectionString = "mongodb://localhost:27017";
@@ -544,6 +755,29 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             options.Cleanup.SuppressCleanupExceptions = true;
 
             return options;
+        }
+
+        /// <summary>
+        /// Asserts that the decision ledger contains at least one entry matching the
+        /// specified category and event type.
+        /// </summary>
+        /// <param name="entries">
+        /// The decision ledger entries recorded for the execution.
+        /// </param>
+        /// <param name="category">
+        /// The expected decision ledger category.
+        /// </param>
+        /// <param name="eventType">
+        /// The expected decision ledger event type.
+        /// </param>
+        private static void AssertLedgerContains(
+            IReadOnlyCollection<AiDecisionLedgerEntry> entries,
+            AiDecisionLedgerCategory category,
+            string eventType)
+        {
+            Assert.Contains(entries, entry =>
+                entry.Category == category &&
+                entry.EventType == eventType);
         }
 
         /// <summary>
