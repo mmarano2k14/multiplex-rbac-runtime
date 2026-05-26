@@ -81,16 +81,29 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
             var stepKey = _services.KeyBuilder.GetDagStepKey(executionId, stepName);
             var nowUnix = RedisDagStoreHelper.NowMs();
             var resultJson = JsonSerializer.Serialize(result, _services.JsonOptions);
+            var inlinePayloadSizeBytes = System.Text.Encoding.UTF8.GetByteCount(resultJson);
 
             try
             {
-                return await ExecuteCompleteAsync(stepKey, claimToken, nowUnix, resultJson);
+                return await ExecuteCompleteAsync(
+                        stepKey,
+                        claimToken,
+                        nowUnix,
+                        resultJson,
+                        inlinePayloadSizeBytes)
+                    .ConfigureAwait(false);
             }
             catch (RedisServerException ex) when (ex.Message.Contains("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
             {
                 _completeLoadedScript = _services.Helper.LoadScript(RedisDagLuaScripts.CompletePreparedScript);
 
-                return await ExecuteCompleteAsync(stepKey, claimToken, nowUnix, resultJson);
+                return await ExecuteCompleteAsync(
+                        stepKey,
+                        claimToken,
+                        nowUnix,
+                        resultJson,
+                        inlinePayloadSizeBytes)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -362,12 +375,14 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
         /// <param name="claimToken">The claim token that owns the running step.</param>
         /// <param name="nowUnix">The current UTC timestamp expressed in Unix milliseconds.</param>
         /// <param name="resultJson">The serialized step result.</param>
+        /// <param name="inlinePayloadSizeBytes">The estimated serialized inline payload size in bytes.</param>
         /// <returns><c>true</c> when the completion mutation succeeded; otherwise <c>false</c>.</returns>
         private async Task<bool> ExecuteCompleteAsync(
            string stepKey,
            string claimToken,
            long nowUnix,
-           string resultJson)
+           string resultJson,
+           long inlinePayloadSizeBytes)
         {
             var result = await _completeLoadedScript.EvaluateAsync(
                 _services.Database,
@@ -376,7 +391,8 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Dag
                     stepKey = (RedisKey)stepKey,
                     claimToken = (RedisValue)claimToken,
                     nowUnix = (RedisValue)nowUnix,
-                    resultJson = (RedisValue)resultJson
+                    resultJson = (RedisValue)resultJson,
+                    inlinePayloadSizeBytes = (RedisValue)inlinePayloadSizeBytes
                 });
 
             return (int)result! == 1;

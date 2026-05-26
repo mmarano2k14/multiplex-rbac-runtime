@@ -178,6 +178,8 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                 return value
             end
 
+            local inlinePayloadSizeBytes = tonumber(@inlinePayloadSizeBytes)
+
             local raw = redis.call('GET', @stepKey)
             if not raw then
                 return 0
@@ -205,6 +207,7 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
             step.ClaimToken = cjson.null
             step.ClaimedAtUtc = cjson.null
             step.LeaseExpiresAtUtc = cjson.null
+            step.InlinePayloadSizeBytes = inlinePayloadSizeBytes
 
             if step.RetryState ~= nil and step.RetryState ~= cjson.null then
                 step.RetryState.NextRetryAtUtc = cjson.null
@@ -828,6 +831,9 @@ namespace Multiplexed.AI.Stores.Cache.Redis.Lua
                 if step.Data ~= nil and step.Data ~= cjson.null then
                     step.Data = cjson.null
                 end
+
+                step.InlinePayloadSizeBytes = 0
+                step.inlinePayloadSizeBytes = 0
             end
 
             for _, candidate in ipairs(candidates) do

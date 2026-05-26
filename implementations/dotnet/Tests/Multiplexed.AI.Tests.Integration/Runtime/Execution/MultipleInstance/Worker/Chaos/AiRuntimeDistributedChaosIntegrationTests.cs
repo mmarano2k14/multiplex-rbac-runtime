@@ -512,11 +512,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                         }
                     });
 
-
-               
-
-                
-
                 Assert.NotNull(handle);
 
                 var final = await handle.Completion.WaitAsync(
@@ -527,40 +522,103 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 var state = await dagStore.GetStateAsync(
                     executionId);
 
-                var compactableSteps = state!.Steps
-               .Where(x =>
-                   x.Value.Status == AiStepExecutionStatus.Completed &&
-                   x.Value.InlinePayloadSizeBytes.HasValue)
-               .Select(x => new
-               {
-                   Step = x.Key,
-                   Size = x.Value.InlinePayloadSizeBytes!.Value
-               })
-               .ToArray();
-
-                _output.WriteLine("");
-                _output.WriteLine("COMPACTABLE STEPS");
-                _output.WriteLine("------------------------------------------------------------");
-
-                foreach (var step in compactableSteps.Take(20))
-                {
-                    _output.WriteLine($"{step.Step} | InlinePayloadSizeBytes={step.Size}");
-                }
-
-                _output.WriteLine($"CompactableSteps.Count={compactableSteps.Length}");
-
-
                 Assert.NotNull(final);
                 Assert.True(final.IsTerminal);
                 Assert.Equal(AiExecutionStatus.Completed, final.Status);
                 Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
-
-                
-
                 Assert.NotNull(state);
 
+                var completedSteps = state!.Steps
+                     .Where(x => x.Value.Status == AiStepExecutionStatus.Completed)
+                     .Select(x => new
+                     {
+                         Step = x.Key,
+                         Status = x.Value.Status,
+                         HasInlineSize = x.Value.InlinePayloadSizeBytes.HasValue,
+                         InlineSize = x.Value.InlinePayloadSizeBytes,
+                         HasResult = x.Value.Result is not null,
+                         IsEvicted = x.Value.IsEvictedFromHotState
+                     })
+                     .ToArray();
 
+                _output.WriteLine("");
+                _output.WriteLine("COMPLETED STEPS INLINE SIZE DEBUG");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"CompletedSteps.Count={completedSteps.Length}");
+                _output.WriteLine($"CompletedSteps.WithInlineSize.Count={completedSteps.Count(x => x.HasInlineSize)}");
+                _output.WriteLine($"CompletedSteps.WithResult.Count={completedSteps.Count(x => x.HasResult)}");
+                _output.WriteLine($"CompletedSteps.Evicted.Count={completedSteps.Count(x => x.IsEvicted)}");
 
+                foreach (var step in completedSteps.Take(20))
+                {
+                    _output.WriteLine(
+                        $"{step.Step} | Status={step.Status} | HasInlineSize={step.HasInlineSize} | InlineSize={step.InlineSize} | HasResult={step.HasResult} | IsEvicted={step.IsEvicted}");
+                }
+
+                var compactedShells = state!.Steps
+                    .Where(x =>
+                        x.Value.Status == AiStepExecutionStatus.Completed &&
+                        x.Value.Result is null &&
+                        x.Value.InlinePayloadSizeBytes.HasValue)
+                    .Select(x => new
+                    {
+                        Step = x.Key,
+                        x.Value.Status,
+                        x.Value.InlinePayloadSizeBytes,
+                        HasResult = x.Value.Result is not null,
+                        x.Value.IsEvictedFromHotState
+                    })
+                    .ToArray();
+
+                _output.WriteLine("");
+                _output.WriteLine("COMPACTED SHELLS DEBUG");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"CompactedShells.Count={compactedShells.Length}");
+
+                foreach (var step in compactedShells.Take(20))
+                {
+                    _output.WriteLine(
+                        $"{step.Step} | Status={step.Status} | InlineSize={step.InlinePayloadSizeBytes} | HasResult={step.HasResult} | IsEvicted={step.IsEvictedFromHotState}");
+                }
+
+                Assert.NotEmpty(compactedShells);
+
+                Assert.All(
+                    compactedShells,
+                    step =>
+                    {
+                        Assert.False(step.HasResult);
+                        Assert.False(step.IsEvictedFromHotState);
+                    });
+
+                // New compaction validation asserts.
+                Assert.Equal(
+                    scenario.StepCount,
+                    completedSteps.Length);
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    compactedShells.Length);
+
+                Assert.All(
+                    completedSteps,
+                    step =>
+                    {
+                        Assert.True(step.HasInlineSize);
+                        Assert.Equal(0, step.InlineSize);
+                        Assert.False(step.HasResult);
+                        Assert.False(step.IsEvicted);
+                    });
+
+                Assert.All(
+                    compactedShells,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.Equal(0, step.InlinePayloadSizeBytes);
+                        Assert.False(step.HasResult);
+                        Assert.False(step.IsEvictedFromHotState);
+                    });
 
                 await resolver.WarmAsync(
                     executionId,
@@ -604,8 +662,463 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                         entry.Category == AiDecisionLedgerCategory.Retention &&
                         entry.EventType == AiDecisionLedgerEvents.Retention.Evicted);
 
+                // New ledger validation asserts.
+                var compactedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Compacted)
+                    .ToArray();
+
+                var externalizedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Payload &&
+                        entry.EventType == AiDecisionLedgerEvents.Payload.Externalized)
+                    .ToArray();
+
+                Assert.NotEmpty(compactedEvents);
+                Assert.NotEmpty(externalizedEvents);
+
+                Assert.All(
+                    compactedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Applied, entry.Outcome));
+
+                Assert.All(
+                    externalizedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Persisted, entry.Outcome));
+
+                Assert.DoesNotContain(
+                    entries,
+                    entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Evicted);
+
                 _output.WriteLine("");
                 _output.WriteLine("ATOMIC COMPACTION LEDGER SUMMARY");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in entries
+                    .GroupBy(entry => new
+                    {
+                        entry.Category,
+                        entry.EventType,
+                        entry.Outcome
+                    })
+                    .OrderBy(group => group.Key.Category.ToString(), StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.EventType, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome.ToString(), StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.EventType,-40} | {group.Key.Outcome,-12} | Count={group.Count()}");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Runs a 100-step distributed chaos execution with retention eviction only.
+        /// </summary>
+        /// <remarks>
+        /// This test validates that atomic retention eviction is really applied.
+        /// It intentionally disables compaction policy so eviction can be validated in isolation.
+        /// </remarks>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Apply_Atomic_Eviction_When_Compaction_Is_Disabled()
+        {
+            var scenario = DistributedChaosScenario.Steps100EvictionOnly();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            evictionOnly = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var state = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(state);
+
+                var completedSteps = state!.Steps
+                    .Where(x => x.Value.Status == AiStepExecutionStatus.Completed)
+                    .Select(x => new
+                    {
+                        Step = x.Key,
+                        Status = x.Value.Status,
+                        HasInlineSize = x.Value.InlinePayloadSizeBytes.HasValue,
+                        InlineSize = x.Value.InlinePayloadSizeBytes,
+                        HasResult = x.Value.Result is not null,
+                        IsEvicted = x.Value.IsEvictedFromHotState
+                    })
+                    .ToArray();
+
+                var evictedShells = completedSteps
+                    .Where(x => x.IsEvicted)
+                    .ToArray();
+
+                _output.WriteLine("");
+                _output.WriteLine("EVICTED SHELLS DEBUG");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"CompletedSteps.Count={completedSteps.Length}");
+                _output.WriteLine($"EvictedShells.Count={evictedShells.Length}");
+                _output.WriteLine($"CompletedSteps.WithResult.Count={completedSteps.Count(x => x.HasResult)}");
+                _output.WriteLine($"CompletedSteps.WithInlineSize.Count={completedSteps.Count(x => x.HasInlineSize)}");
+
+                foreach (var step in evictedShells.Take(20))
+                {
+                    _output.WriteLine(
+                        $"{step.Step} | Status={step.Status} | InlineSize={step.InlineSize} | HasResult={step.HasResult} | IsEvicted={step.IsEvicted}");
+                }
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    completedSteps.Length);
+
+                Assert.NotEmpty(
+                    evictedShells);
+
+                Assert.All(
+                    evictedShells,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.False(step.HasResult);
+                        Assert.True(step.IsEvicted);
+                        Assert.True(step.HasInlineSize);
+                        Assert.Equal(0, step.InlineSize);
+                    });
+
+                await resolver.WarmAsync(
+                    executionId,
+                    state!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    state!,
+                    resolver);
+
+                var entries = await ledger.GetByExecutionAsync(
+                    executionId);
+
+                Assert.NotEmpty(entries);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evaluated);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Triggered);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evicted);
+
+                Assert.DoesNotContain(
+                    entries,
+                    entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Compacted);
+
+                var evictedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Evicted)
+                    .ToArray();
+
+                Assert.NotEmpty(evictedEvents);
+
+                Assert.All(
+                    evictedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Applied, entry.Outcome));
+
+                _output.WriteLine("");
+                _output.WriteLine("ATOMIC EVICTION LEDGER SUMMARY");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in entries
+                    .GroupBy(entry => new
+                    {
+                        entry.Category,
+                        entry.EventType,
+                        entry.Outcome
+                    })
+                    .OrderBy(group => group.Key.Category.ToString(), StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.EventType, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome.ToString(), StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.EventType,-40} | {group.Key.Outcome,-12} | Count={group.Count()}");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Runs a 100-step distributed chaos execution with both atomic compaction and eviction enabled.
+        /// </summary>
+        /// <remarks>
+        /// This test validates the hybrid retention path where compaction and eviction policies
+        /// are both active. Eviction has precedence when the same step is selected for both actions,
+        /// while compaction can still apply to other terminal payload-heavy steps.
+        /// </remarks>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Apply_Atomic_Compaction_And_Eviction_Together()
+        {
+            var scenario = DistributedChaosScenario.Steps100HybridRetention();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            hybridRetention = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var state = await dagStore.GetStateAsync(
+                    executionId);
+
+                Assert.NotNull(state);
+
+                var completedSteps = state!.Steps
+                    .Where(x => x.Value.Status == AiStepExecutionStatus.Completed)
+                    .Select(x => new
+                    {
+                        Step = x.Key,
+                        Status = x.Value.Status,
+                        HasInlineSize = x.Value.InlinePayloadSizeBytes.HasValue,
+                        InlineSize = x.Value.InlinePayloadSizeBytes,
+                        HasResult = x.Value.Result is not null,
+                        IsEvicted = x.Value.IsEvictedFromHotState
+                    })
+                    .ToArray();
+
+                var evictedShells = completedSteps
+                    .Where(x => x.IsEvicted)
+                    .ToArray();
+
+                var compactedNonEvictedShells = completedSteps
+                    .Where(x =>
+                        !x.IsEvicted &&
+                        !x.HasResult &&
+                        x.HasInlineSize &&
+                        x.InlineSize == 0)
+                    .ToArray();
+
+                _output.WriteLine("");
+                _output.WriteLine("HYBRID RETENTION STATE DEBUG");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"CompletedSteps.Count={completedSteps.Length}");
+                _output.WriteLine($"EvictedShells.Count={evictedShells.Length}");
+                _output.WriteLine($"CompactedNonEvictedShells.Count={compactedNonEvictedShells.Length}");
+                _output.WriteLine($"CompletedSteps.WithResult.Count={completedSteps.Count(x => x.HasResult)}");
+                _output.WriteLine($"CompletedSteps.WithInlineSize.Count={completedSteps.Count(x => x.HasInlineSize)}");
+
+                foreach (var step in completedSteps.Take(20))
+                {
+                    _output.WriteLine(
+                        $"{step.Step} | Status={step.Status} | InlineSize={step.InlineSize} | HasResult={step.HasResult} | IsEvicted={step.IsEvicted}");
+                }
+
+                Assert.Equal(
+                    scenario.StepCount,
+                    completedSteps.Length);
+
+                Assert.NotEmpty(
+                    evictedShells);
+
+                Assert.All(
+                    evictedShells,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.False(step.HasResult);
+                        Assert.True(step.IsEvicted);
+                        Assert.True(step.HasInlineSize);
+                        Assert.Equal(0, step.InlineSize);
+                    });
+
+                Assert.All(
+                    compactedNonEvictedShells,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.False(step.HasResult);
+                        Assert.False(step.IsEvicted);
+                        Assert.True(step.HasInlineSize);
+                        Assert.Equal(0, step.InlineSize);
+                    });
+
+                await resolver.WarmAsync(
+                    executionId,
+                    state!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    state!,
+                    resolver);
+
+                var entries = await ledger.GetByExecutionAsync(
+                    executionId);
+
+                Assert.NotEmpty(entries);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evaluated);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Triggered);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Compacted);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evicted);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Payload,
+                    AiDecisionLedgerEvents.Payload.Externalized);
+
+                var compactedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Compacted)
+                    .ToArray();
+
+                var evictedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Evicted)
+                    .ToArray();
+
+                var externalizedEvents = entries
+                    .Where(entry =>
+                        entry.Category == AiDecisionLedgerCategory.Payload &&
+                        entry.EventType == AiDecisionLedgerEvents.Payload.Externalized)
+                    .ToArray();
+
+                Assert.NotEmpty(compactedEvents);
+                Assert.NotEmpty(evictedEvents);
+                Assert.NotEmpty(externalizedEvents);
+
+                Assert.All(
+                    compactedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Applied, entry.Outcome));
+
+                Assert.All(
+                    evictedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Applied, entry.Outcome));
+
+                Assert.All(
+                    externalizedEvents,
+                    entry => Assert.Equal(AiDecisionLedgerOutcome.Persisted, entry.Outcome));
+
+                _output.WriteLine("");
+                _output.WriteLine("ATOMIC HYBRID RETENTION LEDGER SUMMARY");
                 _output.WriteLine("------------------------------------------------------------");
 
                 foreach (var group in entries
@@ -1441,6 +1954,133 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     MaxDegreeOfParallelism = 12,
                     MaxProviderConcurrency = 3,
                     MaxCompletedStepsInState = 15,
+                    FlakyStepInterval = 9,
+                    MinimumExpectedParticipatingWorkers = 3,
+                    FullStepFingerprint = true,
+                    WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
+                    Timeout = TimeSpan.FromSeconds(180),
+                    RequiredResolvedSteps = requiredSteps,
+                    ExpectedRetriedSteps = retriedSteps,
+                    FingerprintStepNames = requiredSteps
+                        .Concat(retriedSteps)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+
+                scenario.PipelineDefinition = CreatePipelineDefinition(
+                    scenario);
+
+                return scenario;
+            }
+
+            /// <summary>
+            /// Creates a 100-step distributed chaos scenario dedicated to atomic retention eviction.
+            /// </summary>
+            /// <returns>The configured eviction-only distributed chaos scenario.</returns>
+            public static DistributedChaosScenario Steps100EvictionOnly()
+            {
+                var pipelineName = $"distributed-chaos-100-eviction-only-{Guid.NewGuid():N}";
+
+                var requiredSteps = new[]
+                {
+                    "chaos-step-001",
+                    "chaos-step-009",
+                    "chaos-step-018",
+                    "chaos-step-090",
+                    "final-join-step"
+                };
+
+                var retriedSteps = Enumerable.Range(2, 98)
+                    .Where(index => index % 9 == 0)
+                    .Select(index => $"chaos-step-{index:000}")
+                    .ToArray();
+
+                var scenario = new DistributedChaosScenario
+                {
+                    Name = "distributed-chaos-100-eviction-only",
+                    PipelineName = pipelineName,
+                    CandidateId = "candidate-distributed-chaos-100-eviction-only",
+                    RetentionArchiveReason = "distributed-chaos-100-eviction-only-retention",
+                    StepCount = 100,
+                    WorkerCount = 10,
+                    MaxStepsPerCycle = 1,
+                    MaxWorkerCycles = 5000,
+                    MaxDegreeOfParallelism = 12,
+                    MaxProviderConcurrency = 3,
+
+                    MaxCompletedStepsInState = 10,
+                    MaxInlinePayloadBytes = 1,
+
+                    RetentionPolicies = new[]
+                    {
+                        "retention.evict.terminal"
+                    },
+
+                    FlakyStepInterval = 9,
+                    MinimumExpectedParticipatingWorkers = 3,
+                    FullStepFingerprint = true,
+                    WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
+                    Timeout = TimeSpan.FromSeconds(180),
+                    RequiredResolvedSteps = requiredSteps,
+                    ExpectedRetriedSteps = retriedSteps,
+                    FingerprintStepNames = requiredSteps
+                        .Concat(retriedSteps)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+
+                scenario.PipelineDefinition = CreatePipelineDefinition(
+                    scenario);
+
+                return scenario;
+            }
+
+            /// <summary>
+            /// Creates a 100-step distributed chaos scenario dedicated to hybrid atomic retention.
+            /// </summary>
+            /// <returns>The configured hybrid compaction and eviction distributed chaos scenario.</returns>
+            public static DistributedChaosScenario Steps100HybridRetention()
+            {
+                var pipelineName = $"distributed-chaos-100-hybrid-retention-{Guid.NewGuid():N}";
+
+                var requiredSteps = new[]
+                {
+                    "chaos-step-001",
+                    "chaos-step-009",
+                    "chaos-step-018",
+                    "chaos-step-090",
+                    "final-join-step"
+                };
+
+                var retriedSteps = Enumerable.Range(2, 98)
+                    .Where(index => index % 9 == 0)
+                    .Select(index => $"chaos-step-{index:000}")
+                    .ToArray();
+
+                var scenario = new DistributedChaosScenario
+                {
+                    Name = "distributed-chaos-100-hybrid-retention",
+                    PipelineName = pipelineName,
+                    CandidateId = "candidate-distributed-chaos-100-hybrid-retention",
+                    RetentionArchiveReason = "distributed-chaos-100-hybrid-retention",
+                    StepCount = 100,
+                    WorkerCount = 10,
+                    MaxStepsPerCycle = 1,
+                    MaxWorkerCycles = 5000,
+                    MaxDegreeOfParallelism = 12,
+                    MaxProviderConcurrency = 3,
+
+                    // Creates eviction pressure while still allowing compaction to apply
+                    // to terminal steps that exceed the inline payload threshold.
+                    MaxCompletedStepsInState = 10,
+                    MaxInlinePayloadBytes = 1,
+
+                    RetentionPolicies = new[]
+                    {
+                        "retention.compact.terminal",
+                        "retention.evict.terminal"
+                    },
+
                     FlakyStepInterval = 9,
                     MinimumExpectedParticipatingWorkers = 3,
                     FullStepFingerprint = true,
