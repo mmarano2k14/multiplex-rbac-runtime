@@ -8,14 +8,34 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
     /// Default implementation of <see cref="IAiRetentionEvictionService"/>.
     /// </summary>
     /// <remarks>
-    /// This service owns the physical eviction safety sequence:
+    /// <para>
+    /// This service owns the non-atomic in-memory retention eviction path used by
+    /// local or single-engine execution flows.
+    /// </para>
     ///
-    /// 1. Persist the step payload.
-    /// 2. Mark the archived payload index.
-    /// 3. Remove the step from hot execution state.
+    /// <para>
+    /// IMPORTANT:
+    /// Active retention must not physically remove DAG step shells while execution may
+    /// still require them for dependency evaluation, convergence, replay, diagnostics,
+    /// or resolver access.
+    /// </para>
     ///
-    /// A step is never removed from hot state unless payload persistence and archive indexing
-    /// both succeed.
+    /// <para>
+    /// Therefore this service performs logical hot-state eviction:
+    /// </para>
+    ///
+    /// <list type="number">
+    /// <item><description>Persist the full step payload externally.</description></item>
+    /// <item><description>Mark the archived payload index.</description></item>
+    /// <item><description>Keep the DAG step shell in state.</description></item>
+    /// <item><description>Clear heavy inline payload/result data.</description></item>
+    /// <item><description>Mark the step as evicted from hot state.</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// Physical deletion of step shells should be reserved for terminal cleanup or a
+    /// dedicated post-finalization pruning phase.
+    /// </para>
     /// </remarks>
     public sealed class DefaultAiRetentionEvictionService : IAiRetentionEvictionService
     {
@@ -25,8 +45,15 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiRetentionEvictionService"/> class.
         /// </summary>
-        /// <param name="stepPayloadStore">The durable step payload store.</param>
-        /// <param name="stepPayloadIndexStore">The archived step payload index store.</param>
+        /// <param name="stepPayloadStore">
+        /// The durable step payload store.
+        /// </param>
+        /// <param name="stepPayloadIndexStore">
+        /// The archived step payload index store.
+        /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when a required dependency is <see langword="null"/>.
+        /// </exception>
         public DefaultAiRetentionEvictionService(
             IAiStepPayloadStore stepPayloadStore,
             IAiStepPayloadIndexStore stepPayloadIndexStore)
@@ -49,10 +76,24 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
 
             foreach (var stepName in stepNames)
             {
+                if (string.IsNullOrWhiteSpace(stepName))
+                {
+                    continue;
+                }
+
                 if (!state.Steps.TryGetValue(stepName, out var step))
                 {
                     continue;
                 }
+
+                if (!IsSafeEvictionCandidate(step))
+                {
+                    continue;
+                }
+
+                var effectiveReason = string.IsNullOrWhiteSpace(reason)
+                    ? "retention-eviction"
+                    : reason;
 
                 var payload = await _stepPayloadStore.SaveStepAsync(
                         state.ExecutionId,
@@ -69,20 +110,54 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                             Status = step.Status,
                             Payload = payload,
                             ArchivedAtUtc = DateTime.UtcNow,
-                            Reason = string.IsNullOrWhiteSpace(reason)
-                                ? "retention"
-                                : reason
+                            Reason = effectiveReason
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                if (state.Steps.Remove(stepName))
-                {
-                    evictedSteps.Add(stepName);
-                }
+                ApplyLogicalEviction(
+                    step,
+                    effectiveReason);
+
+                evictedSteps.Add(stepName);
             }
 
             return evictedSteps;
+        }
+
+        /// <summary>
+        /// Determines whether a step can be logically evicted from hot payload state.
+        /// </summary>
+        /// <param name="step">
+        /// The step state to evaluate.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> when the step is terminal and has not already been evicted from hot state;
+        /// otherwise, <c>false</c>.
+        /// </returns>
+        private static bool IsSafeEvictionCandidate(
+            AiStepState step)
+        {
+            return step.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed &&
+                   !step.IsEvictedFromHotState;
+        }
+
+        /// <summary>
+        /// Applies logical hot-state eviction while preserving the DAG step shell.
+        /// </summary>
+        /// <param name="step">
+        /// The step state to mutate.
+        /// </param>
+        /// <param name="reason">
+        /// The retention reason.
+        /// </param>
+        private static void ApplyLogicalEviction(
+            AiStepState step,
+            string reason)
+        {
+            step.Result = null;
+            step.InlinePayloadSizeBytes = 0;
+            step.IsEvictedFromHotState = true;
         }
     }
 }

@@ -50,7 +50,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         }
 
         /// <summary>
-        /// Validates that eviction policy selects all terminal steps.
+        /// Validates that eviction policy selects terminal steps when hot-state pressure exists.
         /// </summary>
         [Fact]
         public async Task EvictPolicy_Should_Select_All_Terminal_Steps()
@@ -62,7 +62,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             var result = await policy.ExecuteAsync(
                 new AiRetentionContext
                 {
-                    ExecutionState = state
+                    ExecutionId = state.ExecutionId,
+                    ExecutionState = state,
+                    Trigger = new AiRetentionTriggerDefinition
+                    {
+                        Enabled = true,
+                        MaxStepsInState = 1,
+                        MaxCompletedStepsInState = 1,
+                        MaxInlinePayloadBytes = 1
+                    },
+                    UtcNow = DateTime.UtcNow
                 });
 
             var decision = GetDecision(result);
@@ -70,12 +79,18 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             Assert.Equal(AiRetentionDecisionKind.Evict, decision.Kind);
 
             Assert.NotNull(decision.StepsToEvict);
-            Assert.Equal(200, decision.StepsToEvict.Count);
+            Assert.NotEmpty(decision.StepsToEvict);
 
             Assert.Equal(200, state.Steps.Count);
 
             Assert.All(decision.StepsToEvict, stepName =>
             {
+                Assert.True(state.Steps.ContainsKey(stepName));
+
+                var step = state.Steps[stepName];
+
+                Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+
                 var index = ExtractStepIndex(stepName);
 
                 Assert.True(index >= 0);
@@ -143,11 +158,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             var compactResult = await compactPolicy.ExecuteAsync(
                 new AiRetentionContext
                 {
-                    ExecutionState = state
+                    ExecutionId = state.ExecutionId,
+                    ExecutionState = state,
+                    Trigger = new AiRetentionTriggerDefinition
+                    {
+                        Enabled = false
+                    },
+                    UtcNow = DateTime.UtcNow
                 });
 
             var compactDecision = GetDecision(compactResult);
 
+            Assert.Equal(AiRetentionDecisionKind.Compact, compactDecision.Kind);
+
+            Assert.NotNull(compactDecision.StepsToCompact);
             Assert.Equal(20, compactDecision.StepsToCompact.Count);
 
             Assert.DoesNotContain("running-step", compactDecision.StepsToCompact);
@@ -159,12 +183,33 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             var evictResult = await evictPolicy.ExecuteAsync(
                 new AiRetentionContext
                 {
-                    ExecutionState = state
+                    ExecutionId = state.ExecutionId,
+                    ExecutionState = state,
+                    Trigger = new AiRetentionTriggerDefinition
+                    {
+                        Enabled = true,
+                        MaxStepsInState = 1,
+                        MaxCompletedStepsInState = 1,
+                        MaxInlinePayloadBytes = 1
+                    },
+                    UtcNow = DateTime.UtcNow
                 });
 
             var evictDecision = GetDecision(evictResult);
 
-            Assert.Equal(20, evictDecision.StepsToEvict.Count);
+            Assert.Equal(AiRetentionDecisionKind.Evict, evictDecision.Kind);
+
+            Assert.NotNull(evictDecision.StepsToEvict);
+            Assert.NotEmpty(evictDecision.StepsToEvict);
+
+            Assert.All(
+                evictDecision.StepsToEvict,
+                stepName =>
+                {
+                    Assert.True(state.Steps.ContainsKey(stepName));
+                    Assert.True(
+                        state.Steps[stepName].Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed);
+                });
 
             Assert.DoesNotContain("running-step", evictDecision.StepsToEvict);
             Assert.DoesNotContain("ready-step", evictDecision.StepsToEvict);

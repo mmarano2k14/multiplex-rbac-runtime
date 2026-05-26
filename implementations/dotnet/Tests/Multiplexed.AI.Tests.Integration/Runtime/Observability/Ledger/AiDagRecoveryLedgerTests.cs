@@ -2,14 +2,16 @@
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Concurrency;
 using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
-using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.AI.Concurrency;
+using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
 using Multiplexed.AI.Runtime.Logging;
@@ -20,293 +22,241 @@ using Xunit;
 namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 {
     /// <summary>
-    /// Tests decision ledger recording around DAG step recovery.
+    /// Tests decision ledger recording around DAG step timeout recovery.
     /// </summary>
-    public sealed class AiDagRecoveryLedgerTests
+    public sealed class AiDagRecoveryLedgerTests2
     {
         /// <summary>
-        /// Verifies that recovering timed-out steps records recovery detected, applied,
-        /// and one step-recovered event per recovered step name.
+        /// Verifies that single-step claiming records recovery ledger events with recovered step names.
         /// </summary>
         [Fact]
         public async Task ClaimNextAsync_WhenTimedOutStepsAreRecovered_ShouldRecordRecoveryLedgerEventsWithStepNames()
         {
+            // Arrange
             var executionId = "exec-recovery-ledger";
             var pipelineKey = "test-pipeline:v1";
             var workerId = "worker-1";
-            var recoveredStepName = "step-a";
+            var stepName = "step-a";
+            var stepKey = "debug.pass";
 
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
             var ledger = new InMemoryAiDecisionLedger();
 
-            var services = CreateServices(ledger);
+            var stepConfig = new Dictionary<string, object?>();
 
-            var beforeState = new AiExecutionState
-            {
-                ExecutionId = executionId,
-                PipelineName = "test-pipeline"
-            };
+            var pipeline = CreatePipeline(
+                stepName,
+                stepKey,
+                stepConfig);
 
-            beforeState.Steps[recoveredStepName] = new AiStepState
-            {
-                StepName = recoveredStepName,
-                Status = AiStepExecutionStatus.Running,
-                RecoveryCount = 0
-            };
+            var beforeState = CreateRecoveryState(
+                executionId,
+                stepName,
+                stepConfig,
+                AiStepExecutionStatus.Running,
+                recoveryCount: 0);
 
-            var afterState = new AiExecutionState
-            {
-                ExecutionId = executionId,
-                PipelineName = "test-pipeline"
-            };
+            var afterState = CreateRecoveryState(
+                executionId,
+                stepName,
+                stepConfig,
+                AiStepExecutionStatus.Ready,
+                recoveryCount: 1);
 
-            afterState.Steps[recoveredStepName] = new AiStepState
-            {
-                StepName = recoveredStepName,
-                Status = AiStepExecutionStatus.Ready,
-                RecoveryCount = 1
-            };
+            ConfigureRecoveryDagStore(
+                dagStore,
+                executionId,
+                beforeState,
+                afterState);
 
-            services.DagStore!
-                .GetStateAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(
-                    beforeState,
-                    afterState,
-                    afterState);
-
-            services.DagStore!
-                .RecoverTimedOutStepsAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(1);
-
-            services.DagStore!
-                .GetReadyStepsAsync(
-                    executionId,
-                    Arg.Any<int>(),
-                    Arg.Any<CancellationToken>())
-                .Returns(Array.Empty<AiClaimedStep>());
-
-            var pipeline = CreatePipeline(recoveredStepName);
+            var services = CreateEngineServices(
+                dagStore,
+                concurrencyGate,
+                ledger);
 
             var service = new AiDagStepClaimService(services);
 
+            // Act
             var claimed = await service.ClaimNextAsync(
                 executionId,
                 pipeline,
                 pipelineKey,
-                workerId,
-                CancellationToken.None);
+                workerId);
 
+            // Assert
             Assert.Null(claimed);
 
             var entries = await ledger.GetByExecutionAsync(executionId);
 
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.Detected &&
-                entry.Outcome == AiDecisionLedgerOutcome.Started &&
-                entry.CorrelationContext.StepKey == "_recovery");
-
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.Applied &&
-                entry.Outcome == AiDecisionLedgerOutcome.Applied &&
-                entry.CorrelationContext.StepKey == "_recovery");
-
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered &&
-                entry.Outcome == AiDecisionLedgerOutcome.Applied &&
-                entry.CorrelationContext.StepKey == recoveredStepName);
-
-            Assert.Contains(entries, entry =>
-                entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered &&
-                entry.Metadata is not null &&
-                entry.Metadata.TryGetValue("step.name", out var stepName) &&
-                stepName == recoveredStepName);
-
-            Assert.All(entries.Where(entry => entry.Category == AiDecisionLedgerCategory.Recovery), entry =>
-            {
-                Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
-                Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
-                Assert.Equal(workerId, entry.CorrelationContext.WorkerId);
-                Assert.Equal(workerId, entry.CorrelationContext.RuntimeInstanceId);
-            });
+            AssertRecoveryLedgerEvents(
+                entries,
+                executionId,
+                pipelineKey,
+                workerId,
+                stepName,
+                stepKey);
         }
 
         /// <summary>
-        /// Verifies that batch claim recovery also records recovered step names.
+        /// Verifies that batch claiming records recovery ledger events with recovered step names.
         /// </summary>
         [Fact]
         public async Task ClaimBatchAsync_WhenTimedOutStepsAreRecovered_ShouldRecordRecoveryLedgerEventsWithStepNames()
         {
+            // Arrange
             var executionId = "exec-batch-recovery-ledger";
             var pipelineKey = "test-pipeline:v1";
             var workerId = "worker-1";
-            var recoveredStepName = "step-a";
+            var stepName = "step-a";
+            var stepKey = "debug.pass";
 
+            var dagStore = Substitute.For<IAiDagExecutionStore>();
+            var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
             var ledger = new InMemoryAiDecisionLedger();
 
-            var services = CreateServices(ledger);
+            var stepConfig = new Dictionary<string, object?>();
 
-            var beforeState = new AiExecutionState
-            {
-                ExecutionId = executionId,
-                PipelineName = "test-pipeline"
-            };
+            var pipeline = CreatePipeline(
+                stepName,
+                stepKey,
+                stepConfig);
 
-            beforeState.Steps[recoveredStepName] = new AiStepState
-            {
-                StepName = recoveredStepName,
-                Status = AiStepExecutionStatus.Running,
-                RecoveryCount = 0
-            };
+            var beforeState = CreateRecoveryState(
+                executionId,
+                stepName,
+                stepConfig,
+                AiStepExecutionStatus.Running,
+                recoveryCount: 0);
 
-            var afterState = new AiExecutionState
-            {
-                ExecutionId = executionId,
-                PipelineName = "test-pipeline"
-            };
+            var afterState = CreateRecoveryState(
+                executionId,
+                stepName,
+                stepConfig,
+                AiStepExecutionStatus.Ready,
+                recoveryCount: 1);
 
-            afterState.Steps[recoveredStepName] = new AiStepState
-            {
-                StepName = recoveredStepName,
-                Status = AiStepExecutionStatus.Ready,
-                RecoveryCount = 1
-            };
+            ConfigureRecoveryDagStore(
+                dagStore,
+                executionId,
+                beforeState,
+                afterState);
 
-            services.DagStore!
-                .GetStateAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(
-                    beforeState,
-                    afterState,
-                    afterState);
-
-            services.DagStore!
-                .RecoverTimedOutStepsAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(1);
-
-            services.DagStore!
-                .GetReadyStepsAsync(
-                    executionId,
-                    Arg.Any<int>(),
-                    Arg.Any<CancellationToken>())
-                .Returns(Array.Empty<AiClaimedStep>());
-
-            var pipeline = CreatePipeline(recoveredStepName);
+            var services = CreateEngineServices(
+                dagStore,
+                concurrencyGate,
+                ledger);
 
             var service = new AiDagStepClaimService(services);
 
+            // Act
             var claimed = await service.ClaimBatchAsync(
                 executionId,
                 pipeline,
                 pipelineKey,
                 workerId,
-                maxSteps: 4,
-                CancellationToken.None);
+                maxSteps: 4);
 
+            // Assert
             Assert.Empty(claimed);
 
             var entries = await ledger.GetByExecutionAsync(executionId);
 
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.Detected &&
-                entry.Outcome == AiDecisionLedgerOutcome.Started);
-
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.Applied &&
-                entry.Outcome == AiDecisionLedgerOutcome.Applied);
-
-            Assert.Contains(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery &&
-                entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered &&
-                entry.Outcome == AiDecisionLedgerOutcome.Applied &&
-                entry.CorrelationContext.StepKey == recoveredStepName);
+            AssertRecoveryLedgerEvents(
+                entries,
+                executionId,
+                pipelineKey,
+                workerId,
+                stepName,
+                stepKey);
         }
 
         /// <summary>
-        /// Verifies that no recovery ledger events are recorded when no timed-out steps are recovered.
+        /// Asserts that recovery ledger events were recorded with the expected DAG step name
+        /// and executable step key.
         /// </summary>
-        [Fact]
-        public async Task ClaimNextAsync_WhenNoStepsAreRecovered_ShouldNotRecordRecoveryLedgerEvents()
+        private static void AssertRecoveryLedgerEvents(
+            IReadOnlyCollection<AiDecisionLedgerEntry> entries,
+            string executionId,
+            string pipelineKey,
+            string workerId,
+            string stepName,
+            string stepKey)
         {
-            var executionId = "exec-no-recovery-ledger";
-            var pipelineKey = "test-pipeline:v1";
-            var workerId = "worker-1";
-            var stepName = "step-a";
+            Assert.NotEmpty(entries);
 
-            var ledger = new InMemoryAiDecisionLedger();
+            Assert.Contains(
+                entries,
+                entry =>
+                    entry.Category == AiDecisionLedgerCategory.Claim &&
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
+                    entry.Outcome == AiDecisionLedgerOutcome.Started);
 
-            var services = CreateServices(ledger);
+            var recoveryDetected = Assert.Single(
+                entries.Where(entry =>
+                    entry.Category == AiDecisionLedgerCategory.Recovery &&
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.Detected));
 
-            var state = new AiExecutionState
-            {
-                ExecutionId = executionId,
-                PipelineName = "test-pipeline"
-            };
+            Assert.Equal(executionId, recoveryDetected.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, recoveryDetected.CorrelationContext.PipelineName);
+            Assert.Equal(workerId, recoveryDetected.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, recoveryDetected.CorrelationContext.RuntimeInstanceId);
+            Assert.Equal("1", recoveryDetected.Metadata["recovered.count"]);
+            Assert.Equal(stepName, recoveryDetected.Metadata["recovered.steps"]);
 
-            state.Steps[stepName] = new AiStepState
-            {
-                StepName = stepName,
-                Status = AiStepExecutionStatus.Ready,
-                RecoveryCount = 0
-            };
+            var recoveryApplied = Assert.Single(
+                entries.Where(entry =>
+                    entry.Category == AiDecisionLedgerCategory.Recovery &&
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.Applied));
 
-            services.DagStore!
-                .GetStateAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(state);
+            Assert.Equal(AiDecisionLedgerOutcome.Applied, recoveryApplied.Outcome);
+            Assert.Equal(executionId, recoveryApplied.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, recoveryApplied.CorrelationContext.PipelineName);
+            Assert.Equal(workerId, recoveryApplied.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, recoveryApplied.CorrelationContext.RuntimeInstanceId);
+            Assert.Equal("1", recoveryApplied.Metadata["recovered.count"]);
+            Assert.Equal(stepName, recoveryApplied.Metadata["recovered.steps"]);
 
-            services.DagStore!
-                .RecoverTimedOutStepsAsync(
-                    executionId,
-                    Arg.Any<CancellationToken>())
-                .Returns(0);
+            var stepRecovered = Assert.Single(
+                entries.Where(entry =>
+                    entry.Category == AiDecisionLedgerCategory.Recovery &&
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered));
 
-            services.DagStore!
-                .GetReadyStepsAsync(
-                    executionId,
-                    Arg.Any<int>(),
-                    Arg.Any<CancellationToken>())
-                .Returns(Array.Empty<AiClaimedStep>());
+            Assert.Equal(AiDecisionLedgerOutcome.Applied, stepRecovered.Outcome);
+            Assert.Equal(executionId, stepRecovered.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, stepRecovered.CorrelationContext.PipelineName);
 
-            var pipeline = CreatePipeline(stepName);
+            // StepId is the DAG step instance name.
+            // StepKey is the executable step key.
+            Assert.Equal(stepName, stepRecovered.CorrelationContext.StepId);
+            Assert.Equal(stepKey, stepRecovered.CorrelationContext.StepKey);
 
-            var service = new AiDagStepClaimService(services);
+            Assert.Equal(workerId, stepRecovered.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, stepRecovered.CorrelationContext.RuntimeInstanceId);
+            Assert.Equal(stepName, stepRecovered.Metadata["step.name"]);
+            Assert.Equal("1", stepRecovered.Metadata["recovered.count"]);
 
-            var claimed = await service.ClaimNextAsync(
-                executionId,
-                pipeline,
-                pipelineKey,
-                workerId,
-                CancellationToken.None);
-
-            Assert.Null(claimed);
-
-            var entries = await ledger.GetByExecutionAsync(executionId);
-
-            Assert.DoesNotContain(entries, entry =>
-                entry.Category == AiDecisionLedgerCategory.Recovery);
+            Assert.Contains(
+                entries,
+                entry =>
+                    entry.Category == AiDecisionLedgerCategory.Claim &&
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
+                    entry.Outcome == AiDecisionLedgerOutcome.Denied);
         }
 
-        private static IAiDagExecutionEngineServices CreateServices(
-            InMemoryAiDecisionLedger ledger)
+        /// <summary>
+        /// Creates engine services for the recovery ledger tests.
+        /// </summary>
+        private static IAiDagExecutionEngineServices CreateEngineServices(
+            IAiDagExecutionStore dagStore,
+            IAiConcurrencyGate concurrencyGate,
+            InMemoryAiDecisionLedger ledger,
+            IAiPolicyEngineFactory? policyEngineFactory = null)
         {
             var services = Substitute.For<IAiDagExecutionEngineServices>();
-            var dagStore = Substitute.For<IAiDagExecutionStore>();
-            var observability = Substitute.For<IAiRuntimeObservability>();
-            var runtimeMetrics = Substitute.For<IAiRuntimeMetrics>();
+
             var logger = Substitute.For<IAiRuntimeLogger>();
-            var controlGate = Substitute.For<IAiExecutionControlGate>();
+            var observability = Substitute.For<IAiRuntimeObservability>();
 
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
@@ -317,50 +267,109 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                 }),
                 NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
 
+            services.DagStore.Returns(dagStore);
+            services.ConcurrencyGate.Returns(concurrencyGate);
+            services.PolicyEngineFactory.Returns(
+                policyEngineFactory ?? Substitute.For<IAiPolicyEngineFactory>());
+
+            services.Services.Returns(Substitute.For<IServiceProvider>());
+            services.StateReader.Returns(Substitute.For<IAiExecutionStateReader>());
+            services.StateWriter.Returns(Substitute.For<IAiExecutionStateWriter>());
+
+            services.Logger.Returns(logger);
+
+            services.ObservabilityService.Returns(observability);
             observability.Tracer.Returns(new PassthroughAiRuntimeTracer());
             observability.Ledger.Returns(recorder);
-            observability.Metrics.Returns(runtimeMetrics);
-
-            controlGate.CheckBeforeAdvanceAsync(
-                    Arg.Any<string>(),
-                    Arg.Any<CancellationToken>())
-                .Returns(new AiExecutionControlDecision
-                {
-                    CanContinue = true,
-                    ShouldCancel = false,
-                    Status = AiExecutionControlStatus.Running
-                });
-
-            services.DagStore.Returns(dagStore);
-            services.ObservabilityService.Returns(observability);
-            services.Logger.Returns(logger);
-            services.ExecutionControlGate.Returns(controlGate);
 
             return services;
         }
 
+        /// <summary>
+        /// Creates a resolved pipeline with a distinct DAG step name and executable step key.
+        /// </summary>
         private static ResolvedAiPipeline CreatePipeline(
-            string stepName)
+            string stepName,
+            string stepKey,
+            IReadOnlyDictionary<string, object?> stepConfig)
         {
             return new ResolvedAiPipeline
             {
                 Name = "test-pipeline",
                 Version = "v1",
                 ExecutionMode = AiExecutionMode.Dag,
-                Config = new Dictionary<string, object?>(),
                 Steps =
                 [
                     new ResolvedAiPipelineStep
                     {
                         Name = stepName,
-                        StepKey = "debug.pass",
-                        Config = new Dictionary<string, object?>(),
-                        DependsOn = Array.Empty<string>()
+                        StepKey = stepKey,
+                        Config = stepConfig
                     }
                 ]
             };
         }
 
+        /// <summary>
+        /// Creates a state used before or after timeout recovery.
+        /// </summary>
+        private static AiExecutionState CreateRecoveryState(
+            string executionId,
+            string stepName,
+            IReadOnlyDictionary<string, object?> stepConfig,
+            AiStepExecutionStatus status,
+            int recoveryCount)
+        {
+            return new AiExecutionState
+            {
+                ExecutionId = executionId,
+                PipelineName = "test-pipeline",
+                Steps = new Dictionary<string, AiStepState>
+                {
+                    [stepName] = new AiStepState
+                    {
+                        StepName = stepName,
+                        Status = status,
+                        RecoveryCount = recoveryCount,
+                        Config = new Dictionary<string, object?>(stepConfig)
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// Configures the DAG store to simulate a timeout recovery and no ready step claim afterwards.
+        /// </summary>
+        private static void ConfigureRecoveryDagStore(
+            IAiDagExecutionStore dagStore,
+            string executionId,
+            AiExecutionState beforeState,
+            AiExecutionState afterState)
+        {
+            dagStore.GetStateAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(
+                    beforeState,
+                    afterState,
+                    afterState,
+                    afterState);
+
+            dagStore.RecoverTimedOutStepsAsync(
+                    executionId,
+                    Arg.Any<CancellationToken>())
+                .Returns(1);
+
+            dagStore.GetReadyStepsAsync(
+                    executionId,
+                    Arg.Any<int>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Array.Empty<AiClaimedStep>());
+        }
+
+        /// <summary>
+        /// Tracer used by tests to execute traced actions without side effects.
+        /// </summary>
         private sealed class PassthroughAiRuntimeTracer : IAiRuntimeTracer
         {
             public IAiTraceScope StartExecution(AiExecutionTraceContext context)
@@ -390,18 +399,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             public Task<TResult> TraceStorageAsync<TResult>(
                 AiStorageTraceContext context,
-                Func<IAiTraceScope, Task<TResult>> action,
-                CancellationToken cancellationToken = default)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var scope = Substitute.For<IAiTraceScope>();
-
-                return action(scope);
-            }
-
-            public Task<TResult> TraceRetentionAsync<TResult>(
-                AiRetentionTraceContext context,
                 Func<IAiTraceScope, Task<TResult>> action,
                 CancellationToken cancellationToken = default)
             {

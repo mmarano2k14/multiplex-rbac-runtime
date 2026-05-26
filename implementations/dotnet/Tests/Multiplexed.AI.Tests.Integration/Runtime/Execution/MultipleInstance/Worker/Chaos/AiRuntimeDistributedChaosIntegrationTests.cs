@@ -1959,6 +1959,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     FullStepFingerprint = true,
                     WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
                     Timeout = TimeSpan.FromSeconds(180),
+                    MaxInlinePayloadBytes = 1,
+
+                    RetentionPolicies = new[]
+                    {
+                        "retention.compact.terminal",
+                        "retention.evict.terminal"
+                    },
                     RequiredResolvedSteps = requiredSteps,
                     ExpectedRetriedSteps = retriedSteps,
                     FingerprintStepNames = requiredSteps

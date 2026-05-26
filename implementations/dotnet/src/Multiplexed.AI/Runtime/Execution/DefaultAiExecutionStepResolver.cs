@@ -116,7 +116,25 @@ namespace Multiplexed.AI.Runtime.Execution
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Resolves the full step state from hot execution state first, then from the archived
+        /// payload index when the hot shell no longer contains the full result payload.
+        /// </summary>
+        /// <param name="executionId">
+        /// The execution identifier.
+        /// </param>
+        /// <param name="stepName">
+        /// The step name to resolve.
+        /// </param>
+        /// <param name="state">
+        /// The current execution state snapshot.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The full step state when found; otherwise, <see langword="null"/>.
+        /// </returns>
         public async Task<AiStepState?> GetStepAsync(
             string executionId,
             string stepName,
@@ -129,62 +147,51 @@ namespace Multiplexed.AI.Runtime.Execution
 
             if (state.Steps.TryGetValue(stepName, out var hotStep))
             {
-                if (hotStep.Status != AiStepExecutionStatus.None)
+                if (hotStep.Status == AiStepExecutionStatus.None)
+                {
+                    var archivedNoneStep = await TryResolveArchivedStepAsync(
+                            executionId,
+                            stepName,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    return archivedNoneStep ?? hotStep;
+                }
+
+                if (HasFullInlinePayload(hotStep))
                 {
                     return hotStep;
                 }
 
-                var archivedStep = await TryResolveArchivedStepAsync(
-                    executionId,
-                    stepName,
-                    cancellationToken).ConfigureAwait(false);
-
-                return archivedStep ?? hotStep;
-            }
-
-            var cacheKey = BuildCacheKey(executionId, stepName);
-
-            if (_stepCache.TryGetValue(cacheKey, out var cachedStep))
-            {
-                return ReferenceEquals(cachedStep, MissingStepMarker)
-                    ? null
-                    : (AiStepState)cachedStep;
-            }
-
-            if (!_indexCache.TryGetValue(cacheKey, out var archived))
-            {
-                archived = await _indexStore.GetAsync(
+                var archivedPayloadStep = await TryResolveArchivedStepAsync(
                         executionId,
                         stepName,
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                if (archived is not null)
-                {
-                    _indexCache[cacheKey] = archived;
-                }
+                return archivedPayloadStep ?? hotStep;
             }
 
-            if (archived is null)
-            {
-                return null;
-            }
-
-            var step = await _stepPayloadStore.LoadStepAsync(
+            return await TryResolveArchivedStepAsync(
                     executionId,
                     stepName,
-                    archived.Payload,
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
 
-            if (step is null)
-            {
-                return null;
-            }
-
-            _stepCache[cacheKey] = step;
-
-            return step;
+        /// <summary>
+        /// Determines whether the specified hot step still contains a full inline result payload.
+        /// </summary>
+        /// <param name="step">
+        /// The step state to evaluate.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> when the step has a non-null result payload; otherwise, <c>false</c>.
+        /// </returns>
+        private static bool HasFullInlinePayload(
+            AiStepState step)
+        {
+            return step.Result is not null;
         }
 
         /// <inheritdoc />

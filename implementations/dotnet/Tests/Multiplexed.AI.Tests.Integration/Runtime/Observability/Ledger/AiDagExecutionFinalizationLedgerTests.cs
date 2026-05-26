@@ -204,10 +204,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
         }
 
         /// <summary>
-        /// Verifies that losing a distributed finalization race records finalization failed.
+        /// Verifies that losing a distributed finalization race records finalization race lost.
         /// </summary>
         [Fact]
-        public async Task PersistDistributedConvergedRecordAsync_WhenFinalizationRaceIsLost_ShouldRecordFinalizationFailed()
+        public async Task PersistDistributedConvergedRecordAsync_WhenFinalizationRaceIsLost_ShouldRecordFinalizationRaceLost()
         {
             var executionId = "exec-finalization-race-lost";
             var runtimeInstanceId = "runtime-1";
@@ -265,8 +265,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             Assert.Contains(entries, entry =>
                 entry.Category == AiDecisionLedgerCategory.Finalization &&
-                entry.EventType == AiDecisionLedgerEvents.Finalization.Failed &&
-                entry.Outcome == AiDecisionLedgerOutcome.Failed);
+                entry.EventType == AiDecisionLedgerEvents.Finalization.RaceLost &&
+                entry.Outcome == AiDecisionLedgerOutcome.Denied);
+
+            Assert.DoesNotContain(entries, entry =>
+                entry.Category == AiDecisionLedgerCategory.Finalization &&
+                entry.EventType == AiDecisionLedgerEvents.Finalization.Failed);
 
             Assert.DoesNotContain(entries, entry =>
                 entry.Category == AiDecisionLedgerCategory.Finalization &&

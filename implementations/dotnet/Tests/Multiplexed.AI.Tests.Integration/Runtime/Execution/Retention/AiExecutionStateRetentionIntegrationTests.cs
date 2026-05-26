@@ -27,14 +27,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
     /// <remarks>
     /// PURPOSE:
     /// - Validate policy-driven retention behavior on larger DAG shapes.
-    /// - Validate compaction, eviction, archived step resolution, and payload resolution.
+    /// - Validate compaction, logical eviction, archived step resolution, and payload resolution.
     /// - Validate that retention does not require replay services when snapshots are disabled.
     ///
     /// MIGRATION:
     /// - Legacy options-driven retention services are no longer used.
     /// - Legacy retention metrics snapshots are no longer used.
     /// - Retention is configured through pipeline-level <c>config.retention</c>.
-    /// - Assertions use actual persisted state, archived indexes, payload store, and resolver behavior.
+    /// - Active retention now preserves DAG shells and bounds hot payload state.
     /// </remarks>
     public sealed class AiPolicyDrivenExecutionStateRetentionAdvancedIntegrationTests
     {
@@ -56,7 +56,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         }
 
         /// <summary>
-        /// Validates that compact-only retention does not remove linear graph state.
+        /// Validates that compact-only retention keeps DAG shells and does not logically evict steps.
         /// </summary>
         [Fact]
         public async Task LinearGraph_Should_Not_Evict_Due_To_CompactOnly_Retention()
@@ -75,9 +75,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
                 Assert.Equal(FastLinearStepCount, state.Steps.Count);
 
+                var evictedShells = GetEvictedShells(state);
+                Assert.Empty(evictedShells);
+
                 var archivedEntries = await GetArchivedEntriesAsync(host, state.ExecutionId);
 
-                Assert.Empty(archivedEntries);
+                // Compact-only retention may archive payloads but must not logically evict DAG shells.
+                if (archivedEntries.Count > 0)
+                {
+                    var compactedShells = GetCompactedOrEvictedShells(state);
+                    Assert.NotEmpty(compactedShells);
+                }
             }
             finally
             {
@@ -86,7 +94,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         }
 
         /// <summary>
-        /// Validates that fully parallel DAG state is bounded by policy-driven eviction.
+        /// Validates that fully parallel DAG hot payload state is bounded by policy-driven eviction.
         /// </summary>
         [Fact]
         public async Task ParallelGraph_Should_Evict_Old_Steps()
@@ -104,14 +112,33 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             {
                 LogState(nameof(ParallelGraph_Should_Evict_Old_Steps), state);
 
+                Assert.Equal(FastParallelStepCount, state.Steps.Count);
+
+                var retainedHotPayloadSteps = GetRetainedHotPayloadSteps(state);
+
                 Assert.True(
-                    state.Steps.Count <= MaxCompletedStepsInState,
-                    $"Expected state to stay within retention limit. Actual={state.Steps.Count}, Max={MaxCompletedStepsInState}");
+                    retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                    $"Expected hot payload state to stay within retention limit. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}, Shells={state.Steps.Count}");
+
+                var evictedShells = GetEvictedShells(state);
+
+                Assert.NotEmpty(evictedShells);
+
+                Assert.All(
+                    evictedShells,
+                    step =>
+                    {
+                        Assert.Null(step.Value.Result);
+                        Assert.Equal(0, step.Value.InlinePayloadSizeBytes);
+                        Assert.True(step.Value.IsEvictedFromHotState);
+                    });
 
                 var archivedEntries = await GetArchivedEntriesAsync(host, state.ExecutionId);
 
                 Assert.NotEmpty(archivedEntries);
-                Assert.True(archivedEntries.Count >= FastParallelStepCount - state.Steps.Count);
+                Assert.True(
+                    archivedEntries.Count >= evictedShells.Length,
+                    $"Expected archived entries for logically evicted shells. Archived={archivedEntries.Count}, Evicted={evictedShells.Length}");
             }
             finally
             {
@@ -145,6 +172,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 var payload = state.Steps.Values
                     .SelectMany(s => s.Result?.DataPayloads?.Values ?? Enumerable.Empty<AiStoredPayload>())
                     .FirstOrDefault(p => !p.IsInline && !string.IsNullOrWhiteSpace(p.ArtifactId));
+
+                if (payload is null)
+                {
+                    var archivedEntries = await GetArchivedEntriesAsync(host, state.ExecutionId);
+                    Assert.NotEmpty(archivedEntries);
+
+                    var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+                    var archivedStep = await resolver.GetStepAsync(
+                        state.ExecutionId,
+                        archivedEntries.OrderBy(x => x.ArchivedAtUtc).First().StepName,
+                        state,
+                        CancellationToken.None);
+
+                    Assert.NotNull(archivedStep);
+                    Assert.NotNull(archivedStep!.Result);
+
+                    payload = archivedStep.Result.DataPayloads?.Values
+                        .FirstOrDefault(p => !p.IsInline && !string.IsNullOrWhiteSpace(p.ArtifactId));
+                }
 
                 Assert.NotNull(payload);
 
@@ -203,7 +250,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
                 var replayService = host.ServiceProvider.GetService<IAiExecutionReplayService>();
 
                 Assert.Null(replayService);
-                Assert.True(state.Steps.Count <= MaxCompletedStepsInState);
+                Assert.Equal(FastParallelStepCount, state.Steps.Count);
+
+                var retainedHotPayloadSteps = GetRetainedHotPayloadSteps(state);
+
+                Assert.True(
+                    retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                    $"Expected hot payload state to remain bounded. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}, Shells={state.Steps.Count}");
+
+                var evictedShells = GetEvictedShells(state);
+
+                Assert.NotEmpty(evictedShells);
+
+                Assert.All(
+                    evictedShells,
+                    step =>
+                    {
+                        Assert.Null(step.Value.Result);
+                        Assert.Equal(0, step.Value.InlinePayloadSizeBytes);
+                        Assert.True(step.Value.IsEvictedFromHotState);
+                    });
             }
             finally
             {
@@ -568,14 +634,59 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
         }
 
         /// <summary>
+        /// Gets terminal steps that still keep their hot result payload.
+        /// </summary>
+        private static KeyValuePair<string, AiStepState>[] GetRetainedHotPayloadSteps(
+            AiExecutionState state)
+        {
+            return state.Steps
+                .Where(step =>
+                    step.Value.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed &&
+                    step.Value.Result is not null &&
+                    !step.Value.IsEvictedFromHotState)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Gets terminal shells whose hot payload has been compacted or logically evicted.
+        /// </summary>
+        private static KeyValuePair<string, AiStepState>[] GetCompactedOrEvictedShells(
+            AiExecutionState state)
+        {
+            return state.Steps
+                .Where(step =>
+                    step.Value.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed &&
+                    step.Value.Result is null &&
+                    step.Value.InlinePayloadSizeBytes == 0)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Gets terminal shells that were logically evicted from hot state.
+        /// </summary>
+        private static KeyValuePair<string, AiStepState>[] GetEvictedShells(
+            AiExecutionState state)
+        {
+            return state.Steps
+                .Where(step =>
+                    step.Value.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed &&
+                    step.Value.IsEvictedFromHotState)
+                .ToArray();
+        }
+
+        /// <summary>
         /// Logs a compact state summary.
         /// </summary>
         private void LogState(
             string testName,
             AiExecutionState state)
         {
+            var retainedHotPayloadSteps = GetRetainedHotPayloadSteps(state);
+            var compactedOrEvictedShells = GetCompactedOrEvictedShells(state);
+            var evictedShells = GetEvictedShells(state);
+
             _output.WriteLine(
-                $"[{testName}] ExecutionId='{state.ExecutionId}', Steps='{state.Steps.Count}'");
+                $"[{testName}] ExecutionId='{state.ExecutionId}', Shells='{state.Steps.Count}', HotPayloadSteps='{retainedHotPayloadSteps.Length}', CompactedOrEvictedShells='{compactedOrEvictedShells.Length}', EvictedShells='{evictedShells.Length}'.");
         }
 
         /// <summary>

@@ -41,7 +41,6 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                     ["small"] = CreateCompletedStep("small", 64),
                     ["large-1"] = CreateCompletedStep("large-1", 2048),
                     ["large-2"] = CreateCompletedStep("large-2", 4096),
-
                     ["running"] = CreateRunningStep("running", 8192)
                 }
             };
@@ -55,7 +54,6 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
             Assert.NotNull(decision);
-
             Assert.Equal(AiRetentionDecisionKind.Compact, decision.Kind);
 
             Assert.Contains("large-1", decision.StepsToCompact);
@@ -66,7 +64,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
         }
 
         /// <summary>
-        /// Verifies that eviction selects only terminal steps.
+        /// Verifies that eviction selects only terminal steps when hot-state pressure exists.
         /// </summary>
         [Fact]
         public async Task EvictPolicy_Should_Not_Select_NonTerminal_Steps()
@@ -80,14 +78,15 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 {
                     ["completed-1"] = CreateCompletedStep("completed-1", 100),
                     ["completed-2"] = CreateCompletedStep("completed-2", 100),
-
                     ["running"] = CreateRunningStep("running", 100),
                     ["ready"] = CreateReadyStep("ready"),
                     ["retry"] = CreateRetryStep("retry")
                 }
             };
 
-            var context = CreateContext(state);
+            var context = CreateContext(
+                state,
+                maxStepsInState: 1);
 
             var result = await policy.ExecuteAsync(context);
 
@@ -120,7 +119,6 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
             Assert.NotNull(decision);
-
             Assert.Equal(AiRetentionDecisionKind.Hybrid, decision.Kind);
 
             Assert.Equal(3, decision.StepsToCompact.Count);
@@ -194,11 +192,12 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Empty(decision!.StepsToCompact);
+            Assert.NotNull(decision);
+            Assert.Empty(decision.StepsToCompact);
         }
 
         /// <summary>
-        /// Verifies that eviction accepts failed steps as terminal candidates.
+        /// Verifies that eviction accepts failed steps as terminal candidates when hot-state pressure exists.
         /// </summary>
         [Fact]
         public async Task EvictPolicy_Should_Select_Failed_Steps_As_Terminal()
@@ -210,28 +209,28 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 ExecutionId = Guid.NewGuid().ToString("N"),
                 Steps = new Dictionary<string, AiStepState>
                 {
-                    ["failed"] = new AiStepState
-                    {
-                        StepName = "failed",
-                        Status = AiStepExecutionStatus.Failed
-                    },
-
+                    ["failed"] = CreateFailedStep("failed"),
                     ["completed"] = CreateCompletedStep("completed", 100),
-
-                    ["running"] = CreateRunningStep("running", 100)
+                    ["running"] = CreateRunningStep("running", 100),
+                    ["ready"] = CreateReadyStep("ready")
                 }
             };
 
-            var context = CreateContext(state);
+            var context = CreateContext(
+                state,
+                maxStepsInState: 1);
 
             var result = await policy.ExecuteAsync(context);
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Contains("failed", decision!.StepsToEvict);
-            Assert.Contains("completed", decision!.StepsToEvict);
+            Assert.NotNull(decision);
 
-            Assert.DoesNotContain("running", decision!.StepsToEvict);
+            Assert.Contains("failed", decision.StepsToEvict);
+            Assert.Contains("completed", decision.StepsToEvict);
+
+            Assert.DoesNotContain("running", decision.StepsToEvict);
+            Assert.DoesNotContain("ready", decision.StepsToEvict);
         }
 
         /// <summary>
@@ -259,7 +258,8 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
 
             var decision = Assert.IsType<AiPolicyResultGeneric<AiRetentionDecision>>(result).Data;
 
-            Assert.Equal(3, decision!.StepsToCompact.Count);
+            Assert.NotNull(decision);
+            Assert.Equal(3, decision.StepsToCompact.Count);
         }
 
         /// <summary>
@@ -267,7 +267,9 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
         /// </summary>
         private static AiRetentionContext CreateContext(
             AiExecutionState state,
-            int maxInlinePayloadBytes = 512)
+            int maxInlinePayloadBytes = 512,
+            int maxStepsInState = 5,
+            int maxCompletedStepsInState = 5)
         {
             return new AiRetentionContext
             {
@@ -276,8 +278,8 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 Trigger = new AiRetentionTriggerDefinition
                 {
                     Enabled = true,
-                    MaxStepsInState = 5,
-                    MaxCompletedStepsInState = 5,
+                    MaxStepsInState = maxStepsInState,
+                    MaxCompletedStepsInState = maxCompletedStepsInState,
                     MaxInlinePayloadBytes = maxInlinePayloadBytes
                 },
                 UtcNow = DateTime.UtcNow
@@ -321,6 +323,20 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 Status = AiStepExecutionStatus.Completed,
                 InlinePayloadSizeBytes = payloadSize,
                 CompletedAtUtc = DateTime.UtcNow.AddMinutes(-1)
+            };
+        }
+
+        /// <summary>
+        /// Creates a failed step with inline payload size metadata.
+        /// </summary>
+        private static AiStepState CreateFailedStep(
+            string name)
+        {
+            return new AiStepState
+            {
+                StepName = name,
+                Status = AiStepExecutionStatus.Failed,
+                InlinePayloadSizeBytes = 100
             };
         }
 

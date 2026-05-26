@@ -351,9 +351,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Metrics
             _output.WriteLine($"Storage Stored: {storage.PayloadStoredCount}");
             _output.WriteLine($"Storage Bytes: {storage.TotalPayloadStoredBytes}");
 
+            var retainedHotPayloadSteps = finalState!.Steps
+             .Where(step =>
+                 step.Value.Status is AiStepExecutionStatus.Completed or AiStepExecutionStatus.Failed &&
+                 step.Value.Result is not null &&
+                 !step.Value.IsEvictedFromHotState)
+             .ToArray();
+
             Assert.True(
-                finalState!.Steps.Count <= MaxCompletedStepsInState,
-                $"State size exceeded limit: {finalState.Steps.Count}");
+                retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                $"Hot payload state exceeded limit: {retainedHotPayloadSteps.Length}. Total shells={finalState.Steps.Count}");
 
             var retainedPayloadReference = finalState.Steps.Values.Any(s =>
                 s.Result?.Payload is not null ||

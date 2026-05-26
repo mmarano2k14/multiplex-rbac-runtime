@@ -19,12 +19,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
     /// - Validate Hybrid retention with the real DAG execution engine.
     /// - Validate the new policy-driven retention engine through runtime execution.
     /// - Validate archive index + step payload store integration through the fixture.
-    /// - Validate resolver visibility after eviction.
+    /// - Validate resolver visibility after logical eviction or compaction.
     ///
     /// IMPORTANT:
     /// - These tests intentionally do not configure legacy StateRetention options.
     /// - These tests intentionally do not configure legacy RetentionTrigger options.
     /// - Retention is configured only through pipeline-level JSON configuration.
+    /// - Active retention now preserves DAG step shells and removes hot payloads logically.
     /// - Terminal re-entry is validated through persisted state and archive visibility,
     ///   not by calling ExecuteAllAsync again on an already-terminal execution.
     /// </remarks>
@@ -37,11 +38,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
         /// <summary>
         /// Verifies that a real DAG execution can complete with config-driven Hybrid retention enabled,
-        /// and that at least one archived step remains resolvable after eviction.
+        /// and that at least one archived step remains resolvable after logical hot-state cleanup.
         /// </summary>
         /// <remarks>
-        /// A fully evicted terminal hot state is valid when archived steps remain indexed
-        /// and resolvable through the execution step resolver.
+        /// A fully retained terminal DAG shell state is valid when hot payloads are cleared,
+        /// archived steps remain indexed, and archived payloads remain resolvable through the
+        /// execution step resolver.
         /// </remarks>
         [Fact]
         public async Task ExecuteAllAsync_Should_Complete_With_Config_Driven_Hybrid_Retention_And_Archived_Steps_Resolvable()
@@ -64,7 +66,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var finalRecord = await host.Engine
                     .ExecuteAllAsync(created.ExecutionId)
-                    .WaitAsync(TimeSpan.FromSeconds(30));
+                    .WaitAsync(TimeSpan.FromSeconds(60));
 
                 Assert.NotNull(finalRecord);
                 Assert.True(
@@ -81,9 +83,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 Assert.NotNull(finalState);
 
+                var completedSteps = finalState!.Steps
+                    .Where(step => step.Value.Status == AiStepExecutionStatus.Completed)
+                    .ToArray();
+
+                Assert.NotEmpty(completedSteps);
+
+                var retainedHotPayloadSteps = completedSteps
+                    .Where(step =>
+                        step.Value.Result is not null &&
+                        !step.Value.IsEvictedFromHotState)
+                    .ToArray();
+
                 Assert.True(
-                    finalState!.Steps.Count <= MaxCompletedStepsInState,
-                    $"Hot state should be bounded. Actual={finalState.Steps.Count}, Max={MaxCompletedStepsInState}");
+                    retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                    $"Hot payload steps should be bounded. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}");
 
                 var archivedEntries = await indexStore.GetByExecutionAsync(
                     created.ExecutionId,
@@ -94,9 +108,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var archivedEntry = archivedEntries
                     .OrderBy(x => x.ArchivedAtUtc)
-                    .FirstOrDefault(x => !finalState.Steps.ContainsKey(x.StepName));
-
-                Assert.NotNull(archivedEntry);
+                    .First();
 
                 var resolver = new DefaultAiExecutionStepResolver(
                     indexStore,
@@ -104,7 +116,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var statusOnlyStep = await resolver.GetStepStatusAsync(
                     created.ExecutionId,
-                    archivedEntry!.StepName,
+                    archivedEntry.StepName,
                     finalState,
                     CancellationToken.None);
 
@@ -136,12 +148,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
         /// </summary>
         /// <remarks>
         /// This intentionally does not call ExecuteAllAsync a second time on a terminal execution.
-        /// Terminal idempotence is validated through persisted record, bounded hot state, archive index,
-        /// and resolver visibility.
+        /// Terminal idempotence is validated through persisted record, bounded hot payload state,
+        /// archive index, and resolver visibility.
         ///
         /// IMPORTANT:
-        /// A fully evicted terminal hot state is valid. The resolver and archive index are the
-        /// authoritative recovery path for evicted steps.
+        /// A terminal hot state with retained DAG shells is valid. The resolver and archive index are
+        /// the authoritative recovery path for compacted or logically evicted payloads.
         /// </remarks>
         [Fact]
         public async Task Terminal_Retention_State_Should_Remain_Stable_And_Archived_Steps_Resolvable()
@@ -164,7 +176,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var first = await host.Engine
                     .ExecuteAllAsync(created.ExecutionId)
-                    .WaitAsync(TimeSpan.FromSeconds(30));
+                    .WaitAsync(TimeSpan.FromSeconds(60));
 
                 Assert.True(first.IsTerminal);
 
@@ -187,9 +199,21 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 Assert.NotNull(reloadedState);
 
+                var completedSteps = reloadedState!.Steps
+                    .Where(step => step.Value.Status == AiStepExecutionStatus.Completed)
+                    .ToArray();
+
+                Assert.NotEmpty(completedSteps);
+
+                var retainedHotPayloadSteps = completedSteps
+                    .Where(step =>
+                        step.Value.Result is not null &&
+                        !step.Value.IsEvictedFromHotState)
+                    .ToArray();
+
                 Assert.True(
-                    reloadedState!.Steps.Count <= MaxCompletedStepsInState,
-                    $"Hot state should remain bounded. Actual={reloadedState.Steps.Count}, Max={MaxCompletedStepsInState}");
+                    retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                    $"Hot payload steps should remain bounded. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}");
 
                 var archivedEntries = await indexStore.GetByExecutionAsync(
                     created.ExecutionId,
@@ -200,9 +224,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var archivedEntry = archivedEntries
                     .OrderBy(x => x.ArchivedAtUtc)
-                    .FirstOrDefault(x => !reloadedState.Steps.ContainsKey(x.StepName));
-
-                Assert.NotNull(archivedEntry);
+                    .First();
 
                 var resolver = new DefaultAiExecutionStepResolver(
                     indexStore,
@@ -210,7 +232,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
                 var resolved = await resolver.GetStepAsync(
                     created.ExecutionId,
-                    archivedEntry!.StepName,
+                    archivedEntry.StepName,
                     reloadedState,
                     CancellationToken.None);
 

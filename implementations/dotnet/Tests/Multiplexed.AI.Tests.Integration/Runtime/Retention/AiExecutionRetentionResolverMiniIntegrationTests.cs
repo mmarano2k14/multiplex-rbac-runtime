@@ -50,7 +50,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
 
             var context = new AiRetentionContext
             {
-                ExecutionState = state
+                ExecutionId = state.ExecutionId,
+                ExecutionState = state,
+                Trigger = new AiRetentionTriggerDefinition
+                {
+                    Enabled = true,
+                    MaxStepsInState = 3,
+                    MaxCompletedStepsInState = 3,
+                    MaxInlinePayloadBytes = 1
+                },
+                UtcNow = DateTime.UtcNow
             };
 
             var policyResult = await policy.ExecuteAsync(context);
@@ -61,17 +70,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
                 .Take(3)
                 .ToArray();
 
+            Assert.Equal(3, stepsToEvict.Length);
+
             var evictedSteps = await evictionService.EvictAsync(
                 state,
                 stepsToEvict,
                 "integration-test");
 
+            Assert.Equal(3, evictedSteps.Count);
+
             foreach (var stepName in stepsToEvict)
             {
-                Assert.DoesNotContain(stepName, state.Steps.Keys);
-            }
+                Assert.Contains(stepName, state.Steps.Keys);
 
-            Assert.Equal(3, evictedSteps.Count);
+                var shell = state.Steps[stepName];
+
+                Assert.Equal(AiStepExecutionStatus.Completed, shell.Status);
+                Assert.True(shell.IsEvictedFromHotState);
+                Assert.Null(shell.Result);
+                Assert.Equal(0, shell.InlinePayloadSizeBytes);
+            }
 
             var resolver = new DefaultAiExecutionStepResolver(
                 indexStore,
@@ -110,6 +128,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Retention
             Assert.NotNull(fullStep);
             Assert.Equal(evictedStepName, fullStep!.StepName);
             Assert.Equal(AiStepExecutionStatus.Completed, fullStep.Status);
+            Assert.NotNull(fullStep.Result);
 
             Assert.Equal(
                 1,

@@ -72,11 +72,42 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
             Assert.NotNull(finalState);
 
             _output.WriteLine(
-                $"ExecutionId='{created.ExecutionId}', HotSteps='{finalState!.Steps.Count}'.");
+                $"ExecutionId='{created.ExecutionId}', ShellSteps='{finalState!.Steps.Count}'.");
+
+            var completedSteps = finalState.Steps
+                .Where(step => step.Value.Status == AiStepExecutionStatus.Completed)
+                .ToArray();
+
+            Assert.Equal(
+                StepCount,
+                completedSteps.Length);
+
+            var retainedHotPayloadSteps = completedSteps
+                .Where(step =>
+                    step.Value.Result is not null &&
+                    !step.Value.IsEvictedFromHotState)
+                .ToArray();
+
+            _output.WriteLine(
+                $"RetainedHotPayloadSteps='{retainedHotPayloadSteps.Length}', Max='{MaxCompletedStepsInState}'.");
 
             Assert.True(
-                finalState.Steps.Count <= MaxCompletedStepsInState,
-                $"Hot state should be bounded. Actual={finalState.Steps.Count}, Max={MaxCompletedStepsInState}");
+                retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
+                $"Hot payload state should be bounded. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}, Shells={finalState.Steps.Count}");
+
+            var compactedOrEvictedShells = completedSteps
+                .Where(step =>
+                    step.Value.Result is null &&
+                    step.Value.InlinePayloadSizeBytes == 0)
+                .ToArray();
+
+            Assert.NotEmpty(compactedOrEvictedShells);
+
+            var evictedShells = completedSteps
+                .Where(step => step.Value.IsEvictedFromHotState)
+                .ToArray();
+
+            Assert.NotEmpty(evictedShells);
 
             var archivedEntries = await indexStore.GetByExecutionAsync(
                 created.ExecutionId,
@@ -86,12 +117,13 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
             Assert.NotEmpty(archivedEntries);
 
             Assert.True(
-                archivedEntries.Count >= StepCount - finalState.Steps.Count,
-                $"Expected archived entries for evicted steps. Archived={archivedEntries.Count}, Hot={finalState.Steps.Count}");
+                archivedEntries.Count >= compactedOrEvictedShells.Length ||
+                archivedEntries.Count >= evictedShells.Length,
+                $"Expected archived entries for compacted or evicted shells. Archived={archivedEntries.Count}, CompactedOrEvicted={compactedOrEvictedShells.Length}, Evicted={evictedShells.Length}");
 
             var archivedEntry = archivedEntries
                 .OrderBy(x => x.ArchivedAtUtc)
-                .FirstOrDefault(x => !finalState.Steps.ContainsKey(x.StepName));
+                .First();
 
             Assert.NotNull(archivedEntry);
 
@@ -99,7 +131,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Scheduling
 
             var resolvedArchivedStep = await resolver.GetStepAsync(
                 created.ExecutionId,
-                archivedEntry!.StepName,
+                archivedEntry.StepName,
                 finalState,
                 CancellationToken.None);
 
