@@ -1,6 +1,9 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 
 namespace Multiplexed.AI.Runtime.Persistence
 {
@@ -13,8 +16,13 @@ namespace Multiplexed.AI.Runtime.Persistence
     public sealed class DefaultAiExecutionSnapshotService<TContextSnapshot>
         : IAiExecutionSnapshotService<TContextSnapshot>
     {
+        private const string SnapshotPipelineKey = "execution-snapshot";
+        private const string SnapshotStepName = "_snapshot";
+        private const string SnapshotWorkerId = "snapshot-service";
+
         private readonly IAiExecutionSnapshotFactory<TContextSnapshot> _factory;
         private readonly IAiExecutionSnapshotStore<TContextSnapshot> _store;
+        private readonly IAiRuntimeObservability? _observability;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiExecutionSnapshotService{TContextSnapshot}"/> class.
@@ -27,6 +35,21 @@ namespace Multiplexed.AI.Runtime.Persistence
         {
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
             _store = store ?? throw new ArgumentNullException(nameof(store));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DefaultAiExecutionSnapshotService{TContextSnapshot}"/> class.
+        /// </summary>
+        /// <param name="factory">Snapshot factory responsible for document creation.</param>
+        /// <param name="store">Snapshot store responsible for persistence.</param>
+        /// <param name="observability">The runtime observability facade.</param>
+        public DefaultAiExecutionSnapshotService(
+            IAiExecutionSnapshotFactory<TContextSnapshot> factory,
+            IAiExecutionSnapshotStore<TContextSnapshot> store,
+            IAiRuntimeObservability observability)
+            : this(factory, store)
+        {
+            _observability = observability ?? throw new ArgumentNullException(nameof(observability));
         }
 
         /// <inheritdoc />
@@ -58,9 +81,32 @@ namespace Multiplexed.AI.Runtime.Persistence
 
                 await PersistTerminalSnapshotAsync(
                     snapshot).ConfigureAwait(false);
+
+                await RecordSnapshotLedgerEventAsync(
+                        record,
+                        snapshot,
+                        AiDecisionLedgerEvents.Snapshot.Created,
+                        AiDecisionLedgerOutcome.Persisted,
+                        "Terminal execution snapshot persisted.",
+                        null,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
-            catch
+            catch (Exception exception)
             {
+                await RecordStorageLedgerEventAsync(
+                        record,
+                        AiDecisionLedgerEvents.Storage.StatePersistenceFailed,
+                        AiDecisionLedgerOutcome.Failed,
+                        exception.Message,
+                        new Dictionary<string, string>
+                        {
+                            ["exception.type"] = exception.GetType().Name,
+                            ["storage.artifact"] = "execution.snapshot"
+                        },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+
                 // INTENTIONALLY SWALLOWED
                 // Snapshot persistence is best-effort and must not affect execution reliability.
             }
@@ -91,6 +137,138 @@ namespace Multiplexed.AI.Runtime.Persistence
             await _store.UpsertAsync(
                 snapshot,
                 CancellationToken.None).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records a snapshot decision ledger event.
+        /// </summary>
+        private async Task RecordSnapshotLedgerEventAsync(
+            AiExecutionRecord record,
+            AiExecutionSnapshotDocument<TContextSnapshot> snapshot,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? additionalMetadata,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+
+            var metadata = CreateBaseMetadata(record);
+
+            metadata["snapshot.id"] = snapshot.Id ?? string.Empty;
+            metadata["context.key"] = snapshot.ContextKey ?? string.Empty;
+            metadata["execution.status"] = record.Status.ToString();
+
+            MergeMetadata(
+                metadata,
+                additionalMetadata);
+
+            await RecordLedgerEventAsync(
+                    record.ExecutionId,
+                    AiDecisionLedgerCategory.Snapshot,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records a storage decision ledger event.
+        /// </summary>
+        private async Task RecordStorageLedgerEventAsync(
+            AiExecutionRecord record,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? additionalMetadata,
+            CancellationToken cancellationToken)
+        {
+            var metadata = CreateBaseMetadata(record);
+
+            MergeMetadata(
+                metadata,
+                additionalMetadata);
+
+            await RecordLedgerEventAsync(
+                    record.ExecutionId,
+                    AiDecisionLedgerCategory.Storage,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records a generic decision ledger event for snapshot persistence.
+        /// </summary>
+        private async Task RecordLedgerEventAsync(
+            string executionId,
+            AiDecisionLedgerCategory category,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken cancellationToken)
+        {
+            if (_observability?.Ledger is null)
+            {
+                return;
+            }
+
+            var correlationContext = AiRuntimeCorrelationContextHelper.Create(
+                executionId,
+                SnapshotPipelineKey,
+                SnapshotStepName,
+                SnapshotWorkerId,
+                claimToken: null,
+                concurrencyContext: null);
+
+            await _observability.Ledger
+                .RecordAsync(
+                    correlationContext,
+                    category,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Creates base snapshot metadata shared by snapshot and storage ledger events.
+        /// </summary>
+        private static Dictionary<string, string> CreateBaseMetadata(
+            AiExecutionRecord record)
+        {
+            return new Dictionary<string, string>
+            {
+                ["execution.id"] = record.ExecutionId,
+                ["pipeline.name"] = record.PipelineName ?? string.Empty,
+                ["execution.status"] = record.Status.ToString()
+            };
+        }
+
+        /// <summary>
+        /// Merges optional metadata into the target metadata dictionary.
+        /// </summary>
+        private static void MergeMetadata(
+            IDictionary<string, string> target,
+            IReadOnlyDictionary<string, string>? source)
+        {
+            if (source is null)
+            {
+                return;
+            }
+
+            foreach (var pair in source)
+            {
+                target[pair.Key] = pair.Value;
+            }
         }
     }
 }

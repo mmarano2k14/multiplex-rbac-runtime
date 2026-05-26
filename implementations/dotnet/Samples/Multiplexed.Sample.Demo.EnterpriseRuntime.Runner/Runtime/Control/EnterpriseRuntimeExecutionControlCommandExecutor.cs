@@ -106,7 +106,7 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Con
                 .ConfigureAwait(false);
 
             await _controller.CancelRunAsync(
-                    handle.RunId,
+                    handle,
                     reason: "Console cancellation confirmed.",
                     requestedBy: RequestedBy,
                     cancellationToken: cancellationToken)

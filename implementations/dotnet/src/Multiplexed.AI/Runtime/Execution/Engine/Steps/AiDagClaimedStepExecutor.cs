@@ -203,63 +203,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                    if (result.Success)
-                    {
-                        var readyStepsAfterCompletion = await _services.DagStore!
-                            .GetReadyStepsAsync(
-                                record.ExecutionId,
-                                maxSteps: 32,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-
-                        foreach (var readyStep in readyStepsAfterCompletion)
-                        {
-                            if (string.Equals(
-                                    readyStep.StepName,
-                                    claimedStep.StepName,
-                                    StringComparison.Ordinal))
-                            {
-                                continue;
-                            }
-
-                            var readyDefinition = resolvedPipeline.Steps
-                                .FirstOrDefault(x =>
-                                    string.Equals(
-                                        x.Name,
-                                        readyStep.StepName,
-                                        StringComparison.Ordinal));
-
-                            if (readyDefinition is null)
-                            {
-                                continue;
-                            }
-
-                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
-                                    _services,
-                                    record.ExecutionId,
-                                    pipelineKey,
-                                    readyDefinition.Name,
-                                    readyDefinition.StepKey,
-                                    runtimeInstanceId,
-                                    claimToken: null,
-                                    concurrencyContext: null,
-                                    AiDecisionLedgerCategory.Dag,
-                                    AiDecisionLedgerEvents.Dag.StepBecameReady,
-                                    AiDecisionLedgerOutcome.Ready,
-                                    "DAG step became ready after dependency completion.",
-                                    new Dictionary<string, string>
-                                    {
-                                        ["pipeline.name"] = resolvedPipeline.Name,
-                                        ["pipeline.version"] = resolvedPipeline.Version,
-                                        ["completed.step.name"] = claimedStep.StepName,
-                                        ["ready.step.name"] = readyDefinition.Name,
-                                        ["ready.step.key"] = readyDefinition.StepKey,
-                                        ["worker.id"] = runtimeInstanceId
-                                    },
-                                    cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-                    }
 
                     return result;
                 }

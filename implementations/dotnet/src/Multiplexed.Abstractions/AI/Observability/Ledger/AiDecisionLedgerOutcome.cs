@@ -87,6 +87,16 @@
         /// <summary>
         /// The runtime data was loaded.
         /// </summary>
-        Loaded
+        Loaded,
+
+        /// <summary>
+        /// The operation produced a ready state and may continue execution.
+        /// </summary>
+        /// <remarks>
+        /// This outcome is primarily used for orchestration and DAG scheduling events,
+        /// such as when a step becomes ready after dependency completion.
+        /// </remarks>  
+        Ready,
+
     }
 }
