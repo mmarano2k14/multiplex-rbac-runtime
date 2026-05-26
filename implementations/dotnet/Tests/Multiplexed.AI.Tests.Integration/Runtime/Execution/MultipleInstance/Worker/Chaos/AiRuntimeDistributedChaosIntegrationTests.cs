@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Metrics;
@@ -1753,6 +1754,104 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                         host.ServiceProvider,
                         handle.ExecutionId);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Validates execution control and human-input decision ledger events.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Record_Control_And_HumanInput_Ledger_Events()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostAsync(scenario);
+
+            var controlService = host.ServiceProvider.GetRequiredService<IAiExecutionControlService>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+
+            var executionId = Guid.NewGuid().ToString("N");
+
+            await controlService.PauseExecutionAsync(
+                executionId,
+                reason: "test-pause",
+                requestedBy: "integration-test");
+
+            await controlService.MarkPausedAsync(
+                executionId,
+                requestedBy: "integration-test");
+
+            await controlService.ResumeExecutionAsync(
+                executionId,
+                requestedBy: "integration-test");
+
+            await controlService.MarkRunningAsync(
+                executionId,
+                requestedBy: "integration-test");
+
+            await controlService.MarkWaitingForInputAsync(
+                executionId,
+                waitingKey: "approval-required",
+                waitingStepName: "human-approval-step",
+                reason: "approval required",
+                requestedBy: "integration-test");
+
+            await controlService.SubmitHumanInputAsync(
+                executionId,
+                waitingKey: "approval-required",
+                input: new Dictionary<string, object?>
+                {
+                    ["approved"] = true,
+                    ["comment"] = "approved by integration test"
+                },
+                submittedBy: "integration-test");
+
+            var entries = await ledger.GetByExecutionAsync(executionId);
+
+            Assert.NotEmpty(entries);
+
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.Control, AiDecisionLedgerEvents.Control.PauseRequested);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.Control, AiDecisionLedgerEvents.Control.Paused);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.Control, AiDecisionLedgerEvents.Control.ResumeRequested);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.Control, AiDecisionLedgerEvents.Control.Resumed);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.Control, AiDecisionLedgerEvents.Control.StateChanged);
+
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.HumanInput, AiDecisionLedgerEvents.HumanInput.Requested);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.HumanInput, AiDecisionLedgerEvents.HumanInput.Waiting);
+            AssertLedgerContains(entries, AiDecisionLedgerCategory.HumanInput, AiDecisionLedgerEvents.HumanInput.Submitted);
+
+            Assert.All(
+                entries.Where(x =>
+                    x.Category == AiDecisionLedgerCategory.Control ||
+                    x.Category == AiDecisionLedgerCategory.HumanInput),
+                entry =>
+                {
+                    Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+                    Assert.Equal("integration-test", entry.CorrelationContext.WorkerId);
+                    Assert.False(string.IsNullOrWhiteSpace(entry.EventType));
+                    Assert.NotNull(entry.Metadata);
+                });
+
+            _output.WriteLine("");
+            _output.WriteLine("CONTROL / HUMAN INPUT LEDGER EVENTS");
+            _output.WriteLine("------------------------------------------------------------");
+
+            foreach (var entry in entries
+                .Where(x =>
+                    x.Category == AiDecisionLedgerCategory.Control ||
+                    x.Category == AiDecisionLedgerCategory.HumanInput)
+                .OrderBy(x => x.TimestampUtc)
+                .ThenBy(x => x.EventType, StringComparer.Ordinal))
+            {
+                _output.WriteLine(
+                    $"{entry.TimestampUtc:O} | " +
+                    $"{entry.Category,-16} | " +
+                    $"{entry.EventType,-35} | " +
+                    $"{entry.Outcome,-12} | " +
+                    $"StepId={entry.CorrelationContext.StepId} | " +
+                    $"StepKey={entry.CorrelationContext.StepKey} | " +
+                    $"Worker={entry.CorrelationContext.WorkerId} | " +
+                    $"Reason={entry.Reason}");
             }
         }
 

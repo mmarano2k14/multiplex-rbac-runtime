@@ -35,7 +35,8 @@ namespace Multiplexed.AI.Runtime.Execution.Control
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="store"/> is null.
         /// </exception>
-        public AiExecutionControlService(IAiExecutionControlStore store)
+        public AiExecutionControlService(
+            IAiExecutionControlStore store)
         {
             ArgumentNullException.ThrowIfNull(store);
 
@@ -82,6 +83,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after pause request.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             return state;
         }
 
@@ -105,6 +112,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     AiDecisionLedgerOutcome.Applied,
                     "Execution resume requested.",
                     CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after resume request.",
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -132,6 +145,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     AiDecisionLedgerOutcome.Applied,
                     reason ?? "Execution cancellation requested.",
                     CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after cancellation request.",
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -186,6 +205,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after waiting-for-input request.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             return state;
         }
 
@@ -218,6 +243,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     AiDecisionLedgerOutcome.Applied,
                     "Human input submitted.",
                     CreateHumanInputMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after human input submission.",
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -301,6 +332,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after execution was marked paused.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             return state;
         }
 
@@ -327,9 +364,22 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            await RecordControlStateChangedLedgerEventAsync(
+                    state,
+                    "Execution control state changed after execution was marked running.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             return state;
         }
 
+        /// <summary>
+        /// Applies a durable execution control transition using optimistic concurrency.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="transition">The transition function to apply to the existing state.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The updated execution control state.</returns>
         private async Task<AiExecutionControlState> ApplyTransitionAsync(
             string executionId,
             Func<AiExecutionControlState?, AiExecutionControlState> transition,
@@ -374,6 +424,14 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 $"Unable to update execution control state for execution '{executionId}' after {MaxUpdateAttempts} attempts.");
         }
 
+        /// <summary>
+        /// Applies a requested pause transition.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="reason">The optional pause reason.</param>
+        /// <param name="requestedBy">The optional identity requesting the pause.</param>
+        /// <returns>The updated control state.</returns>
         private static AiExecutionControlState ApplyPause(
             AiExecutionControlState? existing,
             string executionId,
@@ -440,6 +498,13 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <summary>
+        /// Applies a requested resume transition.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity requesting the resume.</param>
+        /// <returns>The updated control state.</returns>
         private static AiExecutionControlState ApplyResume(
             AiExecutionControlState? existing,
             string executionId,
@@ -460,6 +525,14 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <summary>
+        /// Applies a requested cancellation transition.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="reason">The optional cancellation reason.</param>
+        /// <param name="requestedBy">The optional identity requesting cancellation.</param>
+        /// <returns>The updated control state.</returns>
         private static AiExecutionControlState ApplyCancel(
             AiExecutionControlState? existing,
             string executionId,
@@ -482,6 +555,16 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <summary>
+        /// Applies a waiting-for-input transition.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="waitingKey">The waiting input key.</param>
+        /// <param name="waitingStepName">The optional step waiting for input.</param>
+        /// <param name="reason">The optional waiting reason.</param>
+        /// <param name="requestedBy">The optional identity requesting input.</param>
+        /// <returns>The updated control state.</returns>
         private static AiExecutionControlState ApplyWaitingForInput(
             AiExecutionControlState? existing,
             string executionId,
@@ -508,6 +591,15 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <summary>
+        /// Applies submitted human input to a waiting execution.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="waitingKey">The waiting input key.</param>
+        /// <param name="input">The submitted input payload.</param>
+        /// <param name="submittedBy">The optional identity submitting the input.</param>
+        /// <returns>The updated control state.</returns>
         private static AiExecutionControlState ApplyHumanInput(
             AiExecutionControlState? existing,
             string executionId,
@@ -576,6 +668,92 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <inheritdoc />
+        public async Task<AiExecutionControlState> MarkCancelledAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateExecutionId(executionId);
+
+            var state = await ApplyTransitionAsync(
+                    executionId,
+                    existing => ApplyMarkCancelled(existing, executionId, requestedBy),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.CancelObserved,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Execution cancellation was observed by the runtime.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.StateChanged,
+                    AiDecisionLedgerOutcome.Applied,
+                    "Execution control state changed.",
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return state;
+        }
+
+        private static AiExecutionControlState ApplyMarkCancelled(
+            AiExecutionControlState? existing,
+            string executionId,
+            string? requestedBy)
+        {
+            var state = CloneOrCreate(existing, executionId);
+
+            if (state.Status == AiExecutionControlStatus.Cancelled &&
+                state.PendingAction == AiExecutionControlAction.None)
+            {
+                return state;
+            }
+
+            state.Status = AiExecutionControlStatus.Cancelled;
+            state.PendingAction = AiExecutionControlAction.None;
+            state.RequestedBy = requestedBy ?? state.RequestedBy;
+            state.CancelledAtUtc ??= DateTime.UtcNow;
+
+            return state;
+        }
+
+        /// <summary>
+        /// Records a control state changed event in the decision ledger.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <param name="reason">The reason associated with the state change.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task RecordControlStateChangedLedgerEventAsync(
+            AiExecutionControlState state,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            await RecordControlLedgerEventAsync(
+                    state,
+                    AiDecisionLedgerEvents.Control.StateChanged,
+                    AiDecisionLedgerOutcome.Applied,
+                    reason,
+                    CreateControlMetadata(state),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records an execution control ledger event.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger outcome.</param>
+        /// <param name="reason">The optional event reason.</param>
+        /// <param name="metadata">The optional event metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordControlLedgerEventAsync(
             AiExecutionControlState state,
             string eventType,
@@ -596,6 +774,15 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 .ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Records a human-input ledger event.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger outcome.</param>
+        /// <param name="reason">The optional event reason.</param>
+        /// <param name="metadata">The optional event metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordHumanInputLedgerEventAsync(
             AiExecutionControlState state,
             string eventType,
@@ -622,6 +809,17 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 .ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Records a decision ledger event when ledger recording is available.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <param name="stepName">The logical ledger step name.</param>
+        /// <param name="category">The ledger category.</param>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger outcome.</param>
+        /// <param name="reason">The optional event reason.</param>
+        /// <param name="metadata">The optional event metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordLedgerEventAsync(
             AiExecutionControlState state,
             string stepName,
@@ -665,6 +863,11 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 .ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Creates metadata for execution control ledger events.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <returns>The metadata dictionary.</returns>
         private static IReadOnlyDictionary<string, string> CreateControlMetadata(
             AiExecutionControlState state)
         {
@@ -678,6 +881,11 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             };
         }
 
+        /// <summary>
+        /// Creates metadata for human-input ledger events.
+        /// </summary>
+        /// <param name="state">The current execution control state.</param>
+        /// <returns>The metadata dictionary.</returns>
         private static IReadOnlyDictionary<string, string> CreateHumanInputMetadata(
             AiExecutionControlState state)
         {
@@ -693,6 +901,12 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             };
         }
 
+        /// <summary>
+        /// Clones the existing control state or creates a new one for the execution.
+        /// </summary>
+        /// <param name="existing">The existing control state.</param>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <returns>The cloned or created control state.</returns>
         private static AiExecutionControlState CloneOrCreate(
             AiExecutionControlState? existing,
             string executionId)
@@ -727,7 +941,15 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             };
         }
 
-        private static void ValidateExecutionId(string executionId)
+        /// <summary>
+        /// Validates that an execution identifier is present.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <exception cref="ArgumentException">
+        /// Thrown when <paramref name="executionId"/> is null, empty, or whitespace.
+        /// </exception>
+        private static void ValidateExecutionId(
+            string executionId)
         {
             if (string.IsNullOrWhiteSpace(executionId))
             {

@@ -32,7 +32,7 @@ namespace Multiplexed.AI.Runtime.Execution.Control
         }
 
         /// <inheritdoc />
-        public Task<AiExecutionControlDecision> CheckBeforeAdvanceAsync(
+        public async Task<AiExecutionControlDecision> CheckBeforeAdvanceAsync(
             string executionId,
             CancellationToken cancellationToken = default)
         {
@@ -41,7 +41,21 @@ namespace Multiplexed.AI.Runtime.Execution.Control
                 throw new ArgumentException("Execution id cannot be null, empty, or whitespace.", nameof(executionId));
             }
 
-            return _controlService.CheckCanAdvanceAsync(executionId, cancellationToken);
+            var decision = await _controlService.CheckCanAdvanceAsync(
+                    executionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (decision.ShouldCancel)
+            {
+                await _controlService.MarkCancelledAsync(
+                        executionId,
+                        requestedBy: "execution-control-gate",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return decision;
         }
     }
 }

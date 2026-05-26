@@ -207,5 +207,19 @@ namespace Multiplexed.AI.Tests.Integration.Fixtures
                     UpdatedAtUtc = DateTime.UtcNow
                 });
         }
+
+        public Task<AiExecutionControlState> MarkCancelledAsync(string executionId, string? requestedBy = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                new AiExecutionControlState
+                {
+                    ExecutionId = executionId,
+                    Status = AiExecutionControlStatus.Cancelled,
+                    PendingAction = AiExecutionControlAction.None,
+                    RequestedBy = requestedBy,
+                    Version = 1,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+        }
     }
 }

@@ -53,13 +53,6 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
         /// <summary>
         /// Executes an already-claimed DAG step and releases its concurrency slot afterwards.
         /// </summary>
-        /// <param name="record">The execution record.</param>
-        /// <param name="state">The execution state.</param>
-        /// <param name="resolvedPipeline">The resolved pipeline definition.</param>
-        /// <param name="claimedStep">The claimed step to execute.</param>
-        /// <param name="buildExecutionContext">Factory used to build execution contexts.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The step execution result.</returns>
         public async Task<AiStepResult> ExecuteAsync(
             AiExecutionRecord record,
             AiExecutionState state,
@@ -210,6 +203,64 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             cancellationToken)
                         .ConfigureAwait(false);
 
+                    if (result.Success)
+                    {
+                        var readyStepsAfterCompletion = await _services.DagStore!
+                            .GetReadyStepsAsync(
+                                record.ExecutionId,
+                                maxSteps: 32,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        foreach (var readyStep in readyStepsAfterCompletion)
+                        {
+                            if (string.Equals(
+                                    readyStep.StepName,
+                                    claimedStep.StepName,
+                                    StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+
+                            var readyDefinition = resolvedPipeline.Steps
+                                .FirstOrDefault(x =>
+                                    string.Equals(
+                                        x.Name,
+                                        readyStep.StepName,
+                                        StringComparison.Ordinal));
+
+                            if (readyDefinition is null)
+                            {
+                                continue;
+                            }
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _services,
+                                    record.ExecutionId,
+                                    pipelineKey,
+                                    readyDefinition.Name,
+                                    readyDefinition.StepKey,
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Dag,
+                                    AiDecisionLedgerEvents.Dag.StepBecameReady,
+                                    AiDecisionLedgerOutcome.Ready,
+                                    "DAG step became ready after dependency completion.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["pipeline.name"] = resolvedPipeline.Name,
+                                        ["pipeline.version"] = resolvedPipeline.Version,
+                                        ["completed.step.name"] = claimedStep.StepName,
+                                        ["ready.step.name"] = readyDefinition.Name,
+                                        ["ready.step.key"] = readyDefinition.StepKey,
+                                        ["worker.id"] = runtimeInstanceId
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
                     return result;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -247,8 +298,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                    return AiStepResult.Fail(
-                        ex.Message);
+                    return AiStepResult.Fail(ex.Message);
                 }
             }
             finally

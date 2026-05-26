@@ -56,6 +56,25 @@ namespace Multiplexed.Abstractions.AI.Execution.Control
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Marks an execution as effectively cancelled after the runtime observes
+        /// a pending cancellation request.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="requestedBy">The optional identity confirming cancellation observation.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>The updated control state.</returns>
+        /// <remarks>
+        /// This method is intended for runtime integration. A cancellation request first enters
+        /// <see cref="AiExecutionControlStatus.Cancelling"/> so the runtime can observe the
+        /// request and stop advancement safely. Once observed, the runtime may transition the
+        /// control state to <see cref="AiExecutionControlStatus.Cancelled"/>.
+        /// </remarks>
+        Task<AiExecutionControlState> MarkCancelledAsync(
+            string executionId,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Marks an execution as waiting for external or human input.
         /// </summary>
         /// <param name="executionId">The durable execution identifier.</param>
