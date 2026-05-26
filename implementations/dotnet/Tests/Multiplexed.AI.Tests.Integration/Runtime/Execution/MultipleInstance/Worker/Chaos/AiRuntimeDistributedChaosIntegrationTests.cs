@@ -183,9 +183,25 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     scenario.StepCount,
                     record.CompletedSteps.Count);
 
+                var evictedShells = reloadedState!.Steps.Values
+                    .Where(step => step.IsEvictedFromHotState)
+                    .ToArray();
+
+                Assert.NotEmpty(evictedShells);
+
                 Assert.True(
-                    reloadedState!.Steps.Count < scenario.StepCount,
-                    $"Expected hot state to be smaller than total steps after aggressive retention. HotState='{reloadedState.Steps.Count}', Total='{scenario.StepCount}'.");
+                    evictedShells.Length > 0,
+                    $"Expected aggressive retention to logically evict at least one step. Evicted='{evictedShells.Length}', Total='{scenario.StepCount}'.");
+
+                Assert.All(
+                    evictedShells,
+                    step =>
+                    {
+                        Assert.Equal(AiStepExecutionStatus.Completed, step.Status);
+                        Assert.Null(step.Result);
+                        Assert.True(step.InlinePayloadSizeBytes.HasValue);
+                        Assert.Equal(0, step.InlinePayloadSizeBytes);
+                    });
 
 
                 foreach (var stepName in scenario.ExpectedRetriedSteps)
@@ -251,6 +267,275 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                             AiStepExecutionStatus.Completed,
                             resolved!.Status);
                     }
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validates run-id-correlated controller queue decision ledger events.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Record_Run_Queued_And_Dequeued_Ledger_Events()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostAsync(scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            ledger = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+                Assert.False(string.IsNullOrWhiteSpace(handle.RunId));
+
+                var final = await handle.Completion.WaitAsync(scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+                Assert.NotEqual(handle.RunId, handle.ExecutionId);
+
+                var runEntries = await ledger.GetByExecutionAsync(handle.RunId);
+
+                Assert.NotEmpty(runEntries);
+
+                AssertLedgerContains(
+                    runEntries,
+                    AiDecisionLedgerCategory.Run,
+                    "run.queued");
+
+                AssertLedgerContains(
+                    runEntries,
+                    AiDecisionLedgerCategory.Run,
+                    "run.dequeued");
+
+                var queued = runEntries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        x.EventType == "run.queued");
+
+                var dequeued = runEntries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        x.EventType == "run.dequeued");
+
+                Assert.Equal(AiDecisionLedgerOutcome.Persisted, queued.Outcome);
+                Assert.Equal(AiDecisionLedgerOutcome.Started, dequeued.Outcome);
+
+                Assert.Equal(handle.RunId, queued.CorrelationContext.ExecutionId);
+                Assert.Equal(handle.RunId, dequeued.CorrelationContext.ExecutionId);
+
+                Assert.Equal(handle.RunId, queued.CorrelationContext.CorrelationId);
+                Assert.Equal(handle.RunId, dequeued.CorrelationContext.CorrelationId);
+
+                Assert.Equal("pipeline-background-controller", queued.CorrelationContext.WorkerId);
+                Assert.Equal("pipeline-background-controller", dequeued.CorrelationContext.WorkerId);
+
+                Assert.NotNull(queued.Metadata);
+                Assert.NotNull(dequeued.Metadata);
+
+                Assert.Equal(handle.RunId, queued.Metadata!["run.id"]);
+                Assert.Equal(handle.RunId, dequeued.Metadata!["run.id"]);
+
+                Assert.Equal(scenario.PipelineName, queued.Metadata!["pipeline.name"]);
+                Assert.Equal(scenario.PipelineName, dequeued.Metadata!["pipeline.name"]);
+
+                Assert.DoesNotContain(
+                    runEntries,
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        (x.EventType == "run.started" || x.EventType == "run.completed"));
+
+                _output.WriteLine("");
+                _output.WriteLine("RUN-ID-CORRELATED QUEUE LEDGER EVENTS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var entry in runEntries
+                    .Where(x => x.Category == AiDecisionLedgerCategory.Run)
+                    .OrderBy(x => x.TimestampUtc))
+                {
+                    _output.WriteLine(
+                        $"{entry.TimestampUtc:O} | " +
+                        $"{entry.Category,-12} | " +
+                        $"{entry.EventType,-30} | " +
+                        $"{entry.Outcome,-12} | " +
+                        $"ExecutionId={entry.CorrelationContext.ExecutionId} | " +
+                        $"CorrelationId={entry.CorrelationContext.CorrelationId} | " +
+                        $"Worker={entry.CorrelationContext.WorkerId}");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validates execution-correlated queue pause and resume decision ledger events.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Record_Queue_Pause_And_Resume_Ledger_Events()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostAsync(scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            ledger = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                while (string.IsNullOrWhiteSpace(handle.ExecutionId))
+                {
+                    await Task.Delay(25);
+                }
+
+                await controller.PauseQueueAsync(
+                    handle,
+                    reason: "test-pause",
+                    requestedBy: "integration-test");
+
+                await controller.ResumeQueueAsync(
+                    handle,
+                    requestedBy: "integration-test");
+
+                var final = await handle.Completion.WaitAsync(scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var entries = await ledger.GetByExecutionAsync(handle.ExecutionId!);
+
+                Assert.NotEmpty(entries);
+
+                AssertLedgerContains(entries, AiDecisionLedgerCategory.Queue, "queue.paused");
+                AssertLedgerContains(entries, AiDecisionLedgerCategory.Queue, "queue.resumed");
+
+                var paused = entries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Queue &&
+                        x.EventType == "queue.paused");
+
+                var resumed = entries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Queue &&
+                        x.EventType == "queue.resumed");
+
+                Assert.Equal(AiDecisionLedgerOutcome.Applied, paused.Outcome);
+                Assert.Equal(AiDecisionLedgerOutcome.Applied, resumed.Outcome);
+
+                Assert.Equal(handle.ExecutionId, paused.CorrelationContext.ExecutionId);
+                Assert.Equal(handle.ExecutionId, resumed.CorrelationContext.ExecutionId);
+
+                Assert.Equal(handle.RunId, paused.CorrelationContext.CorrelationId);
+                Assert.Equal(handle.RunId, resumed.CorrelationContext.CorrelationId);
+
+                Assert.Equal("pipeline-background-controller", paused.CorrelationContext.WorkerId);
+                Assert.Equal("pipeline-background-controller", resumed.CorrelationContext.WorkerId);
+
+                Assert.Equal("test-pause", paused.Reason);
+                Assert.Equal(
+                    "Pipeline controller queue resumed.",
+                    resumed.Reason);
+
+                Assert.NotNull(paused.Metadata);
+                Assert.NotNull(resumed.Metadata);
+
+                Assert.Equal(
+                    "integration-test",
+                    paused.Metadata!["requested.by"]);
+
+                Assert.Equal(
+                    "integration-test",
+                    resumed.Metadata!["requested.by"]);
+
+                Assert.Contains(
+                    "paused.at.utc",
+                    paused.Metadata!.Keys);
+
+                Assert.Contains(
+                    "paused.since.utc",
+                    resumed.Metadata!.Keys);
+
+                _output.WriteLine("");
+                _output.WriteLine("EXECUTION-CORRELATED QUEUE PAUSE / RESUME LEDGER EVENTS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var entry in entries
+                    .Where(x => x.Category == AiDecisionLedgerCategory.Queue)
+                    .OrderBy(x => x.TimestampUtc))
+                {
+                    _output.WriteLine(
+                        $"{entry.TimestampUtc:O} | " +
+                        $"{entry.Category,-12} | " +
+                        $"{entry.EventType,-30} | " +
+                        $"{entry.Outcome,-12} | " +
+                        $"ExecutionId={entry.CorrelationContext.ExecutionId} | " +
+                        $"CorrelationId={entry.CorrelationContext.CorrelationId} | " +
+                        $"Worker={entry.CorrelationContext.WorkerId} | " +
+                        $"Reason={entry.Reason}");
                 }
             }
             finally
@@ -1337,6 +1622,126 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 _output.WriteLine(
                     $"Distributed chaos completed. ExecutionId='{executionId}', Steps='{scenario.StepCount}', Workers='{scenario.WorkerCount}'.");
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validates execution-correlated controller-level run decision ledger events.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Record_Run_And_Queue_Ledger_Events()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostAsync(scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            ledger = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.RunId));
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+                Assert.NotEqual(handle.RunId, handle.ExecutionId);
+
+                var entries = await ledger.GetByExecutionAsync(handle.ExecutionId!);
+
+                Assert.NotEmpty(entries);
+
+                AssertLedgerContains(entries, AiDecisionLedgerCategory.Run, "run.started");
+                AssertLedgerContains(entries, AiDecisionLedgerCategory.Run, "run.completed");
+
+                Assert.DoesNotContain(
+                    entries,
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        (x.EventType == "run.queued" || x.EventType == "run.dequeued"));
+
+                var started = entries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        x.EventType == "run.started");
+
+                var completed = entries.Single(
+                    x =>
+                        x.Category == AiDecisionLedgerCategory.Run &&
+                        x.EventType == "run.completed");
+
+                Assert.Equal(AiDecisionLedgerOutcome.Started, started.Outcome);
+                Assert.Equal(AiDecisionLedgerOutcome.Completed, completed.Outcome);
+
+                Assert.Equal(handle.ExecutionId, started.CorrelationContext.ExecutionId);
+                Assert.Equal(handle.ExecutionId, completed.CorrelationContext.ExecutionId);
+
+                Assert.Equal(handle.RunId, started.CorrelationContext.CorrelationId);
+                Assert.Equal(handle.RunId, completed.CorrelationContext.CorrelationId);
+
+                Assert.NotNull(started.Metadata);
+                Assert.NotNull(completed.Metadata);
+
+                Assert.Equal(handle.RunId, started.Metadata!["run.id"]);
+                Assert.Equal(handle.RunId, completed.Metadata!["run.id"]);
+
+                Assert.Equal(handle.ExecutionId, started.Metadata!["execution.id"]);
+                Assert.Equal(handle.ExecutionId, completed.Metadata!["execution.id"]);
+
+                Assert.Equal(scenario.PipelineName, started.Metadata!["pipeline.name"]);
+                Assert.Equal(scenario.PipelineName, completed.Metadata!["pipeline.name"]);
+
+                _output.WriteLine("");
+                _output.WriteLine("EXECUTION-CORRELATED RUN LEDGER EVENTS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var entry in entries
+                    .Where(x => x.Category == AiDecisionLedgerCategory.Run)
+                    .OrderBy(x => x.TimestampUtc))
+                {
+                    _output.WriteLine(
+                        $"{entry.TimestampUtc:O} | " +
+                        $"{entry.Category,-12} | " +
+                        $"{entry.EventType,-30} | " +
+                        $"{entry.Outcome,-12} | " +
+                        $"ExecutionId={entry.CorrelationContext.ExecutionId} | " +
+                        $"CorrelationId={entry.CorrelationContext.CorrelationId} | " +
+                        $"Worker={entry.CorrelationContext.WorkerId}");
+                }
             }
             finally
             {

@@ -44,11 +44,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
             await controller.StartAsync();
 
-            AiRuntimeWorkerRunHandle? handle = null;
+            AiRuntimeWorkerRunHandle? handle = AiRuntimeWorkerRunHandle.CreateTestHandle();
 
             try
             {
                 await controller.PauseQueueAsync(
+                        handle,
                         reason: "integration test queue pause",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -74,6 +75,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
 
                 await controller.ResumeQueueAsync(
+                        handle,
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
 
@@ -141,6 +143,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     TimeSpan.FromSeconds(15));
 
                 await controller.PauseQueueAsync(
+                        handle,
                         reason: "pause after run has started",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -183,11 +186,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
             await controller.StartAsync();
 
-            AiRuntimeWorkerRunHandle? handle = null;
+            AiRuntimeWorkerRunHandle? handle = AiRuntimeWorkerRunHandle.CreateTestHandle();
 
             try
             {
                 await controller.PauseQueueAsync(
+                        handle,
                         reason: "pause queue before cancelling queued run",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -208,7 +212,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
 
                 var cancelled = await controller.CancelQueuedRunAsync(
-                        handle.RunId,
+                        handle,
                         reason: "cancel queued run from integration test",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -218,6 +222,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.True(string.IsNullOrWhiteSpace(handle.ExecutionId));
 
                 await controller.ResumeQueueAsync(
+                        handle,
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
 
@@ -259,11 +264,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
 
             await controller.StartAsync();
+            
 
             try
             {
                 var cancelled = await controller.CancelQueuedRunAsync(
-                        runId: $"missing-run-{Guid.NewGuid():N}",
+                        AiRuntimeWorkerRunHandle.CreateTestHandle(),
                         reason: "missing run",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -321,7 +327,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
 
                 var cancelled = await controller.CancelRunAsync(
-                        handle.RunId,
+                        handle,
                         reason: "cancel running run from integration test",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -478,6 +484,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             try
             {
                 await controller.PauseQueueAsync(
+                        AiRuntimeWorkerRunHandle.CreateTestHandle(),
                         reason: "pause before hot adding queued runs",
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
@@ -522,6 +529,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.True(string.IsNullOrWhiteSpace(secondHandle.ExecutionId));
 
                 await controller.ResumeQueueAsync(
+                       AiRuntimeWorkerRunHandle.CreateTestHandle(),
                         requestedBy: "integration-test")
                     .ConfigureAwait(false);
 
@@ -769,6 +777,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 StartedSignals.Remove(signalKey);
             }
         }
+
+        private static AiRuntimeWorkerRunHandle CreateTestHandle()
+{
+    var completionSource = new TaskCompletionSource<AiExecutionRecord>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    return new AiRuntimeWorkerRunHandle(
+        Guid.NewGuid().ToString("N"),
+        completionSource.Task);
+}
     }
 
     /// <summary>

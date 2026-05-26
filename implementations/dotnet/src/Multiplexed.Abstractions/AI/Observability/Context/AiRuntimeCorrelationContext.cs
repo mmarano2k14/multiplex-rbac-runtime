@@ -116,6 +116,6 @@
         /// Gets the general correlation identifier used to connect logs, traces,
         /// metrics, ledger entries, and external systems.
         /// </summary>
-        public string? CorrelationId { get; init; }
+        public string? CorrelationId { get; set; }
     }
 }

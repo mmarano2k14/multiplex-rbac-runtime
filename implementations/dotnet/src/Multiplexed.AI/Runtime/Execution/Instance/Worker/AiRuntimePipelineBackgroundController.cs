@@ -3,10 +3,12 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Helpers;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Threading.Channels;
@@ -268,11 +270,26 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Run queued. RunId='{runId}', Pipeline='{request.PipelineName}'.");
 
+            await RecordRunLedgerAsync(
+                    runId,
+                    request.PipelineName,
+                    AiDecisionLedgerEvents.Run.Queued,
+                    AiDecisionLedgerOutcome.Persisted,
+                    reason: "Pipeline run queued.",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["run.id"] = runId,
+                        ["pipeline.name"] = request.PipelineName
+                    },
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
             return handle;
         }
 
         /// <inheritdoc />
-        public Task PauseQueueAsync(
+        public async Task PauseQueueAsync(
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
@@ -293,11 +310,25 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Queue paused. Reason='{reason}', RequestedBy='{requestedBy}'.");
 
-            return Task.CompletedTask;
+            await RecordQueueLedgerAsync(
+                    executionId: handle.ExecutionId ?? handle.RunId,
+                    runId: handle.RunId,
+                    pipelineName: "pipeline-controller",
+                    eventType: AiDecisionLedgerEvents.Queue.Paused,
+                    outcome: AiDecisionLedgerOutcome.Applied,
+                    reason: reason ?? "Pipeline controller queue paused.",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["requested.by"] = requestedBy ?? string.Empty,
+                        ["paused.at.utc"] = _queuePausedAtUtc?.ToString("O") ?? string.Empty
+                    },
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
         }
 
         /// <inheritdoc />
-        public Task ResumeQueueAsync(
+        public async Task ResumeQueueAsync(
+            AiRuntimeWorkerRunHandle handle,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
@@ -319,27 +350,41 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Queue resumed. RequestedBy='{requestedBy}', PausedSinceUtc='{pausedSince:O}'.");
 
-            return Task.CompletedTask;
+            await RecordQueueLedgerAsync(
+                    executionId: handle.ExecutionId ?? handle.RunId,
+                    runId: handle.RunId,
+                    pipelineName: "pipeline-controller",
+                    eventType: AiDecisionLedgerEvents.Queue.Resumed,
+                    outcome: AiDecisionLedgerOutcome.Applied,
+                    reason: "Pipeline controller queue resumed.",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["requested.by"] = requestedBy ?? string.Empty,
+                        ["previous.requested.by"] = requestedBy ?? string.Empty,
+                        ["paused.since.utc"] = pausedSince?.ToString("O") ?? string.Empty
+                    },
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
         }
 
         /// <inheritdoc />
-        public Task<bool> CancelQueuedRunAsync(
-            string runId,
+        public async Task<bool> CancelQueuedRunAsync(
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(handle.RunId);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!_queuedRuns.TryRemove(runId, out var queuedRun))
+            if (!_queuedRuns.TryRemove(handle.RunId, out var queuedRun))
             {
-                return Task.FromResult(false);
+                return false;
             }
 
             if (queuedRun.Handle.Status != AiRuntimeWorkerRunStatus.Queued)
             {
-                return Task.FromResult(false);
+                return false;
             }
 
             queuedRun.Handle.MarkCancelled();
@@ -347,30 +392,46 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             queuedRun.CompletionSource.TrySetResult(
                 new AiExecutionRecord
                 {
-                    ExecutionId = runId,
+                    ExecutionId = handle.ExecutionId ?? handle.RunId,
                     Status = AiExecutionStatus.Cancelled,
                     CompletedAtUtc = DateTime.UtcNow
                 });
 
             _logger.Engine.LogInformation(
-                $"[AI PIPELINE CONTROLLER] Queued run cancelled. RunId='{runId}', Pipeline='{queuedRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+                $"[AI PIPELINE CONTROLLER] Queued run cancelled. RunId='{handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
 
-            return Task.FromResult(true);
+            await RecordRunLedgerAsync(
+                    handle.RunId,
+                    queuedRun.Request.PipelineName,
+                    AiDecisionLedgerEvents.Run.Cancelled,
+                    AiDecisionLedgerOutcome.Cancelled,
+                    reason: reason ?? "Queued pipeline run cancelled before execution creation.",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["run.id"] = handle.RunId,
+                        ["pipeline.name"] = queuedRun.Request.PipelineName,
+                        ["requested.by"] = requestedBy ?? string.Empty,
+                        ["run.status"] = AiRuntimeWorkerRunStatus.Cancelled.ToString()
+                    },
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            return true;
         }
 
 
         /// <inheritdoc />
         public async Task<bool> CancelRunAsync(
-            string runId,
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(handle.RunId);
             cancellationToken.ThrowIfCancellationRequested();
 
             var queuedCancelled = await CancelQueuedRunAsync(
-                    runId,
+                    handle,
                     reason,
                     requestedBy,
                     cancellationToken)
@@ -381,7 +442,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 return true;
             }
 
-            if (!_runningRuns.TryGetValue(runId, out var runningRun))
+            if (!_runningRuns.TryGetValue(handle.RunId, out var runningRun))
             {
                 return false;
             }
@@ -401,7 +462,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 .ConfigureAwait(false);
 
             _logger.Engine.LogInformation(
-                $"[AI PIPELINE CONTROLLER] Running run cancellation requested. RunId='{runId}', ExecutionId='{executionId}', Pipeline='{runningRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+                $"[AI PIPELINE CONTROLLER] Running run cancellation requested. RunId='{handle.RunId}', ExecutionId='{executionId}', Pipeline='{runningRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
 
             return true;
         }
@@ -450,6 +511,21 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         out _);
 
                     _runningRuns[queuedRun.Handle.RunId] = queuedRun;
+
+                    await RecordRunLedgerAsync(
+                            queuedRun.Handle.RunId,
+                            queuedRun.Request.PipelineName,
+                            AiDecisionLedgerEvents.Run.Dequeued,
+                            AiDecisionLedgerOutcome.Started,
+                            reason: "Pipeline run dequeued for processing.",
+                            metadata: new Dictionary<string, string>
+                            {
+                                ["run.id"] = queuedRun.Handle.RunId,
+                                ["pipeline.name"] = queuedRun.Request.PipelineName,
+                                ["max.concurrent.runs"] = _options.MaxConcurrentRuns.ToString()
+                            },
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
 
                     var task = ProcessQueuedRunAsync(
                         queuedRun,
@@ -536,6 +612,22 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
                 _logger.Engine.LogInformation(
                     $"[AI PIPELINE CONTROLLER] Run cancelled. RunId='{handle.RunId}', Pipeline='{request.PipelineName}'.");
+
+                await RecordRunLedgerAsync(
+                        handle.RunId,
+                        request.PipelineName,
+                        AiDecisionLedgerEvents.Run.Cancelled,
+                        AiDecisionLedgerOutcome.Cancelled,
+                        handle.ExecutionId,
+                        "Pipeline run cancelled by controller cancellation token.",
+                        new Dictionary<string, string>
+                        {
+                            ["run.id"] = handle.RunId,
+                            ["pipeline.name"] = request.PipelineName,
+                            ["run.status"] = AiRuntimeWorkerRunStatus.Cancelled.ToString()
+                        },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -545,6 +637,23 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
                 _logger.Engine.LogError(
                     $"[AI PIPELINE CONTROLLER] Run failed. RunId='{handle.RunId}', Pipeline='{request.PipelineName}', Error='{ex.Message}'.");
+
+                await RecordRunLedgerAsync(
+                        handle.RunId,
+                        request.PipelineName,
+                        AiDecisionLedgerEvents.Run.Failed,
+                        AiDecisionLedgerOutcome.Failed,
+                        handle.ExecutionId,
+                        ex.Message,
+                        new Dictionary<string, string>
+                        {
+                            ["run.id"] = handle.RunId,
+                            ["pipeline.name"] = request.PipelineName,
+                            ["run.status"] = AiRuntimeWorkerRunStatus.Failed.ToString(),
+                            ["exception.type"] = ex.GetType().Name
+                        },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -581,6 +690,24 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             handle.MarkRunning(
                 created.ExecutionId);
 
+            await RecordRunLedgerAsync(
+                    handle.RunId,
+                    request.PipelineName,
+                    AiDecisionLedgerEvents.Run.Started,
+                    AiDecisionLedgerOutcome.Started,
+                    created.ExecutionId,
+                    "Pipeline run started execution processing.",
+                    new Dictionary<string, string>
+                    {
+                        ["run.id"] = handle.RunId,
+                        ["execution.id"] = created.ExecutionId,
+                        ["pipeline.name"] = request.PipelineName,
+                        ["distributed.enabled"] = _options.Distributed.Enabled.ToString(),
+                        ["distributed.worker.count"] = _options.Distributed.WorkerCount.ToString()
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Execution created. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Pipeline='{created.PipelineName}'.");
 
@@ -600,6 +727,14 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 handle.MarkFailed();
             }
+
+            await RecordRunTerminalLedgerAsync(
+                    handle.RunId,
+                    request.PipelineName,
+                    created.ExecutionId,
+                    final,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             await InvokeRunFinalizedAsync(
                 queuedRun,
@@ -720,6 +855,147 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 request.PipelineName,
                 ConvertObjectToStateInput(request.Input),
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records a controller run lifecycle event in the decision ledger.
+        /// </summary>
+        /// <param name="runId">The controller run identifier.</param>
+        /// <param name="pipelineName">The pipeline name.</param>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger outcome.</param>
+        /// <param name="executionId">The optional runtime execution identifier.</param>
+        /// <param name="reason">The optional event reason.</param>
+        /// <param name="metadata">The optional metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task RecordRunLedgerAsync(
+            string runId,
+            string pipelineName,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? executionId = null,
+            string? reason = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+
+            var context = AiRuntimeCorrelationContextHelper.Create(
+                executionId: string.IsNullOrWhiteSpace(executionId) ? runId : executionId,
+                pipelineKey: pipelineName,
+                stepName: "pipeline-run",
+                workerId: "pipeline-background-controller",
+                claimToken: null,
+                concurrencyContext: null);
+
+            context.CorrelationId = runId;
+
+            await _observability.Ledger.RecordAsync(
+                    context,
+                    AiDecisionLedgerCategory.Run,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records a controller queue lifecycle event in the decision ledger.
+        /// </summary>
+        /// <param name="eventType">The ledger event type.</param>
+        /// <param name="outcome">The ledger outcome.</param>
+        /// <param name="reason">The optional event reason.</param>
+        /// <param name="metadata">The optional metadata.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task RecordQueueLedgerAsync(
+            string executionId,
+            string runId,
+            string pipelineName,
+            string eventType,
+            AiDecisionLedgerOutcome outcome,
+            string? reason = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+
+            var context = AiRuntimeCorrelationContextHelper.Create(
+                executionId: executionId,
+                pipelineKey: pipelineName,
+                stepName: "pipeline-queue",
+                workerId: "pipeline-background-controller",
+                claimToken: null,
+                concurrencyContext: null);
+
+            context.CorrelationId = runId;
+
+            await _observability.Ledger.RecordAsync(
+                    context,
+                    AiDecisionLedgerCategory.Queue,
+                    eventType,
+                    outcome,
+                    reason,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records the terminal controller run lifecycle event in the decision ledger.
+        /// </summary>
+        /// <param name="runId">The controller run identifier.</param>
+        /// <param name="pipelineName">The pipeline name.</param>
+        /// <param name="executionId">The runtime execution identifier.</param>
+        /// <param name="final">The final execution record.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task RecordRunTerminalLedgerAsync(
+            string runId,
+            string pipelineName,
+            string executionId,
+            AiExecutionRecord final,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentNullException.ThrowIfNull(final);
+
+            var eventType = final.Status == AiExecutionStatus.Completed
+                ? AiDecisionLedgerEvents.Run.Completed
+                : final.Status == AiExecutionStatus.Cancelled
+                    ? AiDecisionLedgerEvents.Run.Cancelled
+                    : AiDecisionLedgerEvents.Run.Failed;
+
+            var outcome = final.Status == AiExecutionStatus.Completed
+                ? AiDecisionLedgerOutcome.Completed
+                : final.Status == AiExecutionStatus.Cancelled
+                    ? AiDecisionLedgerOutcome.Cancelled
+                    : AiDecisionLedgerOutcome.Failed;
+
+            await RecordRunLedgerAsync(
+                    runId,
+                    pipelineName,
+                    eventType,
+                    outcome,
+                    executionId,
+                    $"Pipeline run reached terminal status '{final.Status}'.",
+                    new Dictionary<string, string>
+                    {
+                        ["run.id"] = runId,
+                        ["execution.id"] = executionId,
+                        ["pipeline.name"] = pipelineName,
+                        ["execution.status"] = final.Status.ToString(),
+                        ["completed.at.utc"] = final.CompletedAtUtc.ToString("O") ?? string.Empty
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         /// <summary>

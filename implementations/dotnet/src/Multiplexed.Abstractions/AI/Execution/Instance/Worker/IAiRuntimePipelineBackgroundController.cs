@@ -74,6 +74,7 @@
         /// queued runs from being started by the background controller until the queue is resumed.
         /// </remarks>
         Task PauseQueueAsync(
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
@@ -91,6 +92,7 @@
         /// A task representing the asynchronous resume operation.
         /// </returns>
         Task ResumeQueueAsync(
+            AiRuntimeWorkerRunHandle handle,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
 
@@ -118,7 +120,7 @@
         /// through the execution control service.
         /// </remarks>
         Task<bool> CancelQueuedRunAsync(
-            string runId,
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
@@ -147,7 +149,7 @@
         /// to the execution control service.
         /// </remarks>
         Task<bool> CancelRunAsync(
-            string runId,
+            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);

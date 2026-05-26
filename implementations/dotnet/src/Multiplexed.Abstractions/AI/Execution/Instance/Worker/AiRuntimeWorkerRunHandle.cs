@@ -113,5 +113,16 @@ namespace Multiplexed.Abstractions.AI.Execution.Instance.Worker
         /// Gets the task completed when the submitted pipeline run reaches a terminal state.
         /// </summary>
         public Task<AiExecutionRecord> Completion { get; }
+
+        public static AiRuntimeWorkerRunHandle CreateTestHandle()
+        {
+            var completionSource = new TaskCompletionSource<AiExecutionRecord>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            return new AiRuntimeWorkerRunHandle(
+                Guid.NewGuid().ToString("N"),
+                completionSource.Task);
+        }
+
     }
 }
