@@ -27,6 +27,30 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
     public interface IAiAtomicRetentionEvictionService
     {
         /// <summary>
+        /// Builds atomic retention patch candidates for step eviction.
+        /// </summary>
+        /// <param name="state">
+        /// The execution state snapshot used to build retention candidates.
+        /// </param>
+        /// <param name="stepNames">
+        /// The step names selected for eviction.
+        /// </param>
+        /// <param name="reason">
+        /// The retention reason stored in archive metadata.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token used to cancel the operation.
+        /// </param>
+        /// <returns>
+        /// The atomic retention patch candidates.
+        /// </returns>
+        Task<IReadOnlyCollection<AiRetentionPatchCandidate>> BuildCandidatesAsync(
+            AiExecutionState state,
+            IReadOnlyCollection<string> stepNames,
+            string reason = "retention",
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Safely applies retention to the selected step names using an atomic store-level patch.
         /// </summary>
         /// <param name="state">
@@ -44,10 +68,6 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <returns>
         /// The result of the atomic retention patch operation.
         /// </returns>
-        /// <remarks>
-        /// Implementations should treat skipped steps as normal distributed behavior, not as
-        /// failures. A skipped step means the current stored step was no longer safe to patch.
-        /// </remarks>
         Task<AiRetentionPatchResult> EvictAsync(
             AiExecutionState state,
             IReadOnlyCollection<string> stepNames,

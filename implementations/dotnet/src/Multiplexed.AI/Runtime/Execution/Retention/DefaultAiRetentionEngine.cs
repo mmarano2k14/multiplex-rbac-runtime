@@ -26,7 +26,9 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
     {
         private readonly IAiRetentionCompactionService _compactionService;
         private readonly IAiRetentionEvictionService _evictionService;
+        private readonly IAiAtomicRetentionCompactionService _atomicCompactionService;
         private readonly IAiAtomicRetentionEvictionService _atomicEvictionService;
+        private readonly IAiDagExecutionEngineServices _engineServices;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiRetentionEngine"/> class.
@@ -40,6 +42,8 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
              IAiRuntimeObservability observability)
             : base(policyRegistry, stepContext, observability)
         {
+            _engineServices = stepContext.Services.GetRequiredService<IAiDagExecutionEngineServices>();
+
             _compactionService = new DefaultAiRetentionCompactionService(
                 stepContext.Services.GetRequiredService<IAiStepResultPayloadCompactor>());
 
@@ -47,8 +51,12 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                 stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
                 stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
 
+            _atomicCompactionService = new DefaultAiAtomicRetentionCompactionService(
+                stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
+                stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
+
             _atomicEvictionService = new DefaultAiAtomicRetentionEvictionService(
-                stepContext.Services.GetRequiredService<IAiDagExecutionEngineServices>(),
+                _engineServices,
                 stepContext.Services.GetRequiredService<IAiStepPayloadStore>(),
                 stepContext.Services.GetRequiredService<IAiStepPayloadIndexStore>());
         }
@@ -190,6 +198,12 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                     AiRetentionDecision.None("Retention configuration was not found."));
             }
 
+            if (_engineServices.DagStore is null)
+            {
+                return AiRetentionApplyResult.Empty(
+                    AiRetentionDecision.None("Distributed DAG store is not configured."));
+            }
+
             var decision = await DecideAsync(
                     context,
                     cancellationToken)
@@ -204,22 +218,56 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                 decision.StepsToEvict ?? Array.Empty<string>(),
                 StringComparer.Ordinal);
 
-            if (stepsToEvict.Count == 0)
+            var stepsToCompact = new HashSet<string>(
+                decision.StepsToCompact ?? Array.Empty<string>(),
+                StringComparer.Ordinal);
+
+            // Eviction has precedence over compaction. If a step is selected for both,
+            // only the eviction candidate is built.
+            stepsToCompact.ExceptWith(stepsToEvict);
+
+            if (stepsToEvict.Count == 0 && stepsToCompact.Count == 0)
             {
                 return AiRetentionApplyResult.Empty(decision);
             }
 
-            var patchResult = await _atomicEvictionService.EvictAsync(
+            var archiveReason = string.IsNullOrWhiteSpace(definition.ArchiveReason)
+                ? decision.Reason ?? "retention"
+                : definition.ArchiveReason;
+
+            var compactCandidates = await _atomicCompactionService.BuildCandidatesAsync(
+                    context.ExecutionState,
+                    stepsToCompact,
+                    archiveReason,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var evictCandidates = await _atomicEvictionService.BuildCandidatesAsync(
                     context.ExecutionState,
                     stepsToEvict,
-                    definition.ArchiveReason,
+                    archiveReason,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var candidates = compactCandidates
+                .Concat(evictCandidates)
+                .ToArray();
+
+            if (candidates.Length == 0)
+            {
+                return AiRetentionApplyResult.Empty(decision);
+            }
+
+            var patchResult = await _engineServices.DagStore.TryApplyRetentionPatchAsync(
+                    context.ExecutionState.ExecutionId,
+                    candidates,
                     cancellationToken)
                 .ConfigureAwait(false);
 
             return new AiRetentionApplyResult
             {
                 Decision = decision,
-                CompactedSteps = Array.Empty<string>(),
+                CompactedSteps = patchResult.CompactedSteps,
                 EvictedSteps = patchResult.EvictedSteps
             };
         }

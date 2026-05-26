@@ -585,6 +585,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Retention
                             _engineServices.ObservabilityService.Metrics.Retention.Decision.RecordNoActionRequired(
                                 executionId,
                                 state.Steps.Count);
+
+                            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                                    _engineServices,
+                                    executionId,
+                                    pipelineKey,
+                                    stepContext.StepName,
+                                    stepContext.StepKey,
+                                    runtimeInstanceId,
+                                    claimToken: null,
+                                    concurrencyContext: null,
+                                    AiDecisionLedgerCategory.Retention,
+                                    AiDecisionLedgerEvents.Retention.Skipped,
+                                    AiDecisionLedgerOutcome.Skipped,
+                                    result.Decision?.Reason ?? "Batch retention did not apply any atomic hot-state changes.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["policy.name"] = policyName,
+                                        ["steps.count"] = state.Steps.Count.ToString(),
+                                        ["candidate.steps.count"] = candidateStepIds.Count.ToString(),
+                                        ["decision.kind"] = result.Decision?.Kind.ToString() ?? "Unknown",
+                                        ["compacted.count"] = compactedCount.ToString(),
+                                        ["evicted.count"] = evictedCount.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                         }
 
                         _engineServices.ObservabilityService.Metrics.Retention.Plan.RecordPlanCreated(

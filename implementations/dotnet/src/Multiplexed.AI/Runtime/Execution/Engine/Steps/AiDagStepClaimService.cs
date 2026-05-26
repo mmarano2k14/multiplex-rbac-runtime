@@ -118,29 +118,93 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 throw new InvalidOperationException("Distributed DAG store is not configured.");
             }
 
-            /*
-            if (!await CanAdvanceExecutionAsync(executionId, workerId, cancellationToken).ConfigureAwait(false))
-            {
-                return null;
-            }
-            */
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _services,
+                    executionId,
+                    pipelineKey,
+                    "_claim",
+                    "_claim",
+                    workerId,
+                    claimToken: null,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Attempted,
+                    AiDecisionLedgerOutcome.Started,
+                    "Single-step claim attempt started.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.key"] = pipelineKey,
+                        ["worker.id"] = workerId,
+                        ["claim.mode"] = "single"
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             var controlDecision = await CheckExecutionControlAsync(
-                                    executionId,
-                                    pipelineKey,
-                                    workerId,
-                                    cancellationToken)
-                                .ConfigureAwait(false);
+                    executionId,
+                    pipelineKey,
+                    workerId,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             if (controlDecision is not null)
             {
                 if (controlDecision.ShouldCancel)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            "_claim",
+                            "_claim",
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            controlDecision.Reason ?? "Claim denied because execution cancellation was observed.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["worker.id"] = workerId,
+                                ["claim.mode"] = "single",
+                                ["control.status"] = controlDecision.Status.ToString(),
+                                ["should.cancel"] = controlDecision.ShouldCancel.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     return null;
                 }
 
                 if (!controlDecision.CanContinue)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            "_claim",
+                            "_claim",
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            controlDecision.Reason ?? "Claim denied because execution control state does not allow advancement.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["worker.id"] = workerId,
+                                ["claim.mode"] = "single",
+                                ["control.status"] = controlDecision.Status.ToString(),
+                                ["can.continue"] = controlDecision.CanContinue.ToString(),
+                                ["stop.claiming"] = controlDecision.ShouldStopClaiming.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     return null;
                 }
             }
@@ -170,6 +234,32 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             if (state is null || state.Steps.Count == 0)
             {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_claim",
+                        "_claim",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        state is null
+                            ? "Claim denied because execution state was not found."
+                            : "Claim denied because execution state contains no steps.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["claim.mode"] = "single",
+                            ["state.found"] = (state is not null).ToString(),
+                            ["steps.count"] = state?.Steps.Count.ToString() ?? "0"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 return null;
             }
 
@@ -178,6 +268,35 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     maxSteps: 16,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            if (readySteps.Count == 0)
+            {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_claim",
+                        "_claim",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        "Claim denied because no ready DAG steps were available.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["claim.mode"] = "single",
+                            ["steps.count"] = state.Steps.Count.ToString(),
+                            ["ready.steps.count"] = "0"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                return null;
+            }
 
             foreach (var readyStep in readySteps)
             {
@@ -215,30 +334,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 if (!gateDecision.Allowed)
                 {
-
                     await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
-                        _services,
-                        executionId,
-                        pipelineKey,
-                        stepDefinition.Name,
-                        stepDefinition.StepKey,
-                        workerId,
-                        claimToken: null,
-                        concurrencyContext,
-                        AiDecisionLedgerCategory.Concurrency,
-                        AiDecisionLedgerEvents.Concurrency.Denied,
-                        AiDecisionLedgerOutcome.Denied,
-                        gateDecision.Reason ?? "Concurrency admission denied.",
-                        new Dictionary<string, string>
-                        {
-                            ["pipeline.key"] = pipelineKey,
-                            ["step.name"] = stepDefinition.Name,
-                            ["step.key"] = stepDefinition.StepKey,
-                            ["worker.id"] = workerId
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Concurrency,
+                            AiDecisionLedgerEvents.Concurrency.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            gateDecision.Reason ?? "Concurrency admission denied.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     LogThrottledStep(
                         executionId,
@@ -250,17 +367,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     continue;
                 }
 
-                var claimed = await TryClaimStepAsync(
-                        executionId,
-                        readyStep.StepName,
-                        workerId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (claimed is null)
-                {
-
-                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
                         _services,
                         executionId,
                         pipelineKey,
@@ -269,10 +376,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         workerId,
                         concurrencyContext.LeaseId,
                         concurrencyContext,
-                        AiDecisionLedgerCategory.Claim,
-                        AiDecisionLedgerEvents.Claim.Denied,
-                        AiDecisionLedgerOutcome.Denied,
-                        "Step claim failed after concurrency lease was acquired.",
+                        AiDecisionLedgerCategory.Concurrency,
+                        AiDecisionLedgerEvents.Concurrency.LeaseAcquired,
+                        AiDecisionLedgerOutcome.Allowed,
+                        "Concurrency lease acquired before step claim.",
                         new Dictionary<string, string>
                         {
                             ["pipeline.key"] = pipelineKey,
@@ -284,6 +391,39 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         cancellationToken)
                     .ConfigureAwait(false);
 
+                var claimed = await TryClaimStepAsync(
+                        executionId,
+                        readyStep.StepName,
+                        workerId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (claimed is null)
+                {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            concurrencyContext.LeaseId,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            "Step claim failed after concurrency lease was acquired.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId,
+                                ["lease.id"] = concurrencyContext.LeaseId
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     await _services.ConcurrencyGate.ReleaseAsync(
                             concurrencyContext,
                             concurrencyDefinition,
@@ -291,28 +431,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         .ConfigureAwait(false);
 
                     await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
-                       _services,
-                       executionId,
-                       pipelineKey,
-                       stepDefinition.Name,
-                       stepDefinition.StepKey,
-                       workerId,
-                       concurrencyContext.LeaseId,
-                       concurrencyContext,
-                       AiDecisionLedgerCategory.Concurrency,
-                       AiDecisionLedgerEvents.Concurrency.LeaseReleased,
-                       AiDecisionLedgerOutcome.Released,
-                       "Concurrency lease released after failed step claim.",
-                       new Dictionary<string, string>
-                       {
-                           ["pipeline.key"] = pipelineKey,
-                           ["step.name"] = stepDefinition.Name,
-                           ["step.key"] = stepDefinition.StepKey,
-                           ["worker.id"] = workerId,
-                           ["lease.id"] = concurrencyContext.LeaseId
-                       },
-                       cancellationToken)
-                   .ConfigureAwait(false);
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            concurrencyContext.LeaseId,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Concurrency,
+                            AiDecisionLedgerEvents.Concurrency.LeaseReleased,
+                            AiDecisionLedgerOutcome.Released,
+                            "Concurrency lease released after failed step claim.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId,
+                                ["lease.id"] = concurrencyContext.LeaseId
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
                     _services.Logger.Engine.LogInformation(
                         $"[AI DAG] Concurrency lease released after failed claim. ExecutionId='{executionId}', StepName='{readyStep.StepName}', Worker='{workerId}'.");
@@ -321,28 +461,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 }
 
                 await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
-                    _services,
-                    executionId,
-                    pipelineKey,
-                    stepDefinition.Name,
-                    stepDefinition.StepKey,
-                    workerId,
-                    claimed.ClaimToken,
-                    concurrencyContext,
-                    AiDecisionLedgerCategory.Claim,
-                    AiDecisionLedgerEvents.Claim.Acquired,
-                    AiDecisionLedgerOutcome.Allowed,
-                    "Step claim acquired.",
-                    new Dictionary<string, string>
-                    {
-                        ["pipeline.key"] = pipelineKey,
-                        ["step.name"] = stepDefinition.Name,
-                        ["step.key"] = stepDefinition.StepKey,
-                        ["worker.id"] = workerId,
-                        ["claim.token"] = claimed.ClaimToken
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        stepDefinition.Name,
+                        stepDefinition.StepKey,
+                        workerId,
+                        claimed.ClaimToken,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Acquired,
+                        AiDecisionLedgerOutcome.Allowed,
+                        "Step claim acquired.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["step.name"] = stepDefinition.Name,
+                            ["step.key"] = stepDefinition.StepKey,
+                            ["worker.id"] = workerId,
+                            ["claim.token"] = claimed.ClaimToken
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 _services.Logger.Engine.StepClaimed(
                     executionId,
@@ -352,6 +492,29 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 return claimed;
             }
+
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _services,
+                    executionId,
+                    pipelineKey,
+                    "_claim",
+                    "_claim",
+                    workerId,
+                    claimToken: null,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Denied,
+                    AiDecisionLedgerOutcome.Denied,
+                    "Claim denied because no ready candidate could be admitted or claimed.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.key"] = pipelineKey,
+                        ["worker.id"] = workerId,
+                        ["claim.mode"] = "single",
+                        ["ready.steps.count"] = readySteps.Count.ToString()
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             return null;
         }
@@ -399,12 +562,28 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                 return Array.Empty<AiClaimedStep>();
             }
 
-            /*
-            if (!await CanAdvanceExecutionAsync(executionId, workerId, cancellationToken).ConfigureAwait(false))
-            {
-                return Array.Empty<AiClaimedStep>();
-            }
-            */
+            await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                    _services,
+                    executionId,
+                    pipelineKey,
+                    "_claim",
+                    "_claim",
+                    workerId,
+                    claimToken: null,
+                    concurrencyContext: null,
+                    AiDecisionLedgerCategory.Claim,
+                    AiDecisionLedgerEvents.Claim.Attempted,
+                    AiDecisionLedgerOutcome.Started,
+                    "Batch claim attempt started.",
+                    new Dictionary<string, string>
+                    {
+                        ["pipeline.key"] = pipelineKey,
+                        ["worker.id"] = workerId,
+                        ["claim.mode"] = "batch",
+                        ["max.steps"] = maxSteps.ToString()
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             var controlDecision = await CheckExecutionControlAsync(
                     executionId,
@@ -417,22 +596,81 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             {
                 if (controlDecision.ShouldCancel)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            "_claim",
+                            "_claim",
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            controlDecision.Reason ?? "Batch claim denied because execution cancellation was observed.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["worker.id"] = workerId,
+                                ["claim.mode"] = "batch",
+                                ["control.status"] = controlDecision.Status.ToString(),
+                                ["should.cancel"] = controlDecision.ShouldCancel.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     return Array.Empty<AiClaimedStep>();
                 }
 
                 if (!controlDecision.CanContinue)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            "_claim",
+                            "_claim",
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext: null,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            controlDecision.Reason ?? "Batch claim denied because execution control state does not allow advancement.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["worker.id"] = workerId,
+                                ["claim.mode"] = "batch",
+                                ["control.status"] = controlDecision.Status.ToString(),
+                                ["can.continue"] = controlDecision.CanContinue.ToString(),
+                                ["stop.claiming"] = controlDecision.ShouldStopClaiming.ToString()
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     return Array.Empty<AiClaimedStep>();
                 }
             }
 
-            await RecoverTimedOutStepsAsync(
+            var recoveredCount = await RecoverTimedOutStepsAsync(
                     executionId,
                     pipelineKey,
                     workerId,
                     pipeline,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            if (recoveredCount > 0)
+            {
+                _services.Logger.Engine.StepsRecovered(
+                    executionId,
+                    recoveredCount);
+
+                _services.Logger.Engine.LogInformation(
+                    $"[AI DAG] Timed-out steps recovered. ExecutionId='{executionId}', RecoveredCount='{recoveredCount}'.");
+            }
 
             var state = await _services.DagStore.GetStateAsync(
                     executionId,
@@ -441,6 +679,32 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             if (state is null || state.Steps.Count == 0)
             {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_claim",
+                        "_claim",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        state is null
+                            ? "Batch claim denied because execution state was not found."
+                            : "Batch claim denied because execution state contains no steps.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["claim.mode"] = "batch",
+                            ["state.found"] = (state is not null).ToString(),
+                            ["steps.count"] = state?.Steps.Count.ToString() ?? "0"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 return Array.Empty<AiClaimedStep>();
             }
 
@@ -452,6 +716,30 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
             if (readySteps.Count == 0)
             {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_claim",
+                        "_claim",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        "Batch claim denied because no ready DAG steps were available.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["claim.mode"] = "batch",
+                            ["steps.count"] = state.Steps.Count.ToString(),
+                            ["ready.steps.count"] = "0"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 return Array.Empty<AiClaimedStep>();
             }
 
@@ -498,6 +786,30 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 if (!gateDecision.Allowed)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            claimToken: null,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Concurrency,
+                            AiDecisionLedgerEvents.Concurrency.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            gateDecision.Reason ?? "Concurrency admission denied.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId,
+                                ["claim.mode"] = "batch"
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     LogThrottledStep(
                         executionId,
                         pipelineKey,
@@ -508,6 +820,31 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     continue;
                 }
 
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        stepDefinition.Name,
+                        stepDefinition.StepKey,
+                        workerId,
+                        concurrencyContext.LeaseId,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Concurrency,
+                        AiDecisionLedgerEvents.Concurrency.LeaseAcquired,
+                        AiDecisionLedgerOutcome.Allowed,
+                        "Concurrency lease acquired before batch step claim.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["step.name"] = stepDefinition.Name,
+                            ["step.key"] = stepDefinition.StepKey,
+                            ["worker.id"] = workerId,
+                            ["lease.id"] = concurrencyContext.LeaseId,
+                            ["claim.mode"] = "batch"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 var claimed = await TryClaimStepAsync(
                         executionId,
                         readyStep.StepName,
@@ -517,9 +854,59 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
 
                 if (claimed is null)
                 {
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            concurrencyContext.LeaseId,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Claim,
+                            AiDecisionLedgerEvents.Claim.Denied,
+                            AiDecisionLedgerOutcome.Denied,
+                            "Batch step claim failed after concurrency lease was acquired.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId,
+                                ["lease.id"] = concurrencyContext.LeaseId,
+                                ["claim.mode"] = "batch"
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
                     await _services.ConcurrencyGate.ReleaseAsync(
                             concurrencyContext,
                             concurrencyDefinition,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                            _services,
+                            executionId,
+                            pipelineKey,
+                            stepDefinition.Name,
+                            stepDefinition.StepKey,
+                            workerId,
+                            concurrencyContext.LeaseId,
+                            concurrencyContext,
+                            AiDecisionLedgerCategory.Concurrency,
+                            AiDecisionLedgerEvents.Concurrency.LeaseReleased,
+                            AiDecisionLedgerOutcome.Released,
+                            "Concurrency lease released after failed batch step claim.",
+                            new Dictionary<string, string>
+                            {
+                                ["pipeline.key"] = pipelineKey,
+                                ["step.name"] = stepDefinition.Name,
+                                ["step.key"] = stepDefinition.StepKey,
+                                ["worker.id"] = workerId,
+                                ["lease.id"] = concurrencyContext.LeaseId,
+                                ["claim.mode"] = "batch"
+                            },
                             cancellationToken)
                         .ConfigureAwait(false);
 
@@ -535,32 +922,59 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     workerId,
                     claimed.ClaimToken);
 
-
                 await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
-                    _services,
-                    executionId,
-                    pipelineKey,
-                    stepDefinition.Name,
-                    stepDefinition.StepKey,
-                    workerId,
-                    claimed.ClaimToken,
-                    concurrencyContext,
-                    AiDecisionLedgerCategory.Claim,
-                    AiDecisionLedgerEvents.Claim.Acquired,
-                    AiDecisionLedgerOutcome.Allowed,
-                    "Step claim acquired.",
-                    new Dictionary<string, string>
-                    {
-                        ["pipeline.key"] = pipelineKey,
-                        ["step.name"] = stepDefinition.Name,
-                        ["step.key"] = stepDefinition.StepKey,
-                        ["worker.id"] = workerId,
-                        ["claim.token"] = claimed.ClaimToken
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        stepDefinition.Name,
+                        stepDefinition.StepKey,
+                        workerId,
+                        claimed.ClaimToken,
+                        concurrencyContext,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Acquired,
+                        AiDecisionLedgerOutcome.Allowed,
+                        "Step claim acquired.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["step.name"] = stepDefinition.Name,
+                            ["step.key"] = stepDefinition.StepKey,
+                            ["worker.id"] = workerId,
+                            ["claim.token"] = claimed.ClaimToken,
+                            ["claim.mode"] = "batch"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 claimedSteps.Add(claimed);
+            }
+
+            if (claimedSteps.Count == 0)
+            {
+                await AiDagExecutionHelpers.RecordDagLedgerEventAsync(
+                        _services,
+                        executionId,
+                        pipelineKey,
+                        "_claim",
+                        "_claim",
+                        workerId,
+                        claimToken: null,
+                        concurrencyContext: null,
+                        AiDecisionLedgerCategory.Claim,
+                        AiDecisionLedgerEvents.Claim.Denied,
+                        AiDecisionLedgerOutcome.Denied,
+                        "Batch claim denied because no ready candidate could be admitted or claimed.",
+                        new Dictionary<string, string>
+                        {
+                            ["pipeline.key"] = pipelineKey,
+                            ["worker.id"] = workerId,
+                            ["claim.mode"] = "batch",
+                            ["ready.steps.count"] = readySteps.Count.ToString(),
+                            ["claimed.steps.count"] = "0"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             return claimedSteps;

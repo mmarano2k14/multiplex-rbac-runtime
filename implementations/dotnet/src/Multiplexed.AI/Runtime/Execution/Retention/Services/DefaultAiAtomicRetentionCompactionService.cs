@@ -1,49 +1,50 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
 
 namespace Multiplexed.AI.Runtime.Execution.Retention.Services
 {
     /// <summary>
-    /// Default distributed-safe implementation of <see cref="IAiAtomicRetentionEvictionService"/>.
+    /// Default distributed-safe implementation of <see cref="IAiAtomicRetentionCompactionService"/>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This service prepares eviction candidates only. It archives step payloads and
-    /// marks the archived payload index, but it does not mutate hot state directly unless
-    /// <see cref="EvictAsync"/> is used for backward-compatible eviction-only patching.
+    /// This service prepares compaction candidates only. It archives step payloads and
+    /// marks the archived payload index, but it does not mutate hot state directly.
     /// </para>
     ///
     /// <para>
     /// The final hot-state patch is applied atomically by the distributed DAG store.
     /// </para>
+    ///
+    /// <para>
+    /// This service is used during active distributed execution, where multiple workers may
+    /// still be claiming, running, completing, failing, retrying, compacting, or evicting steps
+    /// concurrently.
+    /// </para>
     /// </remarks>
-    public sealed class DefaultAiAtomicRetentionEvictionService : IAiAtomicRetentionEvictionService
+    public sealed class DefaultAiAtomicRetentionCompactionService : IAiAtomicRetentionCompactionService
     {
-        private readonly IAiDagExecutionEngineServices _engineServices;
         private readonly IAiStepPayloadStore _stepPayloadStore;
         private readonly IAiStepPayloadIndexStore _stepPayloadIndexStore;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="DefaultAiAtomicRetentionEvictionService"/> class.
+        /// Initializes a new instance of the <see cref="DefaultAiAtomicRetentionCompactionService"/> class.
         /// </summary>
-        /// <param name="engineServices">
-        /// The DAG execution engine services, including the distributed DAG store.
-        /// </param>
         /// <param name="stepPayloadStore">
         /// The durable step payload store.
         /// </param>
         /// <param name="stepPayloadIndexStore">
         /// The archived step payload index store.
         /// </param>
-        public DefaultAiAtomicRetentionEvictionService(
-            IAiDagExecutionEngineServices engineServices,
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when a required dependency is <see langword="null"/>.
+        /// </exception>
+        public DefaultAiAtomicRetentionCompactionService(
             IAiStepPayloadStore stepPayloadStore,
             IAiStepPayloadIndexStore stepPayloadIndexStore)
         {
-            _engineServices = engineServices ?? throw new ArgumentNullException(nameof(engineServices));
             _stepPayloadStore = stepPayloadStore ?? throw new ArgumentNullException(nameof(stepPayloadStore));
             _stepPayloadIndexStore = stepPayloadIndexStore ?? throw new ArgumentNullException(nameof(stepPayloadIndexStore));
         }
@@ -77,6 +78,10 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                     continue;
                 }
 
+                var effectiveReason = string.IsNullOrWhiteSpace(reason)
+                    ? "retention-compaction"
+                    : reason;
+
                 var payload = await _stepPayloadStore.SaveStepAsync(
                         state.ExecutionId,
                         stepName,
@@ -92,9 +97,7 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                             Status = step.Status,
                             Payload = payload,
                             ArchivedAtUtc = DateTime.UtcNow,
-                            Reason = string.IsNullOrWhiteSpace(reason)
-                                ? "retention-eviction"
-                                : reason
+                            Reason = effectiveReason
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -103,56 +106,20 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
                     new AiRetentionPatchCandidate
                     {
                         StepName = stepName,
-                        Action = AiRetentionPatchAction.Evict,
+                        Action = AiRetentionPatchAction.Compact,
                         ExpectedStatus = step.Status,
                         ExpectedClaimToken = null,
                         ExpectedExecutionId = state.ExecutionId,
                         ArchivePayloadId = payload.ArtifactId,
-                        Reason = string.IsNullOrWhiteSpace(reason)
-                            ? "retention-eviction"
-                            : reason
+                        Reason = effectiveReason
                     });
             }
 
             return candidates;
         }
 
-        /// <inheritdoc />
-        public async Task<AiRetentionPatchResult> EvictAsync(
-            AiExecutionState state,
-            IReadOnlyCollection<string> stepNames,
-            string reason = "retention",
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(state);
-            ArgumentNullException.ThrowIfNull(stepNames);
-
-            if (_engineServices.DagStore is null)
-            {
-                return new AiRetentionPatchResult();
-            }
-
-            var candidates = await BuildCandidatesAsync(
-                    state,
-                    stepNames,
-                    reason,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            if (candidates.Count == 0)
-            {
-                return new AiRetentionPatchResult();
-            }
-
-            return await _engineServices.DagStore.TryApplyRetentionPatchAsync(
-                    state.ExecutionId,
-                    candidates,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-
         /// <summary>
-        /// Determines whether the local snapshot is safe enough to build an atomic eviction candidate.
+        /// Determines whether the local snapshot is safe enough to build an atomic compaction candidate.
         /// </summary>
         /// <param name="step">
         /// The step state from the local execution state snapshot.
@@ -160,6 +127,23 @@ namespace Multiplexed.AI.Runtime.Execution.Retention.Services
         /// <returns>
         /// <c>true</c> when the snapshot represents a terminal non-evicted step; otherwise, <c>false</c>.
         /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method is only a pre-filter. The distributed DAG store must still re-check the
+        /// current stored state atomically before applying the patch.
+        /// </para>
+        ///
+        /// <para>
+        /// The method intentionally does not check <c>IsCompacted</c> because the current
+        /// <see cref="AiStepState"/> model does not expose that property yet.
+        /// </para>
+        ///
+        /// <para>
+        /// A completed or failed step may still contain an old claim token as audit metadata.
+        /// Therefore this method intentionally does not reject terminal steps based only on
+        /// <c>ClaimToken</c>.
+        /// </para>
+        /// </remarks>
         private static bool IsSafeCandidateSnapshot(
             AiStepState step)
         {

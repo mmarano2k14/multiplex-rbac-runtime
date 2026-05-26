@@ -470,6 +470,173 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
         }
 
         /// <summary>
+        /// Runs a 100-step distributed chaos execution with retention compaction only.
+        /// </summary>
+        /// <remarks>
+        /// This test validates that atomic retention compaction is really applied.
+        /// It intentionally disables eviction policy so compaction cannot be overridden
+        /// by eviction precedence.
+        /// </remarks>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Apply_Atomic_Compaction_When_Eviction_Is_Disabled()
+        {
+            var scenario = DistributedChaosScenario.Steps100CompactionOnly();
+
+            await using var host = await CreateDistributedChaosHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var ledger = host.ServiceProvider.GetRequiredService<IAiDecisionLedger>();
+            var resolver = host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            compactionOnly = true
+                        }
+                    });
+
+
+               
+
+                
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                var executionId = handle.ExecutionId!;
+
+                var state = await dagStore.GetStateAsync(
+                    executionId);
+
+                var compactableSteps = state!.Steps
+               .Where(x =>
+                   x.Value.Status == AiStepExecutionStatus.Completed &&
+                   x.Value.InlinePayloadSizeBytes.HasValue)
+               .Select(x => new
+               {
+                   Step = x.Key,
+                   Size = x.Value.InlinePayloadSizeBytes!.Value
+               })
+               .ToArray();
+
+                _output.WriteLine("");
+                _output.WriteLine("COMPACTABLE STEPS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var step in compactableSteps.Take(20))
+                {
+                    _output.WriteLine($"{step.Step} | InlinePayloadSizeBytes={step.Size}");
+                }
+
+                _output.WriteLine($"CompactableSteps.Count={compactableSteps.Length}");
+
+
+                Assert.NotNull(final);
+                Assert.True(final.IsTerminal);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                
+
+                Assert.NotNull(state);
+
+
+
+
+                await resolver.WarmAsync(
+                    executionId,
+                    state!,
+                    CancellationToken.None);
+
+                await AssertRequiredStepsResolvedAsync(
+                    scenario,
+                    executionId,
+                    state!,
+                    resolver);
+
+                var entries = await ledger.GetByExecutionAsync(
+                    executionId);
+
+                Assert.NotEmpty(entries);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Evaluated);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Triggered);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Retention,
+                    AiDecisionLedgerEvents.Retention.Compacted);
+
+                AssertLedgerContains(
+                    entries,
+                    AiDecisionLedgerCategory.Payload,
+                    AiDecisionLedgerEvents.Payload.Externalized);
+
+                Assert.DoesNotContain(
+                    entries,
+                    entry =>
+                        entry.Category == AiDecisionLedgerCategory.Retention &&
+                        entry.EventType == AiDecisionLedgerEvents.Retention.Evicted);
+
+                _output.WriteLine("");
+                _output.WriteLine("ATOMIC COMPACTION LEDGER SUMMARY");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in entries
+                    .GroupBy(entry => new
+                    {
+                        entry.Category,
+                        entry.EventType,
+                        entry.Outcome
+                    })
+                    .OrderBy(group => group.Key.Category.ToString(), StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.EventType, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome.ToString(), StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.EventType,-40} | {group.Key.Outcome,-12} | Count={group.Count()}");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
         /// Runs the distributed chaos scenario end-to-end.
         /// </summary>
         /// <param name="scenario">The distributed chaos scenario.</param>
@@ -1124,18 +1291,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     ["retention"] = new Dictionary<string, object?>
                     {
                         ["enabled"] = true,
-                        ["policies"] = new[]
-                        {
-                            "retention.compact.terminal",
-                            "retention.evict.terminal"
-                        },
+                        ["policies"] = scenario.RetentionPolicies.ToArray(),
                         ["archiveReason"] = scenario.RetentionArchiveReason,
                         ["trigger"] = new Dictionary<string, object?>
                         {
                             ["enabled"] = true,
                             ["maxStepsInState"] = scenario.MaxCompletedStepsInState,
                             ["maxCompletedStepsInState"] = scenario.MaxCompletedStepsInState,
-                            ["maxInlinePayloadBytes"] = 1
+                            ["maxInlinePayloadBytes"] = scenario.MaxInlinePayloadBytes
                         }
                     }
                 },
@@ -1234,6 +1397,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             public IReadOnlyCollection<string> FingerprintStepNames { get; init; } =
                 Array.Empty<string>();
 
+            public IReadOnlyCollection<string> RetentionPolicies { get; init; } =
+                new[]
+                {
+                    "retention.compact.terminal",
+                    "retention.evict.terminal"
+                };
+
+            public int MaxInlinePayloadBytes { get; init; } = 1;
+
             /// <summary>
             /// Creates a 100-step distributed chaos scenario.
             /// </summary>
@@ -1331,6 +1503,72 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
                     Timeout = TimeSpan.FromMinutes(10),
                     SnapshotWaitTimeout = TimeSpan.FromMinutes(3),
+                    RequiredResolvedSteps = requiredSteps,
+                    ExpectedRetriedSteps = retriedSteps,
+                    FingerprintStepNames = requiredSteps
+                        .Concat(retriedSteps)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+
+                scenario.PipelineDefinition = CreatePipelineDefinition(
+                    scenario);
+
+                return scenario;
+            }
+
+            /// <summary>
+            /// Creates a 100-step distributed chaos scenario dedicated to atomic retention compaction.
+            /// </summary>
+            /// <returns>The configured compaction-only distributed chaos scenario.</returns>
+            public static DistributedChaosScenario Steps100CompactionOnly()
+            {
+                var pipelineName = $"distributed-chaos-100-compaction-only-{Guid.NewGuid():N}";
+
+                var requiredSteps = new[]
+                {
+                    "chaos-step-001",
+                    "chaos-step-009",
+                    "chaos-step-018",
+                    "chaos-step-090",
+                    "final-join-step"
+                };
+
+                var retriedSteps = Enumerable.Range(2, 98)
+                    .Where(index => index % 9 == 0)
+                    .Select(index => $"chaos-step-{index:000}")
+                    .ToArray();
+
+                var scenario = new DistributedChaosScenario
+                {
+                    Name = "distributed-chaos-100-compaction-only",
+                    PipelineName = pipelineName,
+                    CandidateId = "candidate-distributed-chaos-100-compaction-only",
+                    RetentionArchiveReason = "distributed-chaos-100-compaction-only-retention",
+                    StepCount = 100,
+                    WorkerCount = 10,
+                    MaxStepsPerCycle = 1,
+                    MaxWorkerCycles = 5000,
+                    MaxDegreeOfParallelism = 12,
+                    MaxProviderConcurrency = 3,
+
+                    // Keep eviction pressure disabled for this scenario.
+                    // The test must validate compaction only.
+                    MaxCompletedStepsInState = 10000,
+
+                    // Force inline payload threshold pressure.
+                    MaxInlinePayloadBytes = 1,
+
+                    RetentionPolicies = new[]
+                    {
+                        "retention.compact.terminal"
+                    },
+
+                    FlakyStepInterval = 9,
+                    MinimumExpectedParticipatingWorkers = 3,
+                    FullStepFingerprint = true,
+                    WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
+                    Timeout = TimeSpan.FromSeconds(180),
                     RequiredResolvedSteps = requiredSteps,
                     ExpectedRetriedSteps = retriedSteps,
                     FingerprintStepNames = requiredSteps
