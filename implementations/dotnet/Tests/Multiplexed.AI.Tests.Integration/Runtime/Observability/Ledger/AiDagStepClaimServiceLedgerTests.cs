@@ -102,10 +102,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                     entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
                     entry.Outcome == AiDecisionLedgerOutcome.Started);
 
-            var denied = Assert.Single(
-                entries.Where(entry =>
+            var denied = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.Denied));
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.Denied);
 
             Assert.Equal(AiDecisionLedgerOutcome.Denied, denied.Outcome);
             Assert.Equal(executionId, denied.CorrelationContext.ExecutionId);
@@ -224,10 +223,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                     entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
                     entry.Outcome == AiDecisionLedgerOutcome.Started);
 
-            var leaseAcquired = Assert.Single(
-                entries.Where(entry =>
+            var leaseAcquired = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired));
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired);
 
             Assert.Equal(AiDecisionLedgerOutcome.Allowed, leaseAcquired.Outcome);
             Assert.Equal(executionId, leaseAcquired.CorrelationContext.ExecutionId);
@@ -238,10 +236,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             Assert.Equal(workerId, leaseAcquired.CorrelationContext.RuntimeInstanceId);
             Assert.Equal(leaseId, leaseAcquired.CorrelationContext.ClaimToken);
 
-            var claimAcquired = Assert.Single(
-                entries.Where(entry =>
+            var claimAcquired = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired));
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired);
 
             Assert.Equal(AiDecisionLedgerOutcome.Allowed, claimAcquired.Outcome);
             Assert.Equal(executionId, claimAcquired.CorrelationContext.ExecutionId);
@@ -339,10 +336,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                     entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
                     entry.Outcome == AiDecisionLedgerOutcome.Started);
 
-            var leaseAcquired = Assert.Single(
-                entries.Where(entry =>
+            var leaseAcquired = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired));
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired);
 
             Assert.Equal(AiDecisionLedgerOutcome.Allowed, leaseAcquired.Outcome);
             Assert.Equal(executionId, leaseAcquired.CorrelationContext.ExecutionId);
@@ -351,12 +347,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             Assert.Equal(workerId, leaseAcquired.CorrelationContext.WorkerId);
             Assert.Equal(leaseId, leaseAcquired.CorrelationContext.ClaimToken);
 
-            var claimDenied = Assert.Single(
-                entries.Where(entry =>
+            var claimDenied = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
                     entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
                     entry.Outcome == AiDecisionLedgerOutcome.Denied &&
-                    entry.CorrelationContext.StepId == stepName));
+                    entry.CorrelationContext.StepId == stepName);
 
             Assert.Equal(executionId, claimDenied.CorrelationContext.ExecutionId);
             Assert.Equal(pipelineKey, claimDenied.CorrelationContext.PipelineName);
@@ -367,10 +362,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             Assert.Equal(leaseId, claimDenied.CorrelationContext.ClaimToken);
             Assert.Contains("failed after concurrency lease", claimDenied.Reason);
 
-            var leaseReleased = Assert.Single(
-                entries.Where(entry =>
+            var leaseReleased = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseReleased));
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseReleased);
 
             Assert.Equal(AiDecisionLedgerOutcome.Released, leaseReleased.Outcome);
             Assert.Equal(executionId, leaseReleased.CorrelationContext.ExecutionId);

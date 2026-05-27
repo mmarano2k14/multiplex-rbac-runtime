@@ -2432,10 +2432,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var entries = await ledger.GetByExecutionAsync(executionId);
 
-            var entry = Assert.Single(
-                entries.Where(entry =>
+            var entry = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired));
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired);
 
             Assert.NotEmpty(entries);
 

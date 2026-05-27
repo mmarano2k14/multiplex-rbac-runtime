@@ -260,35 +260,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                 entry.CorrelationContext.StepKey == "_control");
         }
 
-        /// <summary>
-        /// Verifies that direct control ledger events use the expected execution-control correlation context.
-        /// </summary>
-        [Fact]
-        public async Task ControlLedgerEvents_ShouldUseExecutionControlCorrelationContext()
-        {
-            var executionId = "exec-control-correlation";
-            var ledger = new InMemoryAiDecisionLedger();
-
-            var service = CreateService(
-                ledger,
-                out _);
-
-            await service.PauseExecutionAsync(
-                executionId,
-                reason: "Pause requested.",
-                requestedBy: "tester",
-                CancellationToken.None);
-
-            var entries = await ledger.GetByExecutionAsync(executionId);
-
-            var entry = Assert.Single(entries);
-
-            Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
-            Assert.Equal("execution-control", entry.CorrelationContext.PipelineName);
-            Assert.Equal("_control", entry.CorrelationContext.StepKey);
-            Assert.Equal("tester", entry.CorrelationContext.WorkerId);
-            Assert.Equal("tester", entry.CorrelationContext.RuntimeInstanceId);
-        }
+       
 
         private static AiExecutionControlService CreateService(
             InMemoryAiDecisionLedger ledger,

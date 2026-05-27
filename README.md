@@ -2,11 +2,11 @@
 
 A deterministic AI execution runtime for production-grade AI workloads.
 
-This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, observability, and executable enterprise demo scenarios.
+This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, observability, execution-correlated decision ledger, and executable enterprise demo scenarios.
 
 The current runtime foundations are intentionally designed as the base for a broader AI execution and MLOps-oriented platform.
 
-[![Version](https://img.shields.io/badge/Version-1.0.5.1-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.5.2-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 ![AI Runtime](https://img.shields.io/badge/AI-Deterministic%20Execution-purple)
 ![Runtime](https://img.shields.io/badge/Runtime-distributed-brightgreen)
@@ -26,6 +26,7 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Distributed concurrency and throttling demo | Added an executable `throttling-100` enterprise demo scenario with provider-level concurrency control, realtime throttling visibility, Redis lease-based admission control, randomized provider distribution, and bounded provider capacity under worker pressure. |
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
+| Execution-correlated decision ledger | Added durable execution-correlated ledger events for execution lifecycle, run lifecycle, queue control, claim acquisition, retry, recovery, concurrency, policy evaluation, snapshot persistence, and runtime control observability. |
 | Context resolution and helpers | Added a dedicated helper layer for input bindings, previous step outputs, payload rehydration, provider/model/operation context, policy context, RAG context, and replay-safe helpers. |
 | Documentation restructure | Completed Phase 0 V1 with a shorter README, preserved runtime internals, documentation index, roadmap, enterprise readiness matrix, ecosystem comparison, and focused runtime documentation under `docs/ai/`. |
 | Long-term platform direction | Added a dedicated road-to-MLOps direction document to describe how the runtime foundations can evolve toward AI execution infrastructure and MLOps-oriented runtime operations. |
@@ -34,7 +35,7 @@ For detailed changes, see [`CHANGELOG.md`](./CHANGELOG.md), [`docs/index.md`](do
 
 ## Overview
 
-Deterministic AI Runtime is a .NET runtime for executing complex AI workflows as controlled, observable, recoverable, and replayable distributed executions.
+Deterministic AI Runtime is a .NET runtime for executing complex AI workflows as controlled, observable, recoverable, replayable, and auditable distributed executions.
 
 It is designed for workloads such as:
 
@@ -135,15 +136,16 @@ This project explores what an AI execution runtime should look like when reliabi
 | Retry and recovery | Implemented | Retry state, waiting windows, and stale running-step recovery are separated. |
 | Retention and compaction | Implemented | Hot state can be compacted/evicted while payloads remain resolvable. |
 | Distributed concurrency and throttling | Implemented | Redis ZSET leases enforce global, pipeline, step, execution, instance, provider, model, and operation limits. |
-| Enterprise throttling scenario | Implemented | `throttling-100` demonstrates provider-level distributed throttling with realtime visibility and deterministic convergence. |
+| Enterprise throttling scenario | Implemented | `throttling-500` demonstrates provider-level distributed throttling with realtime visibility and deterministic convergence. |
 | Policy-driven execution | Implemented | Retry, retention, and concurrency use configurable policy definitions. |
 | Execution control state | Implemented | ExecutionId-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Implemented | RunId-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue. |
 | RunId vs ExecutionId separation | Implemented | Controller lifecycle identity is separated from durable DAG execution identity. |
 | Snapshot and replay foundations | Foundation available | Terminal snapshots and replay restoration are available as a foundation for official replay APIs. |
+| Execution-correlated decision ledger | Implemented | Durable correlated ledger events exist for execution lifecycle, run lifecycle, queue control, claims, steps, retry, recovery, policy evaluation, concurrency, execution control, human input, snapshots, storage failures, retention, compaction, and finalization. |
 | Observability and tracing | Foundation available | Runtime metrics, trace recording, realtime events, and console visibility exist; production-grade OpenTelemetry integration and dashboarding remain planned. |
 | MLOps-oriented platform evolution | Direction defined | Long-term platform direction is documented in `docs/road-to-mlops.md`. |
-| Durable decision ledger | Planned | Future work for stronger audit and decision history. |
+| Durable decision ledger | Foundation available | Execution-correlated runtime ledger foundations are implemented; replay-specific ledger events and audit APIs remain planned. |
 | Public API / SDK polish | Planned | Future work for cleaner external developer experience. |
 
 ---
@@ -201,6 +203,9 @@ Step Executors
 MongoDB Payloads / Snapshots / Replay Foundations
         |
         v
+Execution-Correlated Decision Ledger
+        |
+        v
 Observability / Metrics / Tracing Foundations
 ```
 
@@ -226,14 +231,14 @@ The project is designed around production questions that enterprise AI systems m
 | What happens if a worker crashes? | Running steps can be recovered through stale-claim detection and Redis-backed recovery. |
 | How do you prevent duplicate executions? | Atomic Redis Lua claims and claim tokens enforce single step ownership. |
 | How do you replay a workflow? | Terminal snapshots and replay restoration provide replay foundations. |
-| How do you audit an AI decision? | Execution state, step results, retry metadata, snapshots, and observability provide audit foundations. |
+| How do you audit an AI decision? | Execution-correlated decision ledger events, execution state, step results, retry metadata, recovery state, snapshots, and observability provide audit foundations. |
 | How do you limit concurrency? | Distributed Redis ZSET leases and policy-driven throttling enforce limits. |
 | How do you resolve execution context safely? | Context helpers resolve inputs, step outputs, payload references, provider metadata, and policy context consistently. |
 | How do you pause/resume/cancel safely? | Execution control state blocks new claims and coordinates deterministic finalization. |
 | How do you control human-in-the-loop? | WaitingForInput and SubmitHumanInput are supported through durable control state. |
 | How do you keep memory/state bounded? | Retention, compaction, eviction, and payload externalization control hot state size. |
 | How do you coordinate multiple runtime instances? | Shared Redis state, Lua coordination, leases, and deterministic convergence enable coordination. |
-| How do you prove deterministic convergence? | Integration tests and enterprise demo scenarios validate completion, replay fingerprints, distributed execution, throttling, and recovery behavior. |
+| How do you prove deterministic convergence? | Integration tests and enterprise demo scenarios validate completion, replay fingerprints, distributed execution, throttling, recovery behavior, atomic retention, and compaction consistency. |
 | How does this evolve toward AI operations and MLOps? | Runtime foundations are designed to support future AI execution control planes, governance, observability, replay, and operational workflows. |
 
 For the detailed enterprise matrix, see [`docs/enterprise-readiness.md`](docs/enterprise-readiness.md).
@@ -340,12 +345,20 @@ The runtime includes foundations for production visibility and replayability:
 - concurrency admission diagnostics
 - realtime runtime events
 - readable console runtime events
+- execution-correlated decision ledger
+- durable runtime lifecycle audit events
+- claim, concurrency, retry, and recovery audit visibility
+- queue and execution control audit visibility
+- atomic retention and compaction auditability
+- snapshot persistence audit events
 - trace recording foundations
 - terminal snapshots
 - replay restoration
 - deterministic replay fingerprint validation
 
-OpenTelemetry-style distributed tracing, richer dashboards, durable decision ledger, and official replay APIs remain roadmap items.
+OpenTelemetry-style distributed tracing, richer dashboards, replay APIs, replay audit tooling, and advanced decision lineage remain roadmap items.
+
+Replay-specific ledger events are intentionally deferred until the official Replay API implementation.
 
 ---
 
@@ -367,6 +380,7 @@ The strongest areas today are:
 - executable distributed throttling scenario
 - execution control state
 - runtime queue control
+- queue and execution control observability
 - replay/snapshot foundations
 - observability and realtime logging foundations
 - integration-test-driven validation
@@ -375,7 +389,6 @@ Areas still evolving include:
 
 - public API/SDK polish
 - official replay APIs
-- durable decision ledger
 - observability, tracing, and metrics polish
 - operational dashboarding
 - Kubernetes deployment assets
@@ -408,6 +421,10 @@ It currently includes:
 - distributed provider throttling through the `throttling-100` scenario
 - `RunId` and `ExecutionId` separation
 - terminal completion through the controller path
+- execution-correlated runtime ledger visibility
+- queue and execution control audit events
+- retry, recovery, and concurrency ledger validation
+- atomic retention and compaction auditability
 
 The current executable console scenarios are:
 
@@ -446,7 +463,7 @@ The roadmap is organized into phases.
 | Phase 3 | Observability, tracing, and metrics | Foundations available / active polish |
 | Phase 4 | Kubernetes deployment demo | Planned |
 | Phase 5 | Public API / SDK polish | Planned |
-| Phase 6 | Durable Decision Ledger | Planned |
+| Phase 6 | Replay / Audit APIs and Decision Lineage | Planned |
 | Phase 7 | Official Replay / Audit package | Planned |
 | Phase 8 | Cost and Provider Governance | Planned |
 | Phase 9 | Articles and public positioning | Planned |
@@ -484,6 +501,7 @@ Focused AI runtime documentation:
 - [`docs/ai/distributed-concurrency-throttling.md`](docs/ai/distributed-concurrency-throttling.md)
 - [`docs/ai/replay-and-audit.md`](docs/ai/replay-and-audit.md)
 - [`docs/ai/observability.md`](docs/ai/observability.md)
+- [`docs/ai/execution-correlated-ledger.md`](docs/ai/execution-correlated-ledger.md)
 - [`docs/ai/testing-strategy.md`](docs/ai/testing-strategy.md)
 - [`docs/ai/config-driven-runtime.md`](docs/ai/config-driven-runtime.md)
 - [`docs/ai/policy-driven-execution.md`](docs/ai/policy-driven-execution.md)

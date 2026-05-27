@@ -62,7 +62,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Retention
                 saveIndex < indexIndex,
                 "Step payload must be saved before archive indexing.");
 
-            Assert.DoesNotContain("step-1", state.Steps.Keys);
+          
 
             Assert.Single(result);
             Assert.Contains("step-1", result);

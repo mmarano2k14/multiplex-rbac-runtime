@@ -133,12 +133,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                     "Step execution started.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
-                        ["step.name"] = claimedStep.StepName,
-                        ["step.key"] = concurrencyContext.StepKey,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
+                        ["step.name"] = claimedStep.StepName ?? string.Empty,
+                        ["step.key"] = concurrencyContext.StepKey ?? string.Empty,
                         ["worker.id"] = runtimeInstanceId,
-                        ["claim.token"] = claimedStep.ClaimToken
+                        ["claim.token"] = claimedStep.ClaimToken ?? string.Empty
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -193,12 +193,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                                 : result.Error ?? "Step execution failed.",
                             new Dictionary<string, string>
                             {
-                                ["pipeline.name"] = resolvedPipeline.Name,
-                                ["pipeline.version"] = resolvedPipeline.Version,
-                                ["step.name"] = claimedStep.StepName,
-                                ["step.key"] = concurrencyContext.StepKey,
-                                ["worker.id"] = runtimeInstanceId,
-                                ["claim.token"] = claimedStep.ClaimToken
+                                ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                                ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
+                                ["step.name"] = claimedStep.StepName ?? string.Empty,
+                                ["step.key"] = concurrencyContext.StepKey ?? string.Empty,
+                                ["worker.id"] = runtimeInstanceId ?? string.Empty,
+                                ["claim.token"] = claimedStep.ClaimToken ?? string.Empty
                             },
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -230,13 +230,13 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             ex.Message,
                             new Dictionary<string, string>
                             {
-                                ["pipeline.name"] = resolvedPipeline.Name,
-                                ["pipeline.version"] = resolvedPipeline.Version,
-                                ["step.name"] = resolvedStep.Name,
-                                ["step.key"] = resolvedStep.StepKey,
-                                ["worker.id"] = runtimeInstanceId,
-                                ["claim.token"] = claimedStep.ClaimToken,
-                                ["exception.type"] = ex.GetType().Name
+                                ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                                ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
+                                ["step.name"] = resolvedStep.Name ?? string.Empty,
+                                ["step.key"] = resolvedStep.StepKey ?? string.Empty,
+                                ["worker.id"] = runtimeInstanceId ?? string.Empty,
+                                ["claim.token"] = claimedStep.ClaimToken ?? string.Empty,
+                                ["exception.type"] = ex.GetType().Name ?? string.Empty
                             },
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -266,12 +266,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         "Concurrency lease released after step execution.",
                         new Dictionary<string, string>
                         {
-                            ["pipeline.name"] = resolvedPipeline.Name,
-                            ["pipeline.version"] = resolvedPipeline.Version,
-                            ["step.name"] = resolvedStep.Name,
-                            ["step.key"] = resolvedStep.StepKey,
-                            ["worker.id"] = runtimeInstanceId,
-                            ["lease.id"] = concurrencyContext.LeaseId
+                            ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                            ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
+                            ["step.name"] = resolvedStep.Name ?? string.Empty,
+                            ["step.key"] = resolvedStep.StepKey ?? string.Empty,
+                            ["worker.id"] = runtimeInstanceId ?? string.Empty,
+                            ["lease.id"] = concurrencyContext.LeaseId ?? string.Empty
                         },
                         cancellationToken)
                     .ConfigureAwait(false);

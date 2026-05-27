@@ -1735,8 +1735,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         decision.Reason ?? "Execution is waiting for human input.",
                         new Dictionary<string, string>
                         {
-                            ["pipeline.key"] = pipelineKey,
-                            ["worker.id"] = workerId,
+                            ["pipeline.key"] = pipelineKey ?? string.Empty,
+                            ["worker.id"] = workerId ?? string.Empty,
                             ["status"] = decision.Status.ToString(),
                             ["stop.claiming"] = decision.ShouldStopClaiming.ToString(),
                             ["should.cancel"] = decision.ShouldCancel.ToString(),

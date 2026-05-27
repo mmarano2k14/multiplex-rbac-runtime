@@ -192,22 +192,20 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                     entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
                     entry.Outcome == AiDecisionLedgerOutcome.Started);
 
-            var recoveryDetected = Assert.Single(
-                entries.Where(entry =>
+            var recoveryDetected = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Recovery &&
-                    entry.EventType == AiDecisionLedgerEvents.Recovery.Detected));
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.Detected);
 
             Assert.Equal(executionId, recoveryDetected.CorrelationContext.ExecutionId);
             Assert.Equal(pipelineKey, recoveryDetected.CorrelationContext.PipelineName);
             Assert.Equal(workerId, recoveryDetected.CorrelationContext.WorkerId);
             Assert.Equal(workerId, recoveryDetected.CorrelationContext.RuntimeInstanceId);
-            Assert.Equal("1", recoveryDetected.Metadata["recovered.count"]);
-            Assert.Equal(stepName, recoveryDetected.Metadata["recovered.steps"]);
+            Assert.Equal("1", recoveryDetected?.Metadata["recovered.count"] );
+            Assert.Equal(stepName, recoveryDetected?.Metadata["recovered.steps"]);
 
-            var recoveryApplied = Assert.Single(
-                entries.Where(entry =>
+            var recoveryApplied = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Recovery &&
-                    entry.EventType == AiDecisionLedgerEvents.Recovery.Applied));
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.Applied);
 
             Assert.Equal(AiDecisionLedgerOutcome.Applied, recoveryApplied.Outcome);
             Assert.Equal(executionId, recoveryApplied.CorrelationContext.ExecutionId);
@@ -217,10 +215,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             Assert.Equal("1", recoveryApplied.Metadata["recovered.count"]);
             Assert.Equal(stepName, recoveryApplied.Metadata["recovered.steps"]);
 
-            var stepRecovered = Assert.Single(
-                entries.Where(entry =>
+            var stepRecovered = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Recovery &&
-                    entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered));
+                    entry.EventType == AiDecisionLedgerEvents.Recovery.StepRecovered);
 
             Assert.Equal(AiDecisionLedgerOutcome.Applied, stepRecovered.Outcome);
             Assert.Equal(executionId, stepRecovered.CorrelationContext.ExecutionId);

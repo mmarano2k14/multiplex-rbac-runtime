@@ -241,7 +241,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                         ["payload.inline"] = payload.IsInline.ToString(),
                         ["payload.artifact.id"] = payload.ArtifactId ?? string.Empty,
                         ["payload.content.type"] = payload.ContentType ?? string.Empty,
-                        ["payload.size.bytes"] = payload.SizeBytes.ToString()
+                        ["payload.size.bytes"] = payload.SizeBytes.ToString() ?? string.Empty
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -290,7 +290,7 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
                         ["payload.inline"] = payload.IsInline.ToString(),
                         ["payload.artifact.id"] = payload.ArtifactId ?? string.Empty,
                         ["payload.content.type"] = payload.ContentType ?? string.Empty,
-                        ["payload.size.bytes"] = payload.SizeBytes.ToString()
+                        ["payload.size.bytes"] = payload.SizeBytes.ToString() ?? string.Empty
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

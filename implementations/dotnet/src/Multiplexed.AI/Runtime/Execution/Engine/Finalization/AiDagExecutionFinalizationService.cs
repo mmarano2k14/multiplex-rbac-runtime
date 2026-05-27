@@ -295,11 +295,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "Execution finalization started.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["converged.status"] = convergence.Status.ToString(),
                         ["final.status"] = finalStatus.ToString(),
-                        ["expected.step.key"] = expectedStepKey,
+                        ["expected.step.key"] = expectedStepKey ?? string.Empty,
                         ["completed.steps.count"] = completedStepsCount.ToString()
                     },
                     cancellationToken)
@@ -331,11 +331,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "Final status overridden by execution control cancellation.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["converged.status"] = convergence.Status.ToString(),
                         ["final.status"] = finalStatus.ToString(),
-                        ["expected.step.key"] = expectedStepKey
+                        ["expected.step.key"] = expectedStepKey ?? string.Empty
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -366,10 +366,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "Execution finalization completed.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["final.status"] = finalStatus.ToString(),
-                        ["expected.step.key"] = expectedStepKey,
+                        ["expected.step.key"] = expectedStepKey ?? string.Empty,
                         ["completed.steps.count"] = completedStepsCount.ToString()
                     },
                     cancellationToken)
@@ -402,10 +402,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     reason,
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["final.status"] = finalStatus.ToString(),
-                        ["expected.step.key"] = expectedStepKey,
+                        ["expected.step.key"] = expectedStepKey ?? string.Empty,
                         ["completed.steps.count"] = completedStepsCount.ToString(),
                         ["race.type"] = "distributed-finalization"
                     },
@@ -439,10 +439,10 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     reason,
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["final.status"] = finalStatus.ToString(),
-                        ["expected.step.key"] = expectedStepKey,
+                        ["expected.step.key"] = expectedStepKey ?? string.Empty,
                         ["completed.steps.count"] = completedStepsCount.ToString()
                     },
                     cancellationToken)
@@ -473,8 +473,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     "Execution finalized.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["final.status"] = finalStatus.ToString(),
                         ["completed.steps.count"] = completedStepsCount.ToString()
                     },
@@ -496,8 +496,8 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                     $"Execution {finalStatus.ToString().ToLowerInvariant()}.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = resolvedPipeline.Name,
-                        ["pipeline.version"] = resolvedPipeline.Version,
+                        ["pipeline.name"] = resolvedPipeline.Name ?? string.Empty,
+                        ["pipeline.version"] = resolvedPipeline.Version ?? string.Empty,
                         ["final.status"] = finalStatus.ToString(),
                         ["completed.steps.count"] = completedStepsCount.ToString()
                     },

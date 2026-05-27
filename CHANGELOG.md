@@ -6,6 +6,150 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.5.2] - 2026-05-26 Execution-Correlated Decision Ledger Integration
+
+- Added execution-correlated decision ledger integration across the enterprise runtime.
+- Added stable decision ledger event constants grouped by runtime domain:
+  - execution
+  - run
+  - queue
+  - claim
+  - step
+  - retry
+  - recovery
+  - policy
+  - concurrency
+  - control
+  - human input
+  - retention
+  - payload
+  - snapshot
+  - storage
+  - finalization
+
+- Added `IAiDecisionLedgerRecorder` integration into the runtime observability facade.
+- Added default decision ledger recorder with configurable write behavior.
+- Added ledger-safe observability composition through `AiRuntimeObservability`.
+- Added execution correlation context support for ledger entries.
+
+- Added controller-level run ledger events:
+  - `run.queued`
+  - `run.dequeued`
+  - `run.started`
+  - `run.completed`
+  - `run.failed`
+  - `run.cancelled`
+
+- Added queue control ledger events:
+  - `queue.paused`
+  - `queue.resumed`
+
+- Added execution control ledger events:
+  - `control.pause_requested`
+  - `control.paused`
+  - `control.resume_requested`
+  - `control.resumed`
+  - `control.cancel_requested`
+  - `control.cancel_observed`
+  - `control.state_changed`
+
+- Added human-in-the-loop ledger events:
+  - `human_input.requested`
+  - `human_input.waiting`
+  - `human_input.submitted`
+
+- Added distributed claim ledger events:
+  - `claim.attempted`
+  - `claim.acquired`
+  - `claim.denied`
+
+- Added step execution ledger events:
+  - `step.started`
+  - `step.completed`
+  - `step.failed`
+
+- Added retry ledger events after persisted step failure transitions:
+  - `retry.evaluated`
+  - `retry.scheduled`
+  - `retry.denied`
+  - `retry.budget_exhausted`
+
+- Added recovery ledger events for timed-out distributed DAG steps:
+  - `recovery.detected`
+  - `recovery.applied`
+  - `recovery.step_recovered`
+
+- Added policy engine ledger events:
+  - `policy.evaluated`
+  - `policy.allowed`
+  - `policy.denied`
+  - `policy.failed`
+
+- Added concurrency and throttling ledger events:
+  - `concurrency.denied`
+  - `concurrency.lease_acquired`
+  - `concurrency.lease_released`
+
+- Added snapshot and storage ledger events:
+  - `snapshot.created`
+  - `storage.state_persistence_failed`
+
+- Added finalization ledger events:
+  - `finalization.started`
+  - `finalization.completed`
+  - `finalization.failed`
+  - `finalization.race_lost`
+  - `finalization.cancellation_override_applied`
+
+- Added atomic retention and compaction ledger coverage for:
+  - retention evaluation
+  - retention trigger decisions
+  - payload compaction
+  - hot-state eviction
+  - retention patch application
+  - resolver-safe evicted step reconstruction
+
+- Improved aggressive retention flow with atomic Redis retention patching.
+- Fixed retention behavior so compacted and evicted steps remain reconstructable.
+- Fixed aggressive retention integration test failures around hot-state eviction.
+- Fixed resolver consistency for evicted steps after compaction.
+- Fixed fingerprint step reconstruction after aggressive retention.
+- Fixed retried-step reconstruction when steps were evicted from hot state.
+- Fixed non-terminal steps being incorrectly considered by retention policies.
+- Fixed retention policy tests to ignore:
+  - `Running`
+  - `Ready`
+  - `WaitingForRetry`
+
+- Added and updated integration tests for:
+  - run ledger lifecycle events
+  - queue pause/resume ledger events
+  - execution control ledger events
+  - human input ledger events
+  - retry ledger events
+  - recovery ledger events
+  - policy ledger events
+  - concurrency ledger events
+  - snapshot ledger events
+  - atomic retention
+  - compaction
+  - eviction
+  - resolver reconstruction after aggressive retention
+  - 100-step distributed chaos execution
+  - 500-step aggressive retention execution
+
+- Fixed test regressions introduced during ledger integration.
+- Fixed queue ledger correlation issues between global queue operations and execution-correlated runs.
+- Fixed handle usage in queue/control tests.
+- Fixed enum outcome coverage by adding `Ready` for future DAG scheduling events.
+- Reverted premature `dag.step_became_ready` runtime emission because it was executed before persisted DAG completion state was stable.
+- Deferred DAG ready-step ledger events until a safer persisted completion point is introduced.
+
+- Replay ledger events were intentionally omitted from this release.
+- Replay-specific ledger events will be added later as part of the Replay API implementation.
+
+---
+
 ## [1.0.5.1] - 2026-05-23 Enterprise Runtime Demo
 
 - Added executable enterprise runtime console demo for production-style AI workflow execution.

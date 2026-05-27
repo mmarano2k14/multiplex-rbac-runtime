@@ -266,11 +266,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                     "DAG execution created and persisted.",
                     new Dictionary<string, string>
                     {
-                        ["pipeline.name"] = record.PipelineName,
-                        ["pipeline.version"] = preparedPipeline.Version,
+                        ["pipeline.name"] = record.PipelineName ?? string.Empty,
+                        ["pipeline.version"] = preparedPipeline.Version ?? string.Empty,
                         ["execution.mode"] = record.ExecutionMode.ToString(),
                         ["step.count"] = preparedPipeline.Steps.Count.ToString(),
-                        ["context.key"] = record.ContextKey
+                        ["context.key"] = record.ContextKey ?? string.Empty
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

@@ -116,8 +116,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Control
                     executionId);
 
                 Assert.NotNull(controlState);
-                Assert.Equal(AiExecutionControlStatus.Cancelling, controlState!.Status);
-                Assert.Equal(AiExecutionControlAction.Cancel, controlState.PendingAction);
+                Assert.Equal(AiExecutionControlStatus.Cancelled, controlState!.Status);
             }
             finally
             {

@@ -19,6 +19,7 @@ Focused AI runtime documentation is organized under:
 | [`../README.md`](../README.md) | Main repository entry point. Short, professional overview. |
 | [`runtime-internals.md`](runtime-internals.md) | Complete technical reference preserved from the original README. |
 | [`enterprise-readiness.md`](enterprise-readiness.md) | Matrix of enterprise AI execution questions and runtime answers. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime decision ledger, audit foundations, retention auditability, and replay-ledger roadmap direction. |
 | [`comparison-existing-tools.md`](comparison-existing-tools.md) | Ecosystem positioning against agent frameworks, workflow engines, orchestration tools, observability platforms, and distributed infrastructure. |
 | [`roadmap.md`](roadmap.md) | Project roadmap organized by phases. |
 
@@ -44,7 +45,8 @@ Start with:
 1. [`../README.md`](../README.md)
 2. [`ai/architecture-overview.md`](ai/architecture-overview.md)
 3. [`enterprise-readiness.md`](enterprise-readiness.md)
-4. [`runtime-internals.md`](runtime-internals.md)
+4. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
+5. [`runtime-internals.md`](runtime-internals.md)
 
 This path gives both the strategic positioning and the complete technical depth.
 
@@ -57,8 +59,9 @@ Start with:
 3. [`ai/policy-driven-execution.md`](ai/policy-driven-execution.md)
 4. [`ai/context-resolution-and-helpers.md`](ai/context-resolution-and-helpers.md)
 5. [`ai/step-plugins.md`](ai/step-plugins.md)
-6. [`runtime-internals.md`](runtime-internals.md)
-7. [`roadmap.md`](roadmap.md)
+6. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
+7. [`runtime-internals.md`](runtime-internals.md)
+8. [`roadmap.md`](roadmap.md)
 
 This path gives the current architecture, configuration model, context resolution layer, extension model, technical reference, and next planned improvements.
 
@@ -86,6 +89,7 @@ It includes detailed explanations of:
 - runtime queue control
 - observability
 - replay and snapshot foundations
+- execution-correlated decision ledger
 - roadmap and vision
 
 This document intentionally keeps the original depth. It should not be deleted.
@@ -104,6 +108,26 @@ A structured matrix answering key enterprise AI runtime questions:
 - bounded memory/state
 - multi-runtime-instance coordination
 - deterministic convergence
+
+### [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
+
+Execution-correlated runtime decision ledger foundations.
+
+This document explains:
+
+- execution-correlated runtime auditability
+- structured runtime decision recording
+- execution versus run correlation
+- claim and concurrency audit visibility
+- retry and recovery audit visibility
+- queue and execution control observability
+- human-in-the-loop auditability
+- retention and compaction auditability
+- snapshot persistence audit events
+- finalization race visibility
+- replay-ledger future direction
+
+The document also explains why replay-specific ledger events are intentionally deferred until the official Replay API.
 
 ### [`comparison-existing-tools.md`](comparison-existing-tools.md)
 
@@ -129,8 +153,8 @@ The project roadmap organized into phases:
 - Phase 3 — Observability Dashboard
 - Phase 4 — Kubernetes Deployment
 - Phase 5 — Public API / SDK Polish
-- Phase 6 — Durable Decision Ledger
-- Phase 7 — Official Replay API
+- Phase 6 — Replay / Audit APIs and Decision Lineage
+- Phase 7 — Advanced Replay Validation and Audit Tooling
 - Phase 8 — Cost and Provider Governance
 - Phase 9 — Articles / Public Positioning
 
@@ -144,6 +168,7 @@ The project roadmap organized into phases:
 | [`ai/distributed-execution.md`](ai/distributed-execution.md) | Distributed workers, Redis coordination, claims, leases, and deterministic convergence. |
 | [`ai/execution-control-state.md`](ai/execution-control-state.md) | ExecutionId-level pause, resume, cancel, waiting-for-input, and control-state behavior. |
 | [`ai/runtime-queue-control.md`](ai/runtime-queue-control.md) | RunId-level background controller queue control, hot enqueue, and RunId versus ExecutionId separation. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime auditability, runtime decision recording, and future replay/audit foundations. |
 
 ---
 
@@ -153,7 +178,8 @@ The project roadmap organized into phases:
 |---|---|
 | [`ai/retry-and-recovery.md`](ai/retry-and-recovery.md) | Retry engine, retry state, WaitingForRetry, Redis Lua transitions, and stale worker recovery. |
 | [`ai/retention-and-compaction.md`](ai/retention-and-compaction.md) | Bounded hot state, compaction, eviction, payload externalization, and resolver safety. |
-| [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Snapshot, replay, deterministic replay validation, audit foundations, and future decision ledger. |
+| [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Snapshot, replay, deterministic replay validation, replay foundations, and future replay APIs. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated decision ledger, retention auditability, control-state auditability, and future replay lineage direction. |
 
 ---
 
@@ -163,6 +189,7 @@ The project roadmap organized into phases:
 |---|---|
 | [`ai/distributed-concurrency-throttling.md`](ai/distributed-concurrency-throttling.md) | Redis ZSET concurrency gate, provider/model/operation throttling, and admission policies. |
 | [`ai/observability.md`](ai/observability.md) | Metrics, tracing foundations, logs, runtime diagnostics, and future dashboard direction. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated decision ledger, runtime audit visibility, and structured runtime lifecycle evidence. |
 | [`ai/testing-strategy.md`](ai/testing-strategy.md) | Integration testing strategy and validation approach for distributed runtime guarantees. |
 
 ---
@@ -181,7 +208,7 @@ The project roadmap organized into phases:
 
 ## Documentation Status
 
-Most focused documents currently start as planned documentation split placeholders.
+Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, and execution-correlated decision ledger foundations.
 
 The complete technical reference remains preserved in:
 
@@ -207,3 +234,4 @@ When adding new documentation:
 4. Keep links relative to this file.
 5. Preserve the complete technical reference in `runtime-internals.md`.
 6. Clearly distinguish between implemented features, available foundations, and planned work.
+7. Keep replay-specific ledger documentation separated from the current runtime ledger foundations until the official Replay API is implemented.
