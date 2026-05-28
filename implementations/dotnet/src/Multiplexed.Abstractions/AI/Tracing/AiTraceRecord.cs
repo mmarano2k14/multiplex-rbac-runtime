@@ -83,5 +83,10 @@ namespace Multiplexed.Abstractions.AI.Tracing
         /// </summary>
         public IDictionary<string, object?> Tags { get; } =
             new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Gets or sets the runtime trace correlation snapshot attached to this trace record.
+        /// </summary>
+        public AiRuntimeTraceCorrelationContext? Correlation { get; set; }
     }
 }

@@ -36,5 +36,10 @@
         /// Gets or sets additional structured tags associated with the event.
         /// </summary>
         public IDictionary<string, object?> Tags { get; set; } = new Dictionary<string, object?>();
+
+        /// <summary>
+        /// Gets or sets the runtime trace correlation snapshot attached to this trace event.
+        /// </summary>
+        public AiRuntimeTraceCorrelationContext? Correlation { get; set; }
     }
 }

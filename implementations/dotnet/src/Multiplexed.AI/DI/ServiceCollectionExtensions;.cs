@@ -33,6 +33,7 @@ using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Tracing.Store;
 using Multiplexed.Abstractions.Runtime;
 using Multiplexed.AI.Abstractions;
 using Multiplexed.AI.Abstractions.AI.Policies;
@@ -91,6 +92,8 @@ using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Multiplexed.AI.Runtime.Tracing;
+using Multiplexed.AI.Runtime.Tracing.Store;
+using Multiplexed.AI.Runtime.Tracing.Store.Mongo;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Stores.Cache.Redis;
 using Multiplexed.AI.Stores.Cache.Redis.Control;
@@ -406,8 +409,13 @@ namespace Multiplexed.AI.DI
             // Tracing
             // ------------------------------------------------------------
 
-            // services.AddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
             services.AddSingleton<IAiTraceTimeline, InMemoryAiTraceTimeline>();
+            services.AddSingleton<NoOpAiRuntimeTraceStore>();
+            services.AddSingleton<InMemoryAiRuntimeTraceStore>();
+            services.AddSingleton<MongoAiRuntimeTraceStore>();
+
+            services.AddSingleton<IAiRuntimeTraceStore>(
+                AiRuntimeTraceStoreFactory.Create);
 
             // Recorder 
             services.AddSingleton<IAiTraceRecorder>(sp =>
@@ -426,9 +434,17 @@ namespace Multiplexed.AI.DI
                 var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
                 var recorder = sp.GetRequiredService<IAiTraceRecorder>();
 
-                return options.Observability.EnableTracing
-                    ? new InMemoryAiRuntimeTracer(recorder)
-                    : new NoOpAiRuntimeTracer();
+                if (!options.Observability.EnableTracing)
+                {
+                    return new NoOpAiRuntimeTracer();
+                }
+
+                var correlationAccessor =
+                    sp.GetRequiredService<IAiRuntimeCorrelationAccessor>();
+
+                return new InMemoryAiRuntimeTracer(
+                    recorder,
+                    correlationAccessor);
             });
 
             // ------------------------------------------------------------
@@ -451,6 +467,12 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<IOptions<AiRuntimeMetricStoreOptions>>(
                 Options.Create(
                     ResolveMetricStoreOptions(
+                        options,
+                        observability)));
+
+            services.TryAddSingleton<IOptions<AiRuntimeTraceStoreOptions>>(
+                Options.Create(
+                    ResolveTraceStoreOptions(
                         options,
                         observability)));
 
@@ -743,6 +765,68 @@ namespace Multiplexed.AI.DI
                 MongoCollectionName = !string.IsNullOrWhiteSpace(configured.MongoCollectionName)
                     ? configured.MongoCollectionName
                     : "ai_runtime_metrics"
+            };
+
+            return resolved;
+        }
+
+        /// <summary>
+        /// Resolves runtime trace store options by applying observability settings and
+        /// MongoDB fallbacks from the existing runtime configuration.
+        /// </summary>
+        /// <param name="engineOptions">The AI engine options.</param>
+        /// <param name="observability">The observability options.</param>
+        /// <returns>The resolved runtime trace store options.</returns>
+        /// <remarks>
+        /// <para>
+        /// Tracing may use its own MongoDB options. When they are not explicitly provided,
+        /// this method reuses the existing MongoDB host and database from the runtime payload
+        /// store configuration so traces, metrics, ledger entries, payloads, indexes, and
+        /// future replay diagnostics stay in the same MongoDB environment.
+        /// </para>
+        ///
+        /// <para>
+        /// The trace collection remains separate from payload, metric, and ledger collections.
+        /// </para>
+        /// </remarks>
+        private static AiRuntimeTraceStoreOptions ResolveTraceStoreOptions(
+            AiEngineOptions engineOptions,
+            AiObservabilityOptions observability)
+        {
+            ArgumentNullException.ThrowIfNull(engineOptions);
+            ArgumentNullException.ThrowIfNull(observability);
+
+            if (!observability.EnableTracing)
+            {
+                return new AiRuntimeTraceStoreOptions
+                {
+                    Mode = AiRuntimeTraceStoreMode.Disabled
+                };
+            }
+
+            var configured = observability.Tracing ?? new AiRuntimeTraceStoreOptions();
+
+            var resolved = new AiRuntimeTraceStoreOptions
+            {
+                Mode = configured.Mode,
+
+                MongoConnectionString = !string.IsNullOrWhiteSpace(configured.MongoConnectionString)
+                    ? configured.MongoConnectionString
+                    : !string.IsNullOrWhiteSpace(engineOptions.PayloadStore?.Mongo?.ConnectionString)
+                        ? engineOptions.PayloadStore.Mongo.ConnectionString
+                        : "mongodb://localhost:27017",
+
+                MongoDatabaseName = !string.IsNullOrWhiteSpace(configured.MongoDatabaseName)
+                    ? configured.MongoDatabaseName
+                    : !string.IsNullOrWhiteSpace(engineOptions.PayloadStore?.Mongo?.DatabaseName)
+                        ? engineOptions.PayloadStore.Mongo.DatabaseName
+                        : !string.IsNullOrWhiteSpace(observability.MongoDecisionLedger?.DatabaseName)
+                            ? observability.MongoDecisionLedger.DatabaseName
+                            : "multiplexed_ai_runtime",
+
+                MongoCollectionName = !string.IsNullOrWhiteSpace(configured.MongoCollectionName)
+                    ? configured.MongoCollectionName
+                    : "ai_runtime_traces"
             };
 
             return resolved;

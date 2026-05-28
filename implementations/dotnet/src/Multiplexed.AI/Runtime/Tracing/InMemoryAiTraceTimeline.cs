@@ -25,16 +25,22 @@ namespace Multiplexed.AI.Runtime.Tracing
             new(StringComparer.Ordinal);
 
         /// <inheritdoc />
-        public void Add(AiTraceEvent traceEvent)
+        public void Add(
+            AiTraceEvent traceEvent)
         {
             ArgumentNullException.ThrowIfNull(traceEvent);
 
-            if (string.IsNullOrWhiteSpace(traceEvent.ExecutionId))
+            var executionId = ResolveExecutionId(
+                traceEvent);
+
+            if (string.IsNullOrWhiteSpace(executionId))
             {
                 throw new ArgumentException(
                     "Trace event execution id cannot be null or whitespace.",
                     nameof(traceEvent));
             }
+
+            traceEvent.ExecutionId = executionId;
 
             if (traceEvent.TimestampUtc == default)
             {
@@ -42,7 +48,7 @@ namespace Multiplexed.AI.Runtime.Tracing
             }
 
             var events = _eventsByExecutionId.GetOrAdd(
-                traceEvent.ExecutionId,
+                executionId,
                 _ => new List<AiTraceEvent>());
 
             lock (events)
@@ -52,7 +58,8 @@ namespace Multiplexed.AI.Runtime.Tracing
         }
 
         /// <inheritdoc />
-        public IReadOnlyList<AiTraceEvent> Get(string executionId)
+        public IReadOnlyList<AiTraceEvent> Get(
+            string executionId)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
 
@@ -70,11 +77,48 @@ namespace Multiplexed.AI.Runtime.Tracing
         }
 
         /// <inheritdoc />
-        public void Clear(string executionId)
+        public void Clear(
+            string executionId)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
 
-            _eventsByExecutionId.TryRemove(executionId, out _);
+            _eventsByExecutionId.TryRemove(
+                executionId,
+                out _);
+        }
+
+        /// <summary>
+        /// Resolves the execution identifier used as the timeline partition key.
+        /// </summary>
+        /// <param name="traceEvent">The trace event.</param>
+        /// <returns>The resolved execution identifier.</returns>
+        private static string? ResolveExecutionId(
+            AiTraceEvent traceEvent)
+        {
+            return FirstNonEmpty(
+                traceEvent.ExecutionId,
+                traceEvent.Correlation?.Runtime?.ExecutionId,
+                traceEvent.Correlation?.Runtime?.RunId,
+                traceEvent.Correlation?.Runtime?.CorrelationId);
+        }
+
+        /// <summary>
+        /// Returns the first non-empty value.
+        /// </summary>
+        /// <param name="values">The candidate values.</param>
+        /// <returns>The first non-empty value, or <c>null</c>.</returns>
+        private static string? FirstNonEmpty(
+            params string?[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value.Trim();
+                }
+            }
+
+            return null;
         }
     }
 }

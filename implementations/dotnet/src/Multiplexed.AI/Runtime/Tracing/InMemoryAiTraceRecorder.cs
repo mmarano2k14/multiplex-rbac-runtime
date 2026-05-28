@@ -2,7 +2,10 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Tracing.Store;
 
 namespace Multiplexed.AI.Runtime.Tracing
 {
@@ -13,6 +16,7 @@ namespace Multiplexed.AI.Runtime.Tracing
     /// PURPOSE:
     /// - Stores completed AI runtime trace records in memory.
     /// - Feeds the trace timeline from completed trace records.
+    /// - Optionally writes completed trace records to a configured trace store.
     ///
     /// NAMING:
     /// - Category identifies the runtime component.
@@ -29,40 +33,64 @@ namespace Multiplexed.AI.Runtime.Tracing
     /// - This implementation is process-local and non-durable.
     /// - It is suitable for tests, diagnostics, local runtime inspection, and early UI work.
     /// - Durable/exported tracing should use another recorder or exporter implementation later.
+    /// - Trace store writes are best-effort and must not break runtime execution.
     /// </remarks>
     public sealed class InMemoryAiTraceRecorder : IAiTraceRecorder
     {
         private readonly ConcurrentQueue<AiTraceRecord> _records = new();
         private readonly IAiTraceTimeline _timeline;
+        private readonly IAiRuntimeTraceStore? _traceStore;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="InMemoryAiTraceRecorder"/> class.
         /// </summary>
         /// <param name="timeline">The timeline receiving projected trace events.</param>
-        public InMemoryAiTraceRecorder(IAiTraceTimeline timeline)
+        public InMemoryAiTraceRecorder(
+            IAiTraceTimeline timeline)
+            : this(
+                timeline,
+                traceStore: null)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="InMemoryAiTraceRecorder"/> class.
+        /// </summary>
+        /// <param name="timeline">The timeline receiving projected trace events.</param>
+        /// <param name="traceStore">The optional trace store receiving completed trace records.</param>
+        public InMemoryAiTraceRecorder(
+            IAiTraceTimeline timeline,
+            IAiRuntimeTraceStore? traceStore)
         {
             _timeline = timeline ?? throw new ArgumentNullException(nameof(timeline));
+            _traceStore = traceStore;
         }
 
         /// <inheritdoc />
-        public void Record(AiTraceRecord record)
+        public void Record(
+            AiTraceRecord record)
         {
             ArgumentNullException.ThrowIfNull(record);
 
             _records.Enqueue(record);
 
-            if (string.IsNullOrWhiteSpace(record.ExecutionId))
+            TryAppendToStore(record);
+
+            var executionId = ResolveExecutionId(record);
+
+            if (string.IsNullOrWhiteSpace(executionId))
             {
                 return;
             }
 
             _timeline.Add(new AiTraceEvent
             {
-                ExecutionId = record.ExecutionId,
+                ExecutionId = executionId,
                 TimestampUtc = record.CompletedAtUtc ?? DateTime.UtcNow,
                 Category = ResolveCategory(record),
                 Name = ResolveEventName(record),
-                StepId = record.StepId,
+                StepId = ResolveStepId(record),
+                Correlation = record.Correlation,
                 Tags = BuildTimelineTags(record)
             });
         }
@@ -73,7 +101,60 @@ namespace Multiplexed.AI.Runtime.Tracing
             return _records.ToArray().ToList();
         }
 
-        private static string ResolveCategory(AiTraceRecord record)
+        /// <summary>
+        /// Attempts to append the trace record to the configured trace store.
+        /// </summary>
+        /// <param name="record">The completed trace record.</param>
+        /// <remarks>
+        /// Trace persistence is observational and best-effort. Store failures must not
+        /// break runtime execution or timeline recording.
+        /// </remarks>
+        private void TryAppendToStore(
+            AiTraceRecord record)
+        {
+            if (_traceStore is null)
+            {
+                return;
+            }
+
+            _ = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        await _traceStore.AppendAsync(
+                                record,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Best-effort trace persistence.
+                        // Tracing must not break runtime execution.
+                    }
+                });
+        }
+
+        private static string? ResolveExecutionId(
+            AiTraceRecord record)
+        {
+            return FirstNonEmpty(
+                record.ExecutionId,
+                record.Correlation?.Runtime?.ExecutionId,
+                record.Correlation?.Runtime?.RunId,
+                record.Correlation?.Runtime?.CorrelationId);
+        }
+
+        private static string? ResolveStepId(
+            AiTraceRecord record)
+        {
+            return FirstNonEmpty(
+                record.StepId,
+                record.Correlation?.StepId);
+        }
+
+        private static string ResolveCategory(
+            AiTraceRecord record)
         {
             if (record.Tags.TryGetValue("component", out var component) &&
                 component is string componentName &&
@@ -93,7 +174,8 @@ namespace Multiplexed.AI.Runtime.Tracing
             };
         }
 
-        private static string ResolveEventName(AiTraceRecord record)
+        private static string ResolveEventName(
+            AiTraceRecord record)
         {
             var result = record.Failed
                 ? "failed"
@@ -118,7 +200,8 @@ namespace Multiplexed.AI.Runtime.Tracing
             };
         }
 
-        private static string ResolveOperationName(AiTraceRecord record)
+        private static string ResolveOperationName(
+            AiTraceRecord record)
         {
             if (record.Tags.TryGetValue("operation", out var taggedOperation) &&
                 taggedOperation is string operation &&
@@ -138,7 +221,8 @@ namespace Multiplexed.AI.Runtime.Tracing
             };
         }
 
-        private static string NormalizeComponent(string component)
+        private static string NormalizeComponent(
+            string component)
         {
             return component.Trim().ToLowerInvariant() switch
             {
@@ -156,7 +240,8 @@ namespace Multiplexed.AI.Runtime.Tracing
             };
         }
 
-        private static string NormalizeOperation(string operation)
+        private static string NormalizeOperation(
+            string operation)
         {
             return operation.Trim() switch
             {
@@ -173,7 +258,8 @@ namespace Multiplexed.AI.Runtime.Tracing
             };
         }
 
-        private static IDictionary<string, object?> BuildTimelineTags(AiTraceRecord record)
+        private static IDictionary<string, object?> BuildTimelineTags(
+            AiTraceRecord record)
         {
             var tags = new Dictionary<string, object?>(record.Tags, StringComparer.OrdinalIgnoreCase)
             {
@@ -187,6 +273,10 @@ namespace Multiplexed.AI.Runtime.Tracing
                 ["succeeded"] = record.Succeeded,
                 ["failed"] = record.Failed
             };
+
+            AddCorrelationTags(
+                tags,
+                record.Correlation);
 
             if (!string.IsNullOrWhiteSpace(record.ErrorType))
             {
@@ -219,6 +309,73 @@ namespace Multiplexed.AI.Runtime.Tracing
             }
 
             return tags;
+        }
+
+        private static void AddCorrelationTags(
+            IDictionary<string, object?> tags,
+            AiRuntimeTraceCorrelationContext? correlation)
+        {
+            if (correlation is null)
+            {
+                return;
+            }
+
+            AddTagIfMissing(tags, "correlationId", correlation.Runtime?.CorrelationId);
+            AddTagIfMissing(tags, "runId", correlation.Runtime?.RunId);
+            AddTagIfMissing(tags, "executionId", correlation.Runtime?.ExecutionId);
+            AddTagIfMissing(tags, "pipelineName", correlation.Runtime?.PipelineName);
+            AddTagIfMissing(tags, "pipelineVersion", correlation.Runtime?.PipelineVersion);
+            AddTagIfMissing(tags, "pipelineKey", correlation.Runtime?.PipelineKey);
+            AddTagIfMissing(tags, "runtimeInstanceId", correlation.Runtime?.RuntimeInstanceId);
+            AddTagIfMissing(tags, "workerId", correlation.Runtime?.WorkerId);
+
+            AddTagIfMissing(tags, "stepId", correlation.StepId);
+            AddTagIfMissing(tags, "stepKey", correlation.StepKey);
+            AddTagIfMissing(tags, "claimToken", correlation.ClaimToken);
+            AddTagIfMissing(tags, "policyKey", correlation.PolicyKey);
+            AddTagIfMissing(tags, "provider", correlation.Provider);
+            AddTagIfMissing(tags, "model", correlation.Model);
+            AddTagIfMissing(tags, "operation", correlation.Operation);
+            AddTagIfMissing(tags, "inputPayloadRef", correlation.InputPayloadRef);
+            AddTagIfMissing(tags, "outputPayloadRef", correlation.OutputPayloadRef);
+            AddTagIfMissing(tags, "humanInputRef", correlation.HumanInputRef);
+            AddTagIfMissing(tags, "promptRef", correlation.PromptRef);
+            AddTagIfMissing(tags, "distributedTraceId", correlation.TraceId);
+            AddTagIfMissing(tags, "traceScopeId", correlation.TraceScopeId);
+            AddTagIfMissing(tags, "parentTraceScopeId", correlation.ParentTraceScopeId);
+            AddTagIfMissing(tags, "traceSource", correlation.Source);
+        }
+
+        private static void AddTagIfMissing(
+            IDictionary<string, object?> tags,
+            string key,
+            string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            if (tags.ContainsKey(key))
+            {
+                return;
+            }
+
+            tags[key] = value;
+        }
+
+        private static string? FirstNonEmpty(
+            params string?[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value.Trim();
+                }
+            }
+
+            return null;
         }
     }
 }

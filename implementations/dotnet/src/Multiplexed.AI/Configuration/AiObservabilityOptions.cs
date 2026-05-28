@@ -1,6 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics.Store;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Metrics;
+using Multiplexed.Abstractions.AI.Tracing.Store;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Tracing;
 
@@ -98,5 +99,23 @@ namespace Multiplexed.AI.Configuration
         /// with <see cref="AiDecisionLedgerStorageMode.Mongo"/>.
         /// </remarks>
         public MongoAiDecisionLedgerOptions MongoDecisionLedger { get; set; } = new();
+
+        /// <summary>
+        /// Gets or sets runtime trace store options.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Controls whether trace records are disabled, stored in memory, persisted to MongoDB,
+        ///   or written to both memory and MongoDB.
+        /// - Allows live diagnostics and durable trace inspection to be configured independently.
+        ///
+        /// IMPORTANT:
+        /// - Disabling trace storage must not impact runtime execution.
+        /// - Trace persistence is observational only.
+        /// </remarks>
+        public AiRuntimeTraceStoreOptions Tracing { get; set; } = new()
+        {
+            Mode = AiRuntimeTraceStoreMode.Memory
+        };
     }
 }
