@@ -1,4 +1,6 @@
-﻿using Multiplexed.AI.Runtime.Metrics.Storage;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.Storage;
 using System;
 using Xunit;
 
@@ -9,7 +11,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void RecordPayloadStored_Should_Increment_Count_And_Bytes()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStored("execution-1", "step-1", "mongo", 1000);
             metrics.RecordPayloadStored("execution-2", "step-2", "mongo", 2000);
@@ -21,7 +23,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void RecordPayloadLoaded_Should_Increment_Count()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadLoaded("execution-1", "step-1", "redis");
             metrics.RecordPayloadLoaded("execution-2", "step-2", "redis");
@@ -32,7 +34,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void RecordPayloadStoreHit_Should_Increment_Count()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStoreHit("execution-1", "step-1", "cache");
             metrics.RecordPayloadStoreHit("execution-2", "step-2", "cache");
@@ -43,7 +45,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void RecordPayloadStoreMiss_Should_Increment_Count()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStoreMiss("execution-1", "step-1", "cache");
             metrics.RecordPayloadStoreMiss("execution-2", "step-2", "cache");
@@ -54,7 +56,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void RecordPayloadStoreFailure_Should_Increment_Count_And_Group_By_Exception()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStoreFailure("execution-1", "step-1", "mongo", new InvalidOperationException());
             metrics.RecordPayloadStoreFailure("execution-2", "step-2", "mongo", new InvalidOperationException());
@@ -68,7 +70,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void StorageMetrics_Should_Group_By_StorageKind()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStored("execution-1", "step-1", "mongo", 100);
             metrics.RecordPayloadStored("execution-2", "step-2", "mongo", 200);
@@ -81,7 +83,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void StorageMetrics_Should_Normalize_StorageKind()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStored("execution-1", "step-1", "", 100);
             metrics.RecordPayloadStored("execution-2", "step-2", " ", 200);
@@ -92,7 +94,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
         [Fact]
         public void StorageMetrics_Should_Handle_Mixed_Cases()
         {
-            var metrics = new AiStorageMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPayloadStored("execution-1", "step-1", "mongo", 1000);
             metrics.RecordPayloadLoaded("execution-1", "step-1", "mongo");
@@ -103,6 +105,12 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Storage
             Assert.Equal(1, metrics.PayloadLoadedCount);
             Assert.Equal(1, metrics.PayloadStoreHitCount);
             Assert.Equal(1, metrics.PayloadStoreMissCount);
+        }
+
+        private static AiStorageMetrics CreateMetrics()
+        {
+            return new AiStorageMetrics(
+                NoOpAiRuntimeMetricWriter.Instance);
         }
     }
 }

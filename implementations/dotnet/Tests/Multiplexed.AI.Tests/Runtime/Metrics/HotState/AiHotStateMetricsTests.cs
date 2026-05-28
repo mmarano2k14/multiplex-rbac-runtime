@@ -1,4 +1,6 @@
-﻿using Multiplexed.AI.Runtime.Metrics.HotState;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.HotState;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
@@ -8,7 +10,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateStepAdded_Should_Increment_Count()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateStepAdded("execution-1", "step-1");
             metrics.RecordStateStepAdded("execution-1", "step-2");
@@ -19,7 +21,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateStepRemoved_Should_Increment_Count()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateStepRemoved("execution-1", "step-1");
             metrics.RecordStateStepRemoved("execution-1", "step-2");
@@ -30,7 +32,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateCompacted_Should_Record_Count_And_Last_Values()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateCompacted("execution-1", 100, 75);
 
@@ -43,7 +45,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateCompacted_Should_Accumulate_Removed_Steps()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateCompacted("execution-1", 100, 80);
             metrics.RecordStateCompacted("execution-2", 50, 40);
@@ -57,7 +59,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateSizeObserved_Should_Record_Last_Observed_Values()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateSizeObserved("execution-1", 42, 4096);
 
@@ -69,7 +71,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void RecordStateSizeObserved_Should_Not_Reset_Bytes_When_Null()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateSizeObserved("execution-1", 42, 4096);
             metrics.RecordStateSizeObserved("execution-1", 10, null);
@@ -82,7 +84,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void HotStateMetrics_Should_Normalize_Negative_Values()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateCompacted("execution-1", -100, -50);
             metrics.RecordStateSizeObserved("execution-1", -10, -500);
@@ -97,7 +99,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
         [Fact]
         public void HotStateMetrics_Should_Accept_Invalid_ExecutionId()
         {
-            var metrics = new AiHotStateMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStateStepAdded("", "step-1");
             metrics.RecordStateStepRemoved(" ", "step-1");
@@ -108,6 +110,12 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState
             Assert.Equal(1, metrics.StateStepRemovedCount);
             Assert.Equal(1, metrics.StateCompactedCount);
             Assert.Equal(1, metrics.StateSizeObservedCount);
+        }
+
+        private static AiHotStateMetrics CreateMetrics()
+        {
+            return new AiHotStateMetrics(
+                NoOpAiRuntimeMetricWriter.Instance);
         }
     }
 }

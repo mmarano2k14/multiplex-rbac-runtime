@@ -3,7 +3,9 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -47,6 +49,9 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     /// </remarks>
     public sealed class AiRuntimePipelineBackgroundController : IAiRuntimePipelineBackgroundController
     {
+        private const string PipelineBackgroundControllerWorkerId =
+            "pipeline-background-controller";
+
         private readonly AiDagExecutionEngine _engine;
         private readonly IAiRuntimeInstanceWorker _worker;
         private readonly IAiRuntimeInstanceWorkerGroup _workerGroup;
@@ -57,6 +62,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly IAiRuntimeLogger _logger;
         private readonly IAiRuntimeObservability _observability;
         private readonly IAiExecutionControlService _executionControlService;
+        private readonly IAiRuntimeInstanceIdentity _runtimeInstanceIdentity;
 
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
@@ -86,6 +92,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// <param name="definitionResolver">The pipeline run definition resolver.</param>
         /// <param name="definitionPublisher">The pipeline run definition publisher.</param>
         /// <param name="runLifecycleHook">The pipeline run lifecycle hook.</param>
+        /// <param name="executionControlService">The execution control service.</param>
+        /// <param name="runtimeInstanceIdentity">The runtime instance identity of the controller host.</param>
         /// <param name="logger">The runtime logger.</param>
         /// <param name="observability">The runtime observability facade.</param>
         /// <param name="options">The controller options.</param>
@@ -98,6 +106,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             IAiRuntimePipelineRunDefinitionPublisher definitionPublisher,
             IAiRuntimePipelineRunLifecycleHook runLifecycleHook,
             IAiExecutionControlService executionControlService,
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
             IOptions<AiRuntimePipelineBackgroundControllerOptions> options)
@@ -110,6 +119,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _definitionPublisher = definitionPublisher ?? throw new ArgumentNullException(nameof(definitionPublisher));
             _runLifecycleHook = runLifecycleHook ?? throw new ArgumentNullException(nameof(runLifecycleHook));
             _executionControlService = executionControlService ?? throw new ArgumentNullException(nameof(executionControlService));
+            _runtimeInstanceIdentity = runtimeInstanceIdentity ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -238,6 +248,15 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
             var runId = Guid.NewGuid().ToString("N");
 
+            var correlation = new AiRuntimeExecutionCorrelationContext
+            {
+                CorrelationId = runId,
+                RunId = runId,
+                PipelineName = request.PipelineName,
+                RuntimeInstanceId = _runtimeInstanceIdentity.RuntimeInstanceId,
+                WorkerId = PipelineBackgroundControllerWorkerId
+            };
+
             var completionSource = new TaskCompletionSource<AiExecutionRecord>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -248,7 +267,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             var queuedRun = new AiRuntimeQueuedPipelineRun(
                 request,
                 handle,
-                completionSource);
+                completionSource,
+                correlation);
 
             _queuedRuns[runId] = queuedRun;
 
@@ -419,7 +439,6 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             return true;
         }
 
-
         /// <inheritdoc />
         public async Task<bool> CancelRunAsync(
             AiRuntimeWorkerRunHandle handle,
@@ -584,6 +603,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             var handle = queuedRun.Handle;
             var request = queuedRun.Request;
 
+            queuedRun.Correlation.RuntimeInstanceId ??= _runtimeInstanceIdentity.RuntimeInstanceId;
+            queuedRun.Correlation.WorkerId ??= PipelineBackgroundControllerWorkerId;
+            queuedRun.Correlation.RunId ??= handle.RunId;
+
+            using var correlationScope = _observability.Correlation.Push(queuedRun.Correlation);
+
             try
             {
                 await _observability.Tracer.TraceExecutionAsync(
@@ -592,7 +617,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         ExecutionId = handle.RunId,
                         ExecutionMode = "Dag",
                         Status = "PipelineRunQueued",
-                        WorkerId = "pipeline-background-controller"
+                        WorkerId = queuedRun.Correlation.WorkerId ?? PipelineBackgroundControllerWorkerId
                     },
                     async () =>
                     {
@@ -686,6 +711,10 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             var created = await CreateExecutionAsync(
                 request,
                 cancellationToken).ConfigureAwait(false);
+
+            queuedRun.Correlation.ExecutionId = created.ExecutionId;
+            queuedRun.Correlation.PipelineKey = created.PipelineName;
+            queuedRun.Correlation.RunId = handle.RunId;
 
             handle.MarkRunning(
                 created.ExecutionId);
@@ -882,15 +911,21 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineName);
             ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
 
+            var resolvedExecutionId = string.IsNullOrWhiteSpace(executionId)
+                ? runId
+                : executionId;
+
             var context = AiRuntimeCorrelationContextHelper.Create(
-                executionId: string.IsNullOrWhiteSpace(executionId) ? runId : executionId,
+                executionId: resolvedExecutionId,
                 pipelineKey: pipelineName,
                 stepName: "pipeline-run",
-                workerId: "pipeline-background-controller",
+                workerId: PipelineBackgroundControllerWorkerId,
                 claimToken: null,
-                concurrencyContext: null);
+                concurrencyContext: null,
+                runId: runId,
+                correlationId: runId);
 
-            context.CorrelationId = runId;
+            context.CorrelationId = _observability.Correlation.Current?.CorrelationId ?? runId;
 
             await _observability.Ledger.RecordAsync(
                     context,
@@ -930,11 +965,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 executionId: executionId,
                 pipelineKey: pipelineName,
                 stepName: "pipeline-queue",
-                workerId: "pipeline-background-controller",
+                workerId: PipelineBackgroundControllerWorkerId,
                 claimToken: null,
-                concurrencyContext: null);
+                concurrencyContext: null,
+                runId: runId,
+                correlationId: runId);
 
-            context.CorrelationId = runId;
+            context.CorrelationId = _observability.Correlation.Current?.CorrelationId ?? runId;
 
             await _observability.Ledger.RecordAsync(
                     context,

@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Observability;
-using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -37,7 +37,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             "Concurrency conflict on execution update.";
 
         private readonly AiDagExecutionEngine _engine;
-        private readonly IAiRuntimeInstanceIdentity _runtimeInstanceIdentity;
+        private readonly IAiRuntimeInstanceWorkerIdentity _workerIdentity;
         private readonly IAiRuntimeLogger _logger;
         private readonly IAiRuntimeObservability _observability;
         private readonly AiRuntimeInstanceWorkerOptions _options;
@@ -46,23 +46,26 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// Initializes a new instance of the <see cref="AiRuntimeInstanceWorker"/> class.
         /// </summary>
         /// <param name="engine">The DAG execution engine used to advance executions.</param>
-        /// <param name="runtimeInstanceIdentity">The stable identity of the current runtime instance.</param>
+        /// <param name="workerIdentity">
+        /// The logical worker identity for this worker instance. Factory-created workers
+        /// must receive a unique identity through <see cref="AiRuntimeInstanceWorkerFactory"/>.
+        /// </param>
         /// <param name="logger">The runtime logger.</param>
-        /// <param name="observability">The runtime observability facade used for metrics and tracing.</param>
+        /// <param name="observability">The runtime observability facade used for metrics, tracing, ledger, and correlation.</param>
         /// <param name="options">The runtime instance worker options.</param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when one of the required dependencies is <see langword="null"/>.
         /// </exception>
         public AiRuntimeInstanceWorker(
             AiDagExecutionEngine engine,
-            IAiRuntimeInstanceIdentity runtimeInstanceIdentity,
+            IAiRuntimeInstanceWorkerIdentity workerIdentity,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
             IOptions<AiRuntimeInstanceWorkerOptions> options)
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-            _runtimeInstanceIdentity = runtimeInstanceIdentity
-                ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
+            _workerIdentity = workerIdentity
+                ?? throw new ArgumentNullException(nameof(workerIdentity));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -75,18 +78,38 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
 
+            var current = _observability.Correlation.Current;
+            var runtimeInstanceId = _workerIdentity.RuntimeInstanceIdentity.RuntimeInstanceId;
+            var workerId = _workerIdentity.WorkerId;
+
+            var correlation = new AiRuntimeExecutionCorrelationContext
+            {
+                CorrelationId = current?.CorrelationId ?? current?.RunId ?? executionId,
+                RunId = current?.RunId,
+                ExecutionId = executionId,
+                PipelineName = current?.PipelineName,
+                PipelineVersion = current?.PipelineVersion,
+                PipelineKey = current?.PipelineKey,
+                RuntimeInstanceId = runtimeInstanceId,
+                WorkerId = workerId
+            };
+
+            using var correlationScope = _observability.Correlation.Push(correlation);
+
             return await _observability.Tracer.TraceExecutionAsync(
                 new AiExecutionTraceContext
                 {
                     ExecutionId = executionId,
                     ExecutionMode = "Dag",
                     Status = "WorkerRunning",
-                    WorkerId = _runtimeInstanceIdentity.RuntimeInstanceId
+                    WorkerId = workerId
                 },
                 async () =>
                 {
                     return await RunExecutionLoopAsync(
                         executionId,
+                        runtimeInstanceId,
+                        workerId,
                         cancellationToken).ConfigureAwait(false);
                 }).ConfigureAwait(false);
         }
@@ -96,21 +119,24 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// or cancellation is requested.
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
+        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
+        /// <param name="workerId">The logical worker identifier.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The terminal execution record.</returns>
         private async Task<AiExecutionRecord> RunExecutionLoopAsync(
             string executionId,
+            string runtimeInstanceId,
+            string workerId,
             CancellationToken cancellationToken)
         {
-            var runtimeInstanceId = _runtimeInstanceIdentity.RuntimeInstanceId;
             var cycle = 0;
 
             _observability.Metrics.Worker.RecordWorkerStarted(
                 executionId,
-                runtimeInstanceId);
+                workerId);
 
             _logger.Engine.LogInformation(
-                $"[AI WORKER] Runtime instance worker started. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}'.");
+                $"[AI WORKER] Runtime instance worker started. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}'.");
 
             try
             {
@@ -124,19 +150,19 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     {
                         _observability.Metrics.Worker.RecordWorkerMaxCyclesExceeded(
                             executionId,
-                            runtimeInstanceId,
+                            workerId,
                             _options.MaxCycles);
 
                         _logger.Engine.LogWarning(
-                            $"[AI WORKER] Runtime instance worker exceeded max cycles. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', MaxCycles='{_options.MaxCycles}'.");
+                            $"[AI WORKER] Runtime instance worker exceeded max cycles. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}', MaxCycles='{_options.MaxCycles}'.");
 
                         throw new TimeoutException(
-                            $"Runtime instance worker exceeded max cycles. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', MaxCycles='{_options.MaxCycles}'.");
+                            $"Runtime instance worker exceeded max cycles. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}', MaxCycles='{_options.MaxCycles}'.");
                     }
 
                     _observability.Metrics.Worker.RecordWorkerCycle(
                         executionId,
-                        runtimeInstanceId);
+                        workerId);
 
                     AiExecutionRecord record;
 
@@ -145,6 +171,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         record = await TraceWorkerCycleAsync(
                             executionId,
                             runtimeInstanceId,
+                            workerId,
                             cancellationToken).ConfigureAwait(false);
                     }
                     catch (InvalidOperationException ex)
@@ -156,14 +183,15 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     {
                         _observability.Metrics.Worker.RecordWorkerRaceLost(
                             executionId,
-                            runtimeInstanceId);
+                            workerId);
 
                         _logger.Engine.LogInformation(
-                            $"[AI WORKER] Distributed race loss ignored. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}'.");
+                            $"[AI WORKER] Distributed race loss ignored. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}'.");
 
                         await DelayIfNeededAsync(
                             executionId,
                             runtimeInstanceId,
+                            workerId,
                             cancellationToken).ConfigureAwait(false);
 
                         continue;
@@ -173,22 +201,23 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     {
                         _observability.Metrics.Worker.RecordWorkerTerminal(
                             executionId,
-                            runtimeInstanceId,
+                            workerId,
                             record.Status.ToString());
 
                         _logger.Engine.LogInformation(
-                            $"[AI WORKER] Runtime instance worker reached terminal execution. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', Status='{record.Status}', Cycles='{cycle}'.");
+                            $"[AI WORKER] Runtime instance worker reached terminal execution. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}', Status='{record.Status}', Cycles='{cycle}'.");
 
                         return record;
                     }
 
                     _observability.Metrics.Worker.RecordWorkerIdle(
                         executionId,
-                        runtimeInstanceId);
+                        workerId);
 
                     await DelayIfNeededAsync(
                         executionId,
                         runtimeInstanceId,
+                        workerId,
                         cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -196,10 +225,10 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 _observability.Metrics.Worker.RecordWorkerCancelled(
                     executionId,
-                    runtimeInstanceId);
+                    workerId);
 
                 _logger.Engine.LogInformation(
-                    $"[AI WORKER] Runtime instance worker cancelled. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}'.");
+                    $"[AI WORKER] Runtime instance worker cancelled. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}'.");
 
                 throw;
             }
@@ -210,11 +239,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
+        /// <param name="workerId">The logical worker identifier used for tracing.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The execution record returned by the engine.</returns>
         private async Task<AiExecutionRecord> TraceWorkerCycleAsync(
             string executionId,
             string runtimeInstanceId,
+            string workerId,
             CancellationToken cancellationToken)
         {
             return await _observability.Tracer.TraceExecutionAsync(
@@ -223,7 +254,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     ExecutionId = executionId,
                     ExecutionMode = "Dag",
                     Status = "WorkerCycle",
-                    WorkerId = runtimeInstanceId
+                    WorkerId = workerId
                 },
                 async () =>
                 {
@@ -239,10 +270,12 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </summary>
         /// <param name="executionId">The execution identifier.</param>
         /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
+        /// <param name="workerId">The logical worker identifier used for logging.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         private async Task DelayIfNeededAsync(
             string executionId,
             string runtimeInstanceId,
+            string workerId,
             CancellationToken cancellationToken)
         {
             if (_options.IdleDelay <= TimeSpan.Zero)
@@ -251,7 +284,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             }
 
             _logger.Engine.LogInformation(
-                $"[AI WORKER] Runtime instance worker idle delay. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', DelayMs='{_options.IdleDelay.TotalMilliseconds}'.");
+                $"[AI WORKER] Runtime instance worker idle delay. ExecutionId='{executionId}', RuntimeInstanceId='{runtimeInstanceId}', WorkerId='{workerId}', DelayMs='{_options.IdleDelay.TotalMilliseconds}'.");
 
             await Task.Delay(
                 _options.IdleDelay,

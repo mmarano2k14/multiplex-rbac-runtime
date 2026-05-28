@@ -13,7 +13,7 @@ namespace Multiplexed.AI.Observability.Ledger
     /// <remarks>
     /// The document stores correlation fields in a flattened form so MongoDB can index
     /// and query them efficiently, while the public ledger entry keeps the correlation
-    /// data grouped in <see cref="AiRuntimeCorrelationContext"/>.
+    /// data grouped in <see cref="AiRuntimeLedgerEventCorrelationContext"/>.
     /// </remarks>
     internal sealed class MongoAiDecisionLedgerEntryDocument
     {
@@ -214,7 +214,7 @@ namespace Multiplexed.AI.Observability.Ledger
             return new AiDecisionLedgerEntry
             {
                 EntryId = Id,
-                CorrelationContext = new AiRuntimeCorrelationContext
+                CorrelationContext = new AiRuntimeLedgerEventCorrelationContext
                 {
                     ExecutionId = ExecutionId,
                     RunId = RunId,

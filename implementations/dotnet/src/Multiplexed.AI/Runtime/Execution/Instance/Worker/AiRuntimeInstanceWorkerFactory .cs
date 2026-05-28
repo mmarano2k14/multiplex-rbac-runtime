@@ -14,21 +14,24 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
     /// execution scenarios where multiple runtime workers cooperate on the same
     /// execution identifier.
     /// </para>
+    ///
     /// <para>
-    /// Each created worker receives its own runtime instance identity so that
-    /// metrics, tracing, lease ownership, diagnostics, and distributed execution
-    /// telemetry remain isolated per worker instance.
+    /// Each created worker receives its own logical worker identity while preserving
+    /// the owning runtime instance identity. This allows metrics, tracing, leases,
+    /// diagnostics, decision ledger entries, and correlation contexts to distinguish
+    /// workers without confusing them with the host runtime instance.
     /// </para>
+    ///
     /// <para>
     /// The factory does not create separate execution identifiers. All created
-    /// workers are expected to operate on the same execution namespace while
-    /// relying on distributed DAG claims, leases, and convergence semantics
-    /// for correctness.
+    /// workers are expected to operate on the same execution namespace while relying
+    /// on distributed DAG claims, leases, and convergence semantics for correctness.
     /// </para>
     /// </remarks>
     public sealed class AiRuntimeInstanceWorkerFactory : IAiRuntimeInstanceWorkerFactory
     {
         private readonly IServiceProvider _serviceProvider;
+        private readonly IAiRuntimeInstanceIdentity _runtimeInstanceIdentity;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiRuntimeInstanceWorkerFactory"/> class.
@@ -36,12 +39,20 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// <param name="serviceProvider">
         /// The service provider used to create runtime instance workers.
         /// </param>
+        /// <param name="runtimeInstanceIdentity">
+        /// The owning runtime instance identity used to create logical worker identities.
+        /// </param>
         public AiRuntimeInstanceWorkerFactory(
-            IServiceProvider serviceProvider)
+            IServiceProvider serviceProvider,
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity)
         {
             _serviceProvider =
                 serviceProvider
                 ?? throw new ArgumentNullException(nameof(serviceProvider));
+
+            _runtimeInstanceIdentity =
+                runtimeInstanceIdentity
+                ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
         }
 
         /// <summary>
@@ -55,8 +66,9 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// </returns>
         /// <remarks>
         /// <para>
-        /// Each created worker receives a unique runtime instance identity.
+        /// Each created worker receives a unique logical worker identity.
         /// </para>
+        ///
         /// <para>
         /// The workers are intended to cooperate on the same execution identifier
         /// while relying on distributed Redis-backed claims and convergence semantics
@@ -73,14 +85,17 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
             for (var index = 0; index < count; index++)
             {
-                IAiRuntimeInstanceIdentity identity =
-                    new AiRuntimeFactoryWorkerInstanceIdentity(
-                        $"worker:{index + 1}:{Guid.NewGuid():N}");
+                var workerIndex = index + 1;
+
+                IAiRuntimeInstanceWorkerIdentity workerIdentity =
+                    new AiRuntimeInstanceWorkerIdentity(
+                        _runtimeInstanceIdentity,
+                        $"{_runtimeInstanceIdentity.RuntimeInstanceId}:worker:{workerIndex}:{Guid.NewGuid():N}");
 
                 workers.Add(
                     ActivatorUtilities.CreateInstance<AiRuntimeInstanceWorker>(
                         _serviceProvider,
-                        identity));
+                        workerIdentity));
             }
 
             return workers;

@@ -5,8 +5,10 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Observability.Ledger;
@@ -14,7 +16,9 @@ using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Stores;
 using NSubstitute;
 using StackExchange.Redis;
@@ -2161,12 +2165,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var ledger = new InMemoryAiDecisionLedger();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity = new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
-                    WriteMode = AiDecisionLedgerWriteMode.Strict,
-                    StorageMode = AiDecisionLedgerStorageMode.InMemory
+                    WriteMode = AiDecisionLedgerWriteMode.Strict
                 }),
                 NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
 
@@ -2312,8 +2321,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var ledger = new InMemoryAiDecisionLedger();
 
+
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,
@@ -2487,8 +2504,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.AI.Concurrency
 
             var ledger = new InMemoryAiDecisionLedger();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,

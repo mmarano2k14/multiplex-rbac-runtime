@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
@@ -19,9 +20,11 @@ using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Finalization;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
 using Multiplexed.AI.Runtime.Execution.Engine.Retention;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Execution.Retention;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Helpers;
 using NSubstitute;
@@ -312,8 +315,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var retentionResult = AiRetentionApplyResult.Empty(
                 AiRetentionDecision.None("No-op retention for finalization ledger test."));
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,

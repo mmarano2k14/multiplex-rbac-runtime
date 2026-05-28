@@ -358,8 +358,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Equal(handle.RunId, queued.CorrelationContext.ExecutionId);
                 Assert.Equal(handle.RunId, dequeued.CorrelationContext.ExecutionId);
 
-                Assert.Equal(handle.RunId, queued.CorrelationContext.CorrelationId);
-                Assert.Equal(handle.RunId, dequeued.CorrelationContext.CorrelationId);
+                Assert.Equal(handle.RunId, queued.CorrelationContext.RunId);
+                Assert.Equal(handle.RunId, dequeued.CorrelationContext.RunId);
 
                 Assert.Equal("pipeline-background-controller", queued.CorrelationContext.WorkerId);
                 Assert.Equal("pipeline-background-controller", dequeued.CorrelationContext.WorkerId);
@@ -490,8 +490,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Equal(handle.ExecutionId, paused.CorrelationContext.ExecutionId);
                 Assert.Equal(handle.ExecutionId, resumed.CorrelationContext.ExecutionId);
 
-                Assert.Equal(handle.RunId, paused.CorrelationContext.CorrelationId);
-                Assert.Equal(handle.RunId, resumed.CorrelationContext.CorrelationId);
+                Assert.Equal(handle.RunId, paused.CorrelationContext.RunId);
+                Assert.Equal(handle.RunId, resumed.CorrelationContext.RunId);
 
                 Assert.Equal("pipeline-background-controller", paused.CorrelationContext.WorkerId);
                 Assert.Equal("pipeline-background-controller", resumed.CorrelationContext.WorkerId);

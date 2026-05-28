@@ -1,4 +1,6 @@
-﻿using Multiplexed.Abstractions.AI.Observability.Ledger;
+﻿using Multiplexed.Abstractions.AI.Metrics.Store;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Tracing;
 
@@ -50,6 +52,25 @@ namespace Multiplexed.AI.Configuration
         /// - Metric recording calls should be ignored.
         /// </remarks>
         public bool EnableMetrics { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets runtime metric persistence options.
+        /// </summary>
+        /// <remarks>
+        /// PURPOSE:
+        /// - Controls whether runtime metric records are disabled, stored in memory,
+        ///   persisted to MongoDB, or written to both memory and MongoDB.
+        /// - Allows live in-memory diagnostics while also supporting durable metric history.
+        ///
+        /// IMPORTANT:
+        /// - Metric persistence must remain best-effort and must not break runtime execution.
+        /// - The in-memory mode is useful for tests, demos, and live local dashboards.
+        /// - The MongoDB mode is useful for durable observability, replay preparation, and audit queries.
+        /// </remarks>
+        public AiRuntimeMetricStoreOptions Metrics { get; set; } = new()
+        {
+            Mode = AiRuntimeMetricStoreMode.Memory
+        };
 
         /// <summary>
         /// Gets or sets decision ledger recorder options.

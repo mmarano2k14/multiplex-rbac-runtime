@@ -1,40 +1,61 @@
-﻿using Multiplexed.Abstractions.AI.Metrics.Policy;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.AI.Abstractions.AI.Policies;
-using System;
-using System.Threading;
 
 namespace Multiplexed.AI.Runtime.Metrics.Policy
 {
     /// <summary>
-    /// In-memory implementation of policy execution metrics.
-    ///
-    /// PURPOSE:
-    /// - Track policy execution frequency, success, and failures.
-    /// - Provide visibility into policy behavior and performance.
-    ///
-    /// THREAD SAFETY:
-    /// - This implementation is safe for singleton usage.
-    /// - Uses atomic operations for all counters.
-    ///
-    /// IMPORTANT:
-    /// - This class only records metrics.
-    /// - It must not influence policy decisions or execution flow.
+    /// In-memory implementation of <see cref="IAiPolicyMetrics"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation tracks policy execution frequency, execution outcomes,
+    /// policy decisions, failures, and execution duration.
+    /// </para>
+    ///
+    /// <para>
+    /// This implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured metric store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are observational only and must not influence policy execution,
+    /// policy decisions, retries, blocking, retention, throttling, or runtime flow.
+    /// </para>
+    /// </remarks>
     public sealed class AiPolicyMetrics : IAiPolicyMetrics
     {
+        private const string Category = "Policy";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _policyExecutionCount;
         private long _policySuccessCount;
         private long _policyFailureCount;
-
-        // 🔥 NEW (decision level)
         private long _policyRetryCount;
         private long _policyBlockCount;
-
         private long _lastExecutionDurationMs;
         private long _totalExecutionDurationMs;
-
         private string? _lastPolicyName;
         private long _lastExecutionTimestamp;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiPolicyMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiPolicyMetrics(
+            IAiRuntimeMetricWriter metricWriter)
+        {
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
 
         /// <inheritdoc />
         public void RecordExecution(
@@ -43,8 +64,6 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
             bool success,
             TimeSpan duration)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _policyExecutionCount);
 
             if (success)
@@ -56,24 +75,53 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
                 Interlocked.Increment(ref _policyFailureCount);
             }
 
-            var durationMs = (long)Math.Max(0, duration.TotalMilliseconds);
+            var durationMs = (long)Math.Max(
+                0,
+                duration.TotalMilliseconds);
 
-            Interlocked.Exchange(ref _lastExecutionDurationMs, durationMs);
-            Interlocked.Add(ref _totalExecutionDurationMs, durationMs);
+            Interlocked.Exchange(
+                ref _lastExecutionDurationMs,
+                durationMs);
+
+            Interlocked.Add(
+                ref _totalExecutionDurationMs,
+                durationMs);
 
             _lastPolicyName = policyName;
-            Interlocked.Exchange(ref _lastExecutionTimestamp, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            Interlocked.Exchange(
+                ref _lastExecutionTimestamp,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            RecordMetric(
+                "policy.execution",
+                executionId,
+                policyName,
+                new Dictionary<string, string>
+                {
+                    ["success"] = success.ToString(),
+                    ["duration.ms"] = durationMs.ToString()
+                },
+                value: durationMs > 0 ? durationMs : 1);
         }
 
         /// <inheritdoc />
-        public void RecordFailure(string executionId, string policyName)
+        public void RecordFailure(
+            string executionId,
+            string policyName)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _policyFailureCount);
 
             _lastPolicyName = policyName;
-            Interlocked.Exchange(ref _lastExecutionTimestamp, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            Interlocked.Exchange(
+                ref _lastExecutionTimestamp,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            RecordMetric(
+                "policy.failure",
+                executionId,
+                policyName);
         }
 
         /// <inheritdoc />
@@ -82,8 +130,6 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
             string policyName,
             AiPolicyResultKind kind)
         {
-            _ = executionId;
-
             switch (kind)
             {
                 case AiPolicyResultKind.Retry:
@@ -96,12 +142,23 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
 
                 case AiPolicyResultKind.Success:
                 default:
-                    // success already tracked in RecordExecution
                     break;
             }
 
             _lastPolicyName = policyName;
-            Interlocked.Exchange(ref _lastExecutionTimestamp, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            Interlocked.Exchange(
+                ref _lastExecutionTimestamp,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            RecordMetric(
+                "policy.decision",
+                executionId,
+                policyName,
+                new Dictionary<string, string>
+                {
+                    ["result.kind"] = kind.ToString()
+                });
         }
 
         /// <summary>
@@ -130,12 +187,12 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
         public long PolicyBlockCount => Interlocked.Read(ref _policyBlockCount);
 
         /// <summary>
-        /// Gets the duration (in milliseconds) of the last policy execution.
+        /// Gets the duration in milliseconds of the last policy execution.
         /// </summary>
         public long LastExecutionDurationMs => Interlocked.Read(ref _lastExecutionDurationMs);
 
         /// <summary>
-        /// Gets the total accumulated execution duration (in milliseconds).
+        /// Gets the total accumulated policy execution duration in milliseconds.
         /// </summary>
         public long TotalExecutionDurationMs => Interlocked.Read(ref _totalExecutionDurationMs);
 
@@ -145,8 +202,51 @@ namespace Multiplexed.AI.Runtime.Metrics.Policy
         public string? LastPolicyName => _lastPolicyName;
 
         /// <summary>
-        /// Gets the timestamp (Unix ms) of the last execution.
+        /// Gets the Unix timestamp in milliseconds of the last policy execution.
         /// </summary>
         public long LastExecutionTimestamp => Interlocked.Read(ref _lastExecutionTimestamp);
+
+        /// <summary>
+        /// Records a correlated append-only policy metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="policyName">The policy name.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        /// <param name="value">The metric value.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            string policyName,
+            IReadOnlyDictionary<string, string>? additionalTags = null,
+            double value = 1)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty,
+                ["policy.name"] = policyName ?? string.Empty
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value,
+                tags,
+                CancellationToken.None);
+        }
     }
 }

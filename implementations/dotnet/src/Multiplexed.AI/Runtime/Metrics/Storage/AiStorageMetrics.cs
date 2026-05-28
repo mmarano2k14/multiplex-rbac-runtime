@@ -1,28 +1,42 @@
-﻿using Multiplexed.Abstractions.AI.Metrics.Storage;
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Threading;
+﻿using System.Collections.Concurrent;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Storage;
 
 namespace Multiplexed.AI.Runtime.Metrics.Storage
 {
     /// <summary>
     /// In-memory implementation of <see cref="IAiStorageMetrics"/>.
-    ///
-    /// PURPOSE:
-    /// - Track storage operations performed by the AI runtime.
-    /// - Provide visibility into payload persistence and cache efficiency.
-    ///
-    /// THREAD SAFETY:
-    /// - This implementation is safe for singleton usage.
-    /// - Uses atomic operations and concurrent collections.
-    ///
-    /// IMPORTANT:
-    /// - This class only records metrics.
-    /// - It must not perform any storage, caching, or serialization logic.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation tracks storage operations performed by the AI runtime,
+    /// including payload persistence, payload loading, cache hits, cache misses,
+    /// failures, and stored payload byte counts.
+    /// </para>
+    ///
+    /// <para>
+    /// This implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations and dimensional counters use concurrent dictionaries.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are observational only and must not perform storage, caching,
+    /// serialization, retry, or runtime decision logic.
+    /// </para>
+    /// </remarks>
     public sealed class AiStorageMetrics : IAiStorageMetrics
     {
+        private const string Category = "Storage";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _payloadStoredCount;
         private long _payloadLoadedCount;
         private long _payloadStoreHitCount;
@@ -30,69 +44,132 @@ namespace Multiplexed.AI.Runtime.Metrics.Storage
         private long _payloadStoreFailureCount;
         private long _totalPayloadStoredBytes;
 
-        private readonly ConcurrentDictionary<string, long> _operationsByStorageKind = new();
-        private readonly ConcurrentDictionary<string, long> _failuresByExceptionType = new();
+        private readonly ConcurrentDictionary<string, long> _operationsByStorageKind =
+            new(StringComparer.Ordinal);
+
+        private readonly ConcurrentDictionary<string, long> _failuresByExceptionType =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiStorageMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiStorageMetrics(
+            IAiRuntimeMetricWriter metricWriter)
+        {
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
 
         /// <inheritdoc />
-        public void RecordPayloadStored(string executionId, string stepId, string storageKind, long? bytes)
+        public void RecordPayloadStored(
+            string executionId,
+            string stepId,
+            string storageKind,
+            long? bytes)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _payloadStoredCount);
+
             IncrementStorageKind(storageKind);
 
             if (bytes.HasValue)
             {
-                Interlocked.Add(ref _totalPayloadStoredBytes, Math.Max(0, bytes.Value));
+                Interlocked.Add(
+                    ref _totalPayloadStoredBytes,
+                    Math.Max(0, bytes.Value));
             }
+
+            RecordMetric(
+                "payload.stored",
+                executionId,
+                stepId,
+                storageKind,
+                new Dictionary<string, string>
+                {
+                    ["bytes"] = bytes?.ToString() ?? string.Empty
+                },
+                value: bytes.HasValue ? Math.Max(0, bytes.Value) : 1);
         }
 
         /// <inheritdoc />
-        public void RecordPayloadLoaded(string executionId, string stepId, string storageKind)
+        public void RecordPayloadLoaded(
+            string executionId,
+            string stepId,
+            string storageKind)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _payloadLoadedCount);
+
             IncrementStorageKind(storageKind);
+
+            RecordMetric(
+                "payload.loaded",
+                executionId,
+                stepId,
+                storageKind);
         }
 
         /// <inheritdoc />
-        public void RecordPayloadStoreHit(string executionId, string stepId, string storageKind)
+        public void RecordPayloadStoreHit(
+            string executionId,
+            string stepId,
+            string storageKind)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _payloadStoreHitCount);
+
             IncrementStorageKind(storageKind);
+
+            RecordMetric(
+                "payload.store_hit",
+                executionId,
+                stepId,
+                storageKind);
         }
 
         /// <inheritdoc />
-        public void RecordPayloadStoreMiss(string executionId, string stepId, string storageKind)
+        public void RecordPayloadStoreMiss(
+            string executionId,
+            string stepId,
+            string storageKind)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _payloadStoreMissCount);
+
             IncrementStorageKind(storageKind);
+
+            RecordMetric(
+                "payload.store_miss",
+                executionId,
+                stepId,
+                storageKind);
         }
 
         /// <inheritdoc />
-        public void RecordPayloadStoreFailure(string executionId, string stepId, string storageKind, Exception exception)
+        public void RecordPayloadStoreFailure(
+            string executionId,
+            string stepId,
+            string storageKind,
+            Exception exception)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _payloadStoreFailureCount);
+
             IncrementStorageKind(storageKind);
 
-            var key = exception?.GetType().Name ?? "unknown";
+            var exceptionType = exception?.GetType().Name ?? "unknown";
 
             _failuresByExceptionType.AddOrUpdate(
-                key,
+                exceptionType,
                 _ => 1,
                 (_, current) => current + 1);
+
+            RecordMetric(
+                "payload.store_failure",
+                executionId,
+                stepId,
+                storageKind,
+                new Dictionary<string, string>
+                {
+                    ["exception.type"] = exceptionType,
+                    ["exception.message"] = exception?.Message ?? string.Empty
+                });
         }
 
         /// <summary>
@@ -135,7 +212,58 @@ namespace Multiplexed.AI.Runtime.Metrics.Storage
         /// </summary>
         public IReadOnlyDictionary<string, long> FailuresByExceptionType => _failuresByExceptionType;
 
-        private void IncrementStorageKind(string storageKind)
+        /// <summary>
+        /// Records a correlated append-only storage metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="stepId">The step identifier.</param>
+        /// <param name="storageKind">The storage kind.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        /// <param name="value">The metric value.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            string stepId,
+            string storageKind,
+            IReadOnlyDictionary<string, string>? additionalTags = null,
+            double value = 1)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty,
+                ["step.id"] = stepId ?? string.Empty,
+                ["storage.kind"] = Normalize(storageKind)
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value,
+                tags,
+                CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Increments the storage-kind dimensional counter.
+        /// </summary>
+        /// <param name="storageKind">The storage kind.</param>
+        private void IncrementStorageKind(
+            string storageKind)
         {
             var key = Normalize(storageKind);
 
@@ -145,7 +273,13 @@ namespace Multiplexed.AI.Runtime.Metrics.Storage
                 (_, current) => current + 1);
         }
 
-        private static string Normalize(string value)
+        /// <summary>
+        /// Normalizes a metric dimension value.
+        /// </summary>
+        /// <param name="value">The value to normalize.</param>
+        /// <returns>The normalized value.</returns>
+        private static string Normalize(
+            string value)
         {
             return string.IsNullOrWhiteSpace(value)
                 ? "unknown"

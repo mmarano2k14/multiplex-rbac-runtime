@@ -16,7 +16,7 @@ namespace Multiplexed.Abstractions.AI.Observability.Ledger
     {
         /// <inheritdoc />
         public Task RecordAsync(
-            AiRuntimeCorrelationContext context,
+            AiRuntimeLedgerEventCorrelationContext context,
             AiDecisionLedgerCategory category,
             string eventType,
             AiDecisionLedgerOutcome outcome,

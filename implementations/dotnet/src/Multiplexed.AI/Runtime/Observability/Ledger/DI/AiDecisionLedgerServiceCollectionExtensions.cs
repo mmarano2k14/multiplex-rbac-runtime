@@ -1,8 +1,12 @@
 ﻿using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Runtime.Observability.Ledger.Mongo;
 
 namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
@@ -47,6 +51,7 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
             var options = new AiDecisionLedgerRecorderOptions();
             configure(options);
 
+            RegisterRuntimeCorrelationDependencies(services);
             RegisterLedgerStorage(services, options.StorageMode);
             RegisterLedgerRecorder(services, options.WriteMode);
 
@@ -139,6 +144,40 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
             });
         }
 
+        /// <summary>
+        /// Registers the minimal runtime correlation dependencies required by the
+        /// default decision ledger recorder.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <remarks>
+        /// <para>
+        /// The decision ledger extension can be used standalone in tests or lightweight
+        /// hosts, without registering the full AI runtime module.
+        /// </para>
+        ///
+        /// <para>
+        /// Since <see cref="DefaultAiDecisionLedgerRecorder"/> can enrich ledger entries
+        /// from the ambient runtime correlation context, this method registers the minimal
+        /// passive correlation services needed by the recorder.
+        /// </para>
+        ///
+        /// <para>
+        /// These registrations use <c>TryAddSingleton</c>, so they do not override
+        /// registrations provided by the full runtime composition.
+        /// </para>
+        /// </remarks>
+        private static void RegisterRuntimeCorrelationDependencies(
+            IServiceCollection services)
+        {
+            services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
+            services.TryAddSingleton<IAiRuntimeCorrelationAccessor, AsyncLocalAiRuntimeCorrelationAccessor>();
+        }
+
+        /// <summary>
+        /// Registers the configured decision ledger storage implementation.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="storageMode">The ledger storage mode.</param>
         private static void RegisterLedgerStorage(
             IServiceCollection services,
             AiDecisionLedgerStorageMode storageMode)
@@ -165,6 +204,11 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.DI
             }
         }
 
+        /// <summary>
+        /// Registers the configured decision ledger recorder implementation.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="writeMode">The ledger write mode.</param>
         private static void RegisterLedgerRecorder(
             IServiceCollection services,
             AiDecisionLedgerWriteMode writeMode)

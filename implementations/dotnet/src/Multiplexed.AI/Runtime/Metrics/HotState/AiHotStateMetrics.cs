@@ -1,81 +1,158 @@
-﻿using System;
-using System.Threading;
+﻿using Multiplexed.Abstractions.AI.Metrics;
 
 namespace Multiplexed.AI.Runtime.Metrics.HotState
 {
     /// <summary>
     /// In-memory implementation of <see cref="IAiHotStateMetrics"/>.
-    ///
-    /// PURPOSE:
-    /// - Track hot state growth and reduction.
-    /// - Provide visibility into state compaction effectiveness.
-    ///
-    /// THREAD SAFETY:
-    /// - This implementation is safe for singleton usage.
-    /// - Uses atomic operations for all counters.
-    ///
-    /// IMPORTANT:
-    /// - This class only records metrics.
-    /// - It must not change execution state or retention behavior.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation tracks hot execution state growth, state reduction,
+    /// compaction effectiveness, and observed hot state size.
+    /// </para>
+    ///
+    /// <para>
+    /// This implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured metric store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are observational only and must not change execution state, retention
+    /// behavior, compaction decisions, eviction decisions, or replay behavior.
+    /// </para>
+    /// </remarks>
     public sealed class AiHotStateMetrics : IAiHotStateMetrics
     {
+        private const string Category = "HotState";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _stateStepAddedCount;
         private long _stateStepRemovedCount;
         private long _stateCompactedCount;
         private long _stateSizeObservedCount;
-
         private long _lastObservedStepCount;
         private long _lastEstimatedBytes;
         private long _lastCompactionBeforeSteps;
         private long _lastCompactionAfterSteps;
         private long _totalStepsRemovedByCompaction;
 
-        /// <inheritdoc />
-        public void RecordStateStepAdded(string executionId, string stepId)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiHotStateMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiHotStateMetrics(
+            IAiRuntimeMetricWriter metricWriter)
         {
-            _ = executionId;
-            _ = stepId;
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
 
+        /// <inheritdoc />
+        public void RecordStateStepAdded(
+            string executionId,
+            string stepId)
+        {
             Interlocked.Increment(ref _stateStepAddedCount);
+
+            RecordMetric(
+                "hot_state.step_added",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStateStepRemoved(string executionId, string stepId)
+        public void RecordStateStepRemoved(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _stateStepRemovedCount);
+
+            RecordMetric(
+                "hot_state.step_removed",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStateCompacted(string executionId, int beforeSteps, int afterSteps)
+        public void RecordStateCompacted(
+            string executionId,
+            int beforeSteps,
+            int afterSteps)
         {
-            _ = executionId;
-
             var safeBeforeSteps = Math.Max(0, beforeSteps);
             var safeAfterSteps = Math.Max(0, afterSteps);
             var removed = Math.Max(0, safeBeforeSteps - safeAfterSteps);
 
             Interlocked.Increment(ref _stateCompactedCount);
-            Interlocked.Exchange(ref _lastCompactionBeforeSteps, safeBeforeSteps);
-            Interlocked.Exchange(ref _lastCompactionAfterSteps, safeAfterSteps);
-            Interlocked.Add(ref _totalStepsRemovedByCompaction, removed);
+
+            Interlocked.Exchange(
+                ref _lastCompactionBeforeSteps,
+                safeBeforeSteps);
+
+            Interlocked.Exchange(
+                ref _lastCompactionAfterSteps,
+                safeAfterSteps);
+
+            Interlocked.Add(
+                ref _totalStepsRemovedByCompaction,
+                removed);
+
+            RecordMetric(
+                "hot_state.compacted",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["before.steps"] = safeBeforeSteps.ToString(),
+                    ["after.steps"] = safeAfterSteps.ToString(),
+                    ["removed.steps"] = removed.ToString()
+                },
+                value: removed);
         }
 
         /// <inheritdoc />
-        public void RecordStateSizeObserved(string executionId, int stepCount, long? estimatedBytes)
+        public void RecordStateSizeObserved(
+            string executionId,
+            int stepCount,
+            long? estimatedBytes)
         {
-            _ = executionId;
+            var safeStepCount = Math.Max(0, stepCount);
 
             Interlocked.Increment(ref _stateSizeObservedCount);
-            Interlocked.Exchange(ref _lastObservedStepCount, Math.Max(0, stepCount));
+
+            Interlocked.Exchange(
+                ref _lastObservedStepCount,
+                safeStepCount);
 
             if (estimatedBytes.HasValue)
             {
-                Interlocked.Exchange(ref _lastEstimatedBytes, Math.Max(0, estimatedBytes.Value));
+                Interlocked.Exchange(
+                    ref _lastEstimatedBytes,
+                    Math.Max(0, estimatedBytes.Value));
             }
+
+            RecordMetric(
+                "hot_state.size_observed",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.count"] = safeStepCount.ToString(),
+                    ["estimated.bytes"] = estimatedBytes?.ToString() ?? string.Empty
+                },
+                value: safeStepCount);
         }
 
         /// <summary>
@@ -122,5 +199,45 @@ namespace Multiplexed.AI.Runtime.Metrics.HotState
         /// Gets the total number of steps removed by hot state compaction.
         /// </summary>
         public long TotalStepsRemovedByCompaction => Interlocked.Read(ref _totalStepsRemovedByCompaction);
+
+        /// <summary>
+        /// Records a correlated append-only hot-state metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        /// <param name="value">The metric value.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            IReadOnlyDictionary<string, string>? additionalTags = null,
+            double value = 1)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value,
+                tags,
+                CancellationToken.None);
+        }
     }
 }

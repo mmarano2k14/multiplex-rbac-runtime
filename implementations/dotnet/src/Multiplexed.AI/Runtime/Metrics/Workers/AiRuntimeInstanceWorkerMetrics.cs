@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Threading;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Metrics.Workers;
 
 namespace Multiplexed.AI.Runtime.Metrics.Workers
@@ -13,13 +13,25 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
     /// This implementation is safe for singleton usage. Scalar counters use atomic
     /// operations and dimensional counters use concurrent dictionaries.
     /// </para>
+    ///
     /// <para>
     /// Metrics are observational only and must not influence runtime execution,
     /// scheduling, retries, throttling, or convergence.
     /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured store.
+    /// </para>
     /// </remarks>
     public sealed class AiRuntimeInstanceWorkerMetrics : IAiRuntimeInstanceWorkerMetrics
     {
+        private const string Category = "Worker";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _workerStartedCount;
         private long _workerCycleCount;
         private long _workerIdleCount;
@@ -37,14 +49,33 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
         private readonly ConcurrentDictionary<string, long> _raceLossByRuntimeInstance =
             new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiRuntimeInstanceWorkerMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiRuntimeInstanceWorkerMetrics(
+            IAiRuntimeMetricWriter metricWriter)
+        {
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
+
         /// <inheritdoc />
         public void RecordWorkerStarted(
             string executionId,
             string runtimeInstanceId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _workerStartedCount);
-            IncrementDimension(_cyclesByRuntimeInstance, runtimeInstanceId, 0);
+
+            IncrementDimension(
+                _cyclesByRuntimeInstance,
+                runtimeInstanceId,
+                0);
+
+            RecordMetric(
+                "worker.started",
+                executionId,
+                runtimeInstanceId);
         }
 
         /// <inheritdoc />
@@ -52,9 +83,16 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string executionId,
             string runtimeInstanceId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _workerCycleCount);
-            IncrementDimension(_cyclesByRuntimeInstance, runtimeInstanceId);
+
+            IncrementDimension(
+                _cyclesByRuntimeInstance,
+                runtimeInstanceId);
+
+            RecordMetric(
+                "worker.cycle",
+                executionId,
+                runtimeInstanceId);
         }
 
         /// <inheritdoc />
@@ -62,9 +100,12 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string executionId,
             string runtimeInstanceId)
         {
-            _ = executionId;
-            _ = runtimeInstanceId;
             Interlocked.Increment(ref _workerIdleCount);
+
+            RecordMetric(
+                "worker.idle",
+                executionId,
+                runtimeInstanceId);
         }
 
         /// <inheritdoc />
@@ -72,9 +113,16 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string executionId,
             string runtimeInstanceId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _workerRaceLostCount);
-            IncrementDimension(_raceLossByRuntimeInstance, runtimeInstanceId);
+
+            IncrementDimension(
+                _raceLossByRuntimeInstance,
+                runtimeInstanceId);
+
+            RecordMetric(
+                "worker.race_lost",
+                executionId,
+                runtimeInstanceId);
         }
 
         /// <inheritdoc />
@@ -83,10 +131,20 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string runtimeInstanceId,
             string status)
         {
-            _ = executionId;
-            _ = runtimeInstanceId;
             Interlocked.Increment(ref _workerTerminalCount);
-            IncrementDimension(_terminalByStatus, status);
+
+            IncrementDimension(
+                _terminalByStatus,
+                status);
+
+            RecordMetric(
+                "worker.terminal",
+                executionId,
+                runtimeInstanceId,
+                new Dictionary<string, string>
+                {
+                    ["status"] = status ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
@@ -94,9 +152,12 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string executionId,
             string runtimeInstanceId)
         {
-            _ = executionId;
-            _ = runtimeInstanceId;
             Interlocked.Increment(ref _workerCancelledCount);
+
+            RecordMetric(
+                "worker.cancelled",
+                executionId,
+                runtimeInstanceId);
         }
 
         /// <inheritdoc />
@@ -105,10 +166,16 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             string runtimeInstanceId,
             int maxCycles)
         {
-            _ = executionId;
-            _ = runtimeInstanceId;
-            _ = maxCycles;
             Interlocked.Increment(ref _workerMaxCyclesExceededCount);
+
+            RecordMetric(
+                "worker.max_cycles_exceeded",
+                executionId,
+                runtimeInstanceId,
+                new Dictionary<string, string>
+                {
+                    ["max.cycles"] = maxCycles.ToString()
+                });
         }
 
         /// <summary>
@@ -164,6 +231,53 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
             return Snapshot(_raceLossByRuntimeInstance);
         }
 
+        /// <summary>
+        /// Records a correlated append-only worker metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="runtimeInstanceId">The runtime instance identifier.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            string runtimeInstanceId,
+            IReadOnlyDictionary<string, string>? additionalTags = null)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty,
+                ["runtime.instance.id"] = runtimeInstanceId ?? string.Empty
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value: 1,
+                tags,
+                CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Increments a dimensional counter.
+        /// </summary>
+        /// <param name="target">The dimensional counter dictionary.</param>
+        /// <param name="key">The dimension key.</param>
+        /// <param name="amount">The increment amount.</param>
         private static void IncrementDimension(
             ConcurrentDictionary<string, long> target,
             string key,
@@ -186,11 +300,18 @@ namespace Multiplexed.AI.Runtime.Metrics.Workers
                 (_, current) => current + amount);
         }
 
+        /// <summary>
+        /// Creates a read-only snapshot of a dimensional counter dictionary.
+        /// </summary>
+        /// <param name="source">The source dictionary.</param>
+        /// <returns>The read-only snapshot.</returns>
         private static IReadOnlyDictionary<string, long> Snapshot(
             ConcurrentDictionary<string, long> source)
         {
             return new ReadOnlyDictionary<string, long>(
-                new Dictionary<string, long>(source));
+                new Dictionary<string, long>(
+                    source,
+                    StringComparer.Ordinal));
         }
     }
 }

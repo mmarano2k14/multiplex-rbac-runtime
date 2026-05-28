@@ -19,7 +19,7 @@
     /// <see cref="RuntimeInstanceId"/> and <see cref="WorkerId"/> represent distributed ownership.
     /// </para>
     /// </remarks>
-    public sealed class AiRuntimeCorrelationContext
+    public sealed class AiRuntimeLedgerEventCorrelationContext
     {
         /// <summary>
         /// Gets the primary execution identifier used to correlate state, ledger,

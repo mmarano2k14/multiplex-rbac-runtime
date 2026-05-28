@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Observability.Ledger.Mongo;
+using Multiplexed.AI.Stores.Mongo;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -118,7 +119,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var entry = new AiDecisionLedgerEntry
             {
                 EntryId = Guid.NewGuid().ToString("N"),
-                CorrelationContext = new AiRuntimeCorrelationContext
+                CorrelationContext = new AiRuntimeLedgerEventCorrelationContext
                 {
                     ExecutionId = "execution-1",
                     RunId = "run-1",
@@ -245,7 +246,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             return new AiDecisionLedgerEntry
             {
                 EntryId = Guid.NewGuid().ToString("N"),
-                CorrelationContext = new AiRuntimeCorrelationContext
+                CorrelationContext = new AiRuntimeLedgerEventCorrelationContext
                 {
                     ExecutionId = executionId,
                     StepId = stepId,

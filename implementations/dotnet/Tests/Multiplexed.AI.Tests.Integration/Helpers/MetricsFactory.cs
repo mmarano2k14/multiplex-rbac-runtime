@@ -1,7 +1,11 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Execution;
@@ -12,6 +16,7 @@ using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
 using Multiplexed.AI.Runtime.Metrics.Workers;
 using Multiplexed.AI.Runtime.Observability;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Runtime.Tracing;
 
 namespace Multiplexed.AI.Tests.Integration.Helpers
@@ -27,20 +32,31 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
         /// <returns>A fully initialized runtime metrics instance.</returns>
         public static IAiRuntimeMetrics Create()
         {
+            IAiRuntimeMetricWriter metricWriter =
+                NoOpAiRuntimeMetricWriter.Instance;
+
             return new AiRuntimeMetrics(
-                new AiExecutionMetrics(),
+                new AiExecutionMetrics(
+                    metricWriter),
                 new AiRetentionMetrics(
-                    new AiRetentionTriggerMetrics(),
-                    new AiRetentionDecisionMetrics(),
-                    new AiRetentionPlanMetrics(),
-                    new AiRetentionExecutionMetrics()
-                ),
-                new AiStorageMetrics(),
-                new AiHotStateMetrics(),
-                new AiResolverMetrics(),
-                new AiPolicyMetrics(),
-                new AiRuntimeInstanceWorkerMetrics()
-            );
+                    new AiRetentionTriggerMetrics(
+                        metricWriter),
+                    new AiRetentionDecisionMetrics(
+                        metricWriter),
+                    new AiRetentionPlanMetrics(
+                        metricWriter),
+                    new AiRetentionExecutionMetrics(
+                        metricWriter)),
+                new AiStorageMetrics(
+                    metricWriter),
+                new AiHotStateMetrics(
+                    metricWriter),
+                new AiResolverMetrics(
+                    metricWriter),
+                new AiPolicyMetrics(
+                    metricWriter),
+                new AiRuntimeInstanceWorkerMetrics(
+                    metricWriter));
         }
 
         /// <summary>
@@ -52,7 +68,8 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
         /// - Used in tests, local runtime setups, and lightweight execution contexts.
         ///
         /// DESIGN:
-        /// - Composes Metrics, Tracer, Logger, and Ledger recorder into a single observability instance.
+        /// - Composes Metrics, Tracer, Logger, Ledger recorder, and correlation accessor
+        ///   into a single observability instance.
         /// - Uses in-memory metrics, no-op tracing, and no-op decision ledger recording by default.
         ///
         /// IMPORTANT:
@@ -69,18 +86,28 @@ namespace Multiplexed.AI.Tests.Integration.Helpers
             {
                 var metrics = MetricsFactory.Create();
 
-                IAiRuntimeTracer tracer = new NoOpAiRuntimeTracer();
+                IAiRuntimeTracer tracer =
+                    new NoOpAiRuntimeTracer();
 
-                IAiRuntimeLogger logger = new NoopLogger();
+                IAiRuntimeLogger logger =
+                    new NoopLogger();
 
-                IAiDecisionLedgerRecorder ledger = new NoOpAiDecisionLedgerRecorder();
+                IAiDecisionLedgerRecorder ledger =
+                    new NoOpAiDecisionLedgerRecorder();
+
+                IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+                    new DefaultAiRuntimeInstanceIdentity();
+
+                IAiRuntimeCorrelationAccessor correlation =
+                    new AsyncLocalAiRuntimeCorrelationAccessor(
+                        runtimeInstanceIdentity);
 
                 return new AiRuntimeObservability(
                     metrics,
                     tracer,
                     logger,
-                    ledger
-                );
+                    ledger,
+                    correlation);
             }
         }
     }

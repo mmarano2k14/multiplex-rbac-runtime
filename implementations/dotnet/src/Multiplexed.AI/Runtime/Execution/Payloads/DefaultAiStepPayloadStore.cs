@@ -311,12 +311,12 @@ namespace Multiplexed.AI.Runtime.Execution.Payloads
         /// <returns>
         /// The runtime correlation context.
         /// </returns>
-        private static AiRuntimeCorrelationContext CreateCorrelationContext(
+        private static AiRuntimeLedgerEventCorrelationContext CreateCorrelationContext(
             string executionId,
             string stepName,
             AiStoredPayload payload)
         {
-            return new AiRuntimeCorrelationContext
+            return new AiRuntimeLedgerEventCorrelationContext
             {
                 ExecutionId = executionId,
                 StepId = stepName,

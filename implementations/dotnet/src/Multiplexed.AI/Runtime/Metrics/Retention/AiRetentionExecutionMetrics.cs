@@ -1,102 +1,183 @@
-﻿using Multiplexed.Abstractions.AI.Metrics.Retention;
-using System;
-using System.Collections.Concurrent;
-using System.Threading;
+﻿using System.Collections.Concurrent;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Retention;
 
 namespace Multiplexed.AI.Runtime.Metrics.Retention
 {
     /// <summary>
     /// In-memory implementation of <see cref="IAiRetentionExecutionMetrics"/>.
-    ///
-    /// PURPOSE:
-    /// - Track the actual retention work performed by the runtime.
-    /// - Provide diagnostics for payload compaction, eviction, archival, and failures.
-    ///
-    /// THREAD SAFETY:
-    /// - Safe for singleton usage.
-    /// - Uses atomic operations and concurrent dictionaries.
-    ///
-    /// IMPORTANT:
-    /// - This class observes retention execution only.
-    /// - It must not perform compaction, eviction, archival, or persistence.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation tracks actual retention work performed by the runtime,
+    /// including payload compaction, step eviction, archival marking, completed
+    /// retention execution, failed retention execution, and compaction byte savings.
+    /// </para>
+    ///
+    /// <para>
+    /// This implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations and failure counters use concurrent dictionaries.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured metric store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are observational only and must not perform compaction, eviction,
+    /// archival, persistence, replay, or hot-state mutation.
+    /// </para>
+    /// </remarks>
     public sealed class AiRetentionExecutionMetrics : IAiRetentionExecutionMetrics
     {
+        private const string Category = "RetentionExecution";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _payloadCompactedCount;
         private long _stepEvictedCount;
         private long _stepMarkedArchivedCount;
         private long _retentionCompletedCount;
         private long _retentionFailedCount;
-
         private long _totalBeforeBytes;
         private long _totalAfterBytes;
         private long _totalBytesSaved;
 
-        private readonly ConcurrentDictionary<string, long> _failuresByExceptionType = new();
+        private readonly ConcurrentDictionary<string, long> _failuresByExceptionType =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiRetentionExecutionMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiRetentionExecutionMetrics(
+            IAiRuntimeMetricWriter metricWriter)
+        {
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
 
         /// <inheritdoc />
-        public void RecordPayloadCompacted(string executionId, string stepId, long? beforeBytes, long? afterBytes)
+        public void RecordPayloadCompacted(
+            string executionId,
+            string stepId,
+            long? beforeBytes,
+            long? afterBytes)
         {
-            _ = executionId;
-            _ = stepId;
+            var safeBeforeBytes = beforeBytes.HasValue
+                ? Math.Max(0, beforeBytes.Value)
+                : (long?)null;
+
+            var safeAfterBytes = afterBytes.HasValue
+                ? Math.Max(0, afterBytes.Value)
+                : (long?)null;
 
             Interlocked.Increment(ref _payloadCompactedCount);
 
-            if (beforeBytes.HasValue)
+            if (safeBeforeBytes.HasValue)
             {
-                Interlocked.Add(ref _totalBeforeBytes, Math.Max(0, beforeBytes.Value));
+                Interlocked.Add(
+                    ref _totalBeforeBytes,
+                    safeBeforeBytes.Value);
             }
 
-            if (afterBytes.HasValue)
+            if (safeAfterBytes.HasValue)
             {
-                Interlocked.Add(ref _totalAfterBytes, Math.Max(0, afterBytes.Value));
+                Interlocked.Add(
+                    ref _totalAfterBytes,
+                    safeAfterBytes.Value);
             }
 
-            if (beforeBytes.HasValue && afterBytes.HasValue)
+            var savedBytes = 0L;
+
+            if (safeBeforeBytes.HasValue && safeAfterBytes.HasValue)
             {
-                var saved = Math.Max(0, beforeBytes.Value - afterBytes.Value);
-                Interlocked.Add(ref _totalBytesSaved, saved);
+                savedBytes = Math.Max(
+                    0,
+                    safeBeforeBytes.Value - safeAfterBytes.Value);
+
+                Interlocked.Add(
+                    ref _totalBytesSaved,
+                    savedBytes);
             }
+
+            RecordMetric(
+                "retention.execution.payload_compacted",
+                executionId,
+                stepId,
+                new Dictionary<string, string>
+                {
+                    ["before.bytes"] = safeBeforeBytes?.ToString() ?? string.Empty,
+                    ["after.bytes"] = safeAfterBytes?.ToString() ?? string.Empty,
+                    ["saved.bytes"] = savedBytes.ToString()
+                },
+                value: savedBytes > 0 ? savedBytes : 1);
         }
 
         /// <inheritdoc />
-        public void RecordStepEvicted(string executionId, string stepId)
+        public void RecordStepEvicted(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _stepEvictedCount);
+
+            RecordMetric(
+                "retention.execution.step_evicted",
+                executionId,
+                stepId);
         }
 
         /// <inheritdoc />
-        public void RecordStepMarkedArchived(string executionId, string stepId)
+        public void RecordStepMarkedArchived(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _stepMarkedArchivedCount);
+
+            RecordMetric(
+                "retention.execution.step_marked_archived",
+                executionId,
+                stepId);
         }
 
         /// <inheritdoc />
-        public void RecordRetentionCompleted(string executionId)
+        public void RecordRetentionCompleted(
+            string executionId)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _retentionCompletedCount);
+
+            RecordMetric(
+                "retention.execution.completed",
+                executionId,
+                stepId: null);
         }
 
         /// <inheritdoc />
-        public void RecordRetentionFailed(string executionId, Exception exception)
+        public void RecordRetentionFailed(
+            string executionId,
+            Exception exception)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _retentionFailedCount);
 
-            var key = exception?.GetType().Name ?? "unknown";
+            var exceptionType = exception?.GetType().Name ?? "unknown";
+
             _failuresByExceptionType.AddOrUpdate(
-                key,
+                exceptionType,
                 _ => 1,
                 (_, current) => current + 1);
+
+            RecordMetric(
+                "retention.execution.failed",
+                executionId,
+                stepId: null,
+                new Dictionary<string, string>
+                {
+                    ["exception.type"] = exceptionType,
+                    ["exception.message"] = exception?.Message ?? string.Empty
+                });
         }
 
         /// <summary>
@@ -143,5 +224,48 @@ namespace Multiplexed.AI.Runtime.Metrics.Retention
         /// Gets failures grouped by exception type.
         /// </summary>
         public IReadOnlyDictionary<string, long> FailuresByExceptionType => _failuresByExceptionType;
+
+        /// <summary>
+        /// Records a correlated append-only retention execution metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="stepId">The optional step identifier.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        /// <param name="value">The metric value.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            string? stepId,
+            IReadOnlyDictionary<string, string>? additionalTags = null,
+            double value = 1)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty,
+                ["step.id"] = stepId ?? string.Empty
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value,
+                tags,
+                CancellationToken.None);
+        }
     }
 }

@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
@@ -15,7 +16,9 @@ using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Context;
 using NSubstitute;
 using Xunit;
 
@@ -145,7 +148,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                 Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
                 Assert.Equal(stepName, entry.CorrelationContext.StepId);
                 Assert.Equal(stepKey, entry.CorrelationContext.StepKey);
-                Assert.Equal(runtimeInstanceId, entry.CorrelationContext.WorkerId);
                 Assert.Equal(runtimeInstanceId, entry.CorrelationContext.RuntimeInstanceId);
                 Assert.Equal(claimToken, entry.CorrelationContext.ClaimToken);
                 Assert.Equal("openai", entry.CorrelationContext.Provider);
@@ -293,8 +295,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
             var payloadCompactor = Substitute.For<IAiStepResultPayloadCompactor>();
 
+      
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,

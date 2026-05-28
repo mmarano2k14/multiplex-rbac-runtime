@@ -22,9 +22,12 @@ using Multiplexed.Abstractions.AI.Metrics.Policy;
 using Multiplexed.Abstractions.AI.Metrics.Resolvers;
 using Multiplexed.Abstractions.AI.Metrics.Retention;
 using Multiplexed.Abstractions.AI.Metrics.Storage;
+using Multiplexed.Abstractions.AI.Metrics.Store;
 using Multiplexed.Abstractions.AI.Metrics.Workers;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
@@ -78,8 +81,11 @@ using Multiplexed.AI.Runtime.Metrics.Policy;
 using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using Multiplexed.AI.Runtime.Metrics.Retention;
 using Multiplexed.AI.Runtime.Metrics.Storage;
+using Multiplexed.AI.Runtime.Metrics.Stores;
+using Multiplexed.AI.Runtime.Metrics.Stores.Mongo;
 using Multiplexed.AI.Runtime.Metrics.Workers;
 using Multiplexed.AI.Runtime.Observability;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Runtime.Observability.Ledger.DI;
 using Multiplexed.AI.Runtime.Pipeline;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
@@ -442,6 +448,12 @@ namespace Multiplexed.AI.DI
 
             var observability = options.Observability;
 
+            services.TryAddSingleton<IOptions<AiRuntimeMetricStoreOptions>>(
+                Options.Create(
+                    ResolveMetricStoreOptions(
+                        options,
+                        observability)));
+
             if (observability.DecisionLedger.StorageMode == AiDecisionLedgerStorageMode.Mongo)
             {
                 services.AddMongoAiDecisionLedger(
@@ -467,6 +479,7 @@ namespace Multiplexed.AI.DI
             // Facade observability
             // ------------------------------------------------------------
 
+            services.TryAddSingleton<IAiRuntimeCorrelationAccessor, AsyncLocalAiRuntimeCorrelationAccessor>();
             services.AddScoped<IAiRuntimeObservability, AiRuntimeObservability>();
 
             // ------------------------------------------------------------
@@ -497,8 +510,32 @@ namespace Multiplexed.AI.DI
 
 
             // ------------------------------------------------------------
-            // Metrics: execution, retention, storage, hot state, resolvers
+            // Metrics: store, writer, execution, retention, storage,
+            // hot state, resolvers, policy, workers
             // ------------------------------------------------------------
+            //
+            // PURPOSE:
+            // - Keeps the existing domain metrics services.
+            // - Adds an append-only metric writer able to persist correlated metric records.
+            // - Allows choosing Disabled, Memory, Mongo, or MemoryAndMongo storage.
+            //
+            // IMPORTANT:
+            // - Metric persistence must remain best-effort.
+            // - Metric write failures must not break runtime execution.
+            // - InMemoryAiRuntimeMetricStore remains registered as a concrete singleton so
+            //   live diagnostics, demos, and future dashboard endpoints can read snapshots.
+            // ------------------------------------------------------------
+
+            // Metric persistence stores
+            services.TryAddSingleton<NoOpAiRuntimeMetricStore>();
+            services.TryAddSingleton<InMemoryAiRuntimeMetricStore>();
+            services.TryAddSingleton<MongoAiRuntimeMetricStore>();
+
+            services.TryAddSingleton<IAiRuntimeMetricStore>(
+                AiRuntimeMetricStoreFactory.Create);
+
+            // Metric writer
+            services.TryAddSingleton<IAiRuntimeMetricWriter, DefaultAiRuntimeMetricWriter>();
 
             // Execution metrics
             services.TryAddSingleton<IAiExecutionMetrics, AiExecutionMetrics>();
@@ -519,12 +556,14 @@ namespace Multiplexed.AI.DI
             // Resolver metrics
             services.TryAddSingleton<IAiResolverMetrics, AiResolverMetrics>();
 
-            // Metrics facade
-            services.TryAddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
-
+            // Policy metrics
             services.TryAddSingleton<IAiPolicyMetrics, AiPolicyMetrics>();
 
+            // Worker metrics
             services.TryAddSingleton<IAiRuntimeInstanceWorkerMetrics, AiRuntimeInstanceWorkerMetrics>();
+
+            // Metrics facade
+            services.TryAddSingleton<IAiRuntimeMetrics, AiRuntimeMetrics>();
 
 
 
@@ -559,6 +598,8 @@ namespace Multiplexed.AI.DI
 
             services.TryAddSingleton<IAiRuntimeInstanceIdentity, DefaultAiRuntimeInstanceIdentity>();
             services.TryAddSingleton<IAiRuntimeInstanceWorkerFactory,AiRuntimeInstanceWorkerFactory>();
+            services.TryAddSingleton<IAiRuntimeInstanceWorkerIdentity, DefaultAiRuntimeInstanceWorkerIdentity>();
+
             services.TryAddTransient<IAiRuntimeInstanceWorker,AiRuntimeInstanceWorker>();
             services.TryAddTransient<IAiRuntimeInstanceWorkerGroup,AiRuntimeInstanceWorkerGroup>();
             services.TryAddSingleton<IAiRuntimePipelineBackgroundController,AiRuntimePipelineBackgroundController>();
@@ -639,7 +680,72 @@ namespace Multiplexed.AI.DI
             services.TryAddSingleton<IAiPolicyEngineRegistry>(
                 _ => new DefaultAiPolicyEngineRegistry(engineTypes));
 
+            services.TryAddSingleton<RedisRuntimeServerConfigurator>();
+
             return services;
+        }
+
+
+        /// <summary>
+        /// Resolves runtime metric store options by applying observability settings and
+        /// MongoDB fallbacks from the existing runtime configuration.
+        /// </summary>
+        /// <param name="engineOptions">The AI engine options.</param>
+        /// <param name="observability">The observability options.</param>
+        /// <returns>The resolved runtime metric store options.</returns>
+        /// <remarks>
+        /// <para>
+        /// Metrics may use their own MongoDB options. When they are not explicitly provided,
+        /// this method reuses the existing MongoDB host and database from the runtime payload
+        /// store configuration so metrics, payloads, indexes, and future replay diagnostics
+        /// stay in the same MongoDB environment.
+        /// </para>
+        ///
+        /// <para>
+        /// The metrics collection remains separate from payload and ledger collections.
+        /// </para>
+        /// </remarks>
+        private static AiRuntimeMetricStoreOptions ResolveMetricStoreOptions(
+            AiEngineOptions engineOptions,
+            AiObservabilityOptions observability)
+        {
+            ArgumentNullException.ThrowIfNull(engineOptions);
+            ArgumentNullException.ThrowIfNull(observability);
+
+            if (!observability.EnableMetrics)
+            {
+                return new AiRuntimeMetricStoreOptions
+                {
+                    Mode = AiRuntimeMetricStoreMode.Disabled
+                };
+            }
+
+            var configured = observability.Metrics ?? new AiRuntimeMetricStoreOptions();
+
+            var resolved = new AiRuntimeMetricStoreOptions
+            {
+                Mode = configured.Mode,
+
+                MongoConnectionString = !string.IsNullOrWhiteSpace(configured.MongoConnectionString)
+                    ? configured.MongoConnectionString
+                    : !string.IsNullOrWhiteSpace(engineOptions.PayloadStore?.Mongo?.ConnectionString)
+                        ? engineOptions.PayloadStore.Mongo.ConnectionString
+                        : "mongodb://localhost:27017",
+
+                MongoDatabaseName = !string.IsNullOrWhiteSpace(configured.MongoDatabaseName)
+                    ? configured.MongoDatabaseName
+                    : !string.IsNullOrWhiteSpace(engineOptions.PayloadStore?.Mongo?.DatabaseName)
+                        ? engineOptions.PayloadStore.Mongo.DatabaseName
+                        : !string.IsNullOrWhiteSpace(observability.MongoDecisionLedger?.DatabaseName)
+                            ? observability.MongoDecisionLedger.DatabaseName
+                            : "multiplexed_ai_runtime",
+
+                MongoCollectionName = !string.IsNullOrWhiteSpace(configured.MongoCollectionName)
+                    ? configured.MongoCollectionName
+                    : "ai_runtime_metrics"
+            };
+
+            return resolved;
         }
     }
 }

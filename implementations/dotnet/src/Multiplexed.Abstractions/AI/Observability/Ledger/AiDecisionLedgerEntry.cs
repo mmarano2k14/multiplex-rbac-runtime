@@ -22,7 +22,7 @@ namespace Multiplexed.Abstractions.AI.Observability.Ledger
         /// <summary>
         /// Gets the runtime correlation context associated with this ledger entry.
         /// </summary>
-        public required AiRuntimeCorrelationContext CorrelationContext { get; init; }
+        public required AiRuntimeLedgerEventCorrelationContext CorrelationContext { get; init; }
 
         /// <summary>
         /// Gets the monotonic sequence number of the entry within the execution ledger stream.

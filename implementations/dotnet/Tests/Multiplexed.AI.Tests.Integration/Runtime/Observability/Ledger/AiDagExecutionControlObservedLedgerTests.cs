@@ -6,13 +6,17 @@ using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Stores;
 using NSubstitute;
 using Xunit;
@@ -209,8 +213,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var logger = Substitute.For<IAiRuntimeLogger>();
             var controlGate = Substitute.For<IAiExecutionControlGate>();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,

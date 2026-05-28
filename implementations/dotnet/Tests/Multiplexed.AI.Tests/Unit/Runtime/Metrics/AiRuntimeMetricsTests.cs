@@ -1,4 +1,5 @@
-﻿using Multiplexed.AI.Runtime.Metrics;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Runtime.Metrics.Execution;
 using Xunit;
 
@@ -20,7 +21,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
         [Fact]
         public void IncrementRetry_Should_Record_Retry_Count_Per_Step()
         {
-            var metrics = new AiExecutionMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStepRetried("execution-1", "step-1");
             metrics.RecordStepRetried("execution-1", "step-1");
@@ -38,7 +39,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
         [Fact]
         public void RecordStepsRecovered_Should_Record_Recovered_Count_Per_Execution()
         {
-            var metrics = new AiExecutionMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStepsRecovered("execution-1", 2);
             metrics.RecordStepsRecovered("execution-1", 3);
@@ -56,7 +57,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
         [Fact]
         public void Finalize_Counters_Should_Be_Incremented()
         {
-            var metrics = new AiExecutionMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordFinalizeAttempt("execution-1");
             metrics.RecordFinalizeAttempt("execution-1");
@@ -72,7 +73,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
         [Fact]
         public void Claim_Counters_Should_Be_Recorded()
         {
-            var metrics = new AiExecutionMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStepClaimed("execution-1", "step-1");
             metrics.RecordStepClaimed("execution-1", "step-1");
@@ -94,7 +95,7 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
         [Fact]
         public void Metrics_Should_Ignore_Invalid_Keys()
         {
-            var metrics = new AiExecutionMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordStepRetried("execution-1", "");
             metrics.RecordStepRetried("execution-1", " ");
@@ -108,6 +109,12 @@ namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
             Assert.Empty(metrics.GetRetryByStep());
             Assert.Empty(metrics.GetClaimSuccessByStep());
             Assert.Empty(metrics.GetRecoveryByExecution());
+        }
+
+        private static AiExecutionMetrics CreateMetrics()
+        {
+            return new AiExecutionMetrics(
+                NoOpAiRuntimeMetricWriter.Instance);
         }
     }
 }

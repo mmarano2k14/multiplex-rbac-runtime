@@ -22,7 +22,7 @@ namespace Multiplexed.Abstractions.AI.Observability.Ledger
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A task representing the asynchronous record operation.</returns>
         Task RecordAsync(
-            AiRuntimeCorrelationContext context,
+            AiRuntimeLedgerEventCorrelationContext context,
             AiDecisionLedgerCategory category,
             string eventType,
             AiDecisionLedgerOutcome outcome,

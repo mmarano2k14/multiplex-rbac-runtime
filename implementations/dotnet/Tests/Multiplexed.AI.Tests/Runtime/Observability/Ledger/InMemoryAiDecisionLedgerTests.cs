@@ -1,12 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using FluentAssertions;
+﻿using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Observability.Ledger;
+using Multiplexed.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Runtime.Observability.Context;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
@@ -100,15 +103,21 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
         {
             var ledger = new InMemoryAiDecisionLedger();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict
                 }),
                 NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
 
-            var context = new AiRuntimeCorrelationContext
+            var context = new AiRuntimeLedgerEventCorrelationContext
             {
                 ExecutionId = "execution-1",
                 RunId = "run-1",
@@ -186,8 +195,16 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
         {
             var ledger = new InMemoryAiDecisionLedger();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+                new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(
+                    runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Disabled
@@ -195,7 +212,7 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
                 NullLogger<DefaultAiDecisionLedgerRecorder>.Instance);
 
             await recorder.RecordAsync(
-                new AiRuntimeCorrelationContext
+                new AiRuntimeLedgerEventCorrelationContext
                 {
                     ExecutionId = "execution-1"
                 },
@@ -219,7 +236,7 @@ namespace Multiplexed.AI.Tests.Runtime.Observability.Ledger
             return new AiDecisionLedgerEntry
             {
                 EntryId = Guid.NewGuid().ToString("N"),
-                CorrelationContext = new AiRuntimeCorrelationContext
+                CorrelationContext = new AiRuntimeLedgerEventCorrelationContext
                 {
                     ExecutionId = executionId,
                     StepId = stepId,

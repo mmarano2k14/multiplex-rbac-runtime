@@ -2,9 +2,13 @@
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime.Execution.Control;
+using Multiplexed.AI.Runtime.Execution.Instance;
+using Multiplexed.AI.Runtime.Observability.Context;
 using NSubstitute;
 using Xunit;
 
@@ -270,8 +274,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             var observability = Substitute.For<IAiRuntimeObservability>();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,

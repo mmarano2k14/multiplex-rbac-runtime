@@ -1,47 +1,51 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
+﻿using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Threading;
+using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Metrics.Execution;
 
 namespace Multiplexed.AI.Runtime.Metrics.Execution
 {
     /// <summary>
     /// In-memory implementation of <see cref="IAiExecutionMetrics"/>.
-    ///
-    /// PURPOSE:
-    /// - Provide observability over execution lifecycle.
-    /// - Track step execution activity across distributed workers.
-    /// - Measure retry, recovery, claim, and finalization behavior.
-    ///
-    /// EXECUTION MODEL:
-    /// - Supports DAG and sequential execution.
-    /// - Works in multi-worker environments.
-    /// - Tracks convergence through finalization attempts and conflicts.
-    ///
-    /// THREAD SAFETY:
-    /// - This implementation is safe for singleton usage.
-    /// - All scalar counters use atomic operations (<see cref="Interlocked"/>).
-    /// - Dimensional counters use concurrent dictionaries.
-    ///
-    /// IMPORTANT:
-    /// - This class is strictly observational.
-    /// - It must not influence execution decisions, retries, recovery, or state transitions.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation provides observability over execution lifecycle,
+    /// step execution activity, retry, recovery, claim, and finalization behavior.
+    /// </para>
+    ///
+    /// <para>
+    /// The implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations and dimensional counters use concurrent dictionaries.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are strictly observational and must not influence execution decisions,
+    /// retries, recovery, finalization, scheduling, or state transitions.
+    /// </para>
+    /// </remarks>
     public sealed class AiExecutionMetrics : IAiExecutionMetrics
     {
+        private const string Category = "Execution";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _executionStartedCount;
         private long _executionCompletedCount;
         private long _executionFailedCount;
-
         private long _stepClaimedCount;
         private long _stepClaimMissCount;
         private long _stepCompletedCount;
         private long _stepFailedCount;
         private long _stepRetriedCount;
         private long _stepRecoveredCount;
-
         private long _finalizeAttemptCount;
         private long _finalizeSuccessCount;
         private long _finalizeConflictCount;
@@ -55,110 +59,213 @@ namespace Multiplexed.AI.Runtime.Metrics.Execution
         private readonly ConcurrentDictionary<string, long> _recoveryByExecution =
             new(StringComparer.Ordinal);
 
-        /// <inheritdoc />
-        public void RecordExecutionStarted(string executionId)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiExecutionMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiExecutionMetrics(
+            IAiRuntimeMetricWriter metricWriter)
         {
-            _ = executionId;
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
+        }
+
+        /// <inheritdoc />
+        public void RecordExecutionStarted(
+            string executionId)
+        {
             Interlocked.Increment(ref _executionStartedCount);
+
+            RecordMetric(
+                "execution.started",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordExecutionCompleted(string executionId)
+        public void RecordExecutionCompleted(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _executionCompletedCount);
+
+            RecordMetric(
+                "execution.completed",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordExecutionFailed(string executionId)
+        public void RecordExecutionFailed(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _executionFailedCount);
+
+            RecordMetric(
+                "execution.failed",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordStepClaimed(string executionId, string stepId)
+        public void RecordStepClaimed(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _stepClaimedCount);
-            IncrementDimension(_claimSuccessByStep, stepId);
+
+            IncrementDimension(
+                _claimSuccessByStep,
+                stepId);
+
+            RecordMetric(
+                "step.claimed",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStepClaimMiss(string executionId)
+        public void RecordStepClaimMiss(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _stepClaimMissCount);
+
+            RecordMetric(
+                "step.claim_miss",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordStepCompleted(string executionId, string stepId)
+        public void RecordStepCompleted(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _stepCompletedCount);
+
+            RecordMetric(
+                "step.completed",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStepFailed(string executionId, string stepId)
+        public void RecordStepFailed(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-            _ = stepId;
-
             Interlocked.Increment(ref _stepFailedCount);
+
+            RecordMetric(
+                "step.failed",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStepRetried(string executionId, string stepId)
+        public void RecordStepRetried(
+            string executionId,
+            string stepId)
         {
-            _ = executionId;
-
             Interlocked.Increment(ref _stepRetriedCount);
-            IncrementDimension(_retryByStep, stepId);
+
+            IncrementDimension(
+                _retryByStep,
+                stepId);
+
+            RecordMetric(
+                "step.retried",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStepRecovered(string executionId, string stepId)
+        public void RecordStepRecovered(
+            string executionId,
+            string stepId)
         {
-            _ = stepId;
-
             Interlocked.Increment(ref _stepRecoveredCount);
-            IncrementDimension(_recoveryByExecution, executionId);
+
+            IncrementDimension(
+                _recoveryByExecution,
+                executionId);
+
+            RecordMetric(
+                "step.recovered",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["step.id"] = stepId ?? string.Empty
+                });
         }
 
         /// <inheritdoc />
-        public void RecordStepsRecovered(string executionId, int recoveredCount)
+        public void RecordStepsRecovered(
+            string executionId,
+            int recoveredCount)
         {
             if (recoveredCount <= 0)
             {
                 return;
             }
 
-            Interlocked.Add(ref _stepRecoveredCount, recoveredCount);
-            IncrementDimension(_recoveryByExecution, executionId, recoveredCount);
+            Interlocked.Add(
+                ref _stepRecoveredCount,
+                recoveredCount);
+
+            IncrementDimension(
+                _recoveryByExecution,
+                executionId,
+                recoveredCount);
+
+            RecordMetric(
+                "steps.recovered",
+                executionId,
+                new Dictionary<string, string>
+                {
+                    ["recovered.count"] = recoveredCount.ToString()
+                },
+                value: recoveredCount);
         }
 
         /// <inheritdoc />
-        public void RecordFinalizeAttempt(string executionId)
+        public void RecordFinalizeAttempt(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _finalizeAttemptCount);
+
+            RecordMetric(
+                "finalize.attempt",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordFinalizeSuccess(string executionId)
+        public void RecordFinalizeSuccess(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _finalizeSuccessCount);
+
+            RecordMetric(
+                "finalize.success",
+                executionId);
         }
 
         /// <inheritdoc />
-        public void RecordFinalizeConflict(string executionId)
+        public void RecordFinalizeConflict(
+            string executionId)
         {
-            _ = executionId;
             Interlocked.Increment(ref _finalizeConflictCount);
+
+            RecordMetric(
+                "finalize.conflict",
+                executionId);
         }
 
         /// <summary>
@@ -239,6 +346,52 @@ namespace Multiplexed.AI.Runtime.Metrics.Execution
             return Snapshot(_recoveryByExecution);
         }
 
+        /// <summary>
+        /// Records a correlated append-only execution metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="additionalTags">The optional additional tags.</param>
+        /// <param name="value">The metric value.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            IReadOnlyDictionary<string, string>? additionalTags = null,
+            double value = 1)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty
+            };
+
+            if (additionalTags is not null)
+            {
+                foreach (var tag in additionalTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag.Key))
+                    {
+                        continue;
+                    }
+
+                    tags[tag.Key] = tag.Value ?? string.Empty;
+                }
+            }
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value,
+                tags,
+                CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Increments a dimensional counter.
+        /// </summary>
+        /// <param name="target">The dimensional counter dictionary.</param>
+        /// <param name="key">The dimension key.</param>
+        /// <param name="amount">The increment amount.</param>
         private static void IncrementDimension(
             ConcurrentDictionary<string, long> target,
             string key,
@@ -255,11 +408,18 @@ namespace Multiplexed.AI.Runtime.Metrics.Execution
                 (_, current) => current + amount);
         }
 
+        /// <summary>
+        /// Creates a read-only snapshot of a dimensional counter dictionary.
+        /// </summary>
+        /// <param name="source">The source dictionary.</param>
+        /// <returns>The read-only snapshot.</returns>
         private static IReadOnlyDictionary<string, long> Snapshot(
             ConcurrentDictionary<string, long> source)
         {
             return new ReadOnlyDictionary<string, long>(
-                new Dictionary<string, long>(source));
+                new Dictionary<string, long>(
+                    source,
+                    StringComparer.Ordinal));
         }
     }
 }

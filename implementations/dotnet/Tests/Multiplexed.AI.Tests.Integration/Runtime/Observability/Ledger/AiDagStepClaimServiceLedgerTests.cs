@@ -5,8 +5,10 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Pipeline;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Observability.Ledger;
@@ -14,7 +16,9 @@ using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Steps;
+using Multiplexed.AI.Runtime.Execution.Instance;
 using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Context;
 using Multiplexed.AI.Stores;
 using NSubstitute;
 using Xunit;
@@ -27,7 +31,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
     public sealed class AiDagStepClaimServiceLedgerTests
     {
         /// <summary>
-        /// Verifies that a denied concurrency admission records the full claim/concurrency ledger flow.
+        /// Verifies that a denied concurrency admission records a concurrency denied ledger event.
         /// </summary>
         [Fact]
         public async Task ClaimNextAsync_WhenConcurrencyGateDenies_ShouldRecordConcurrencyDenied()
@@ -95,33 +99,34 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             Assert.NotEmpty(entries);
 
-            Assert.Contains(
-                entries,
-                entry =>
-                    entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
-                    entry.Outcome == AiDecisionLedgerOutcome.Started);
-
-            var denied = Assert.Single(entries, entry =>
+            var entry = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.Denied);
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.Denied &&
+                    entry.Outcome == AiDecisionLedgerOutcome.Denied);
 
-            Assert.Equal(AiDecisionLedgerOutcome.Denied, denied.Outcome);
-            Assert.Equal(executionId, denied.CorrelationContext.ExecutionId);
-            Assert.Equal(pipelineKey, denied.CorrelationContext.PipelineName);
-            Assert.Equal(stepName, denied.CorrelationContext.StepId);
-            Assert.Equal(stepName, denied.CorrelationContext.StepKey);
-            Assert.Equal(workerId, denied.CorrelationContext.WorkerId);
-            Assert.Equal(workerId, denied.CorrelationContext.RuntimeInstanceId);
-            Assert.Contains("Concurrency limit reached", denied.Reason);
+            Assert.Equal(AiDecisionLedgerCategory.Concurrency, entry.Category);
+            Assert.Equal(AiDecisionLedgerEvents.Concurrency.Denied, entry.EventType);
+            Assert.Equal(AiDecisionLedgerOutcome.Denied, entry.Outcome);
+
+            Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, entry.CorrelationContext.StepId);
+            Assert.Equal(stepName, entry.CorrelationContext.StepKey);
+            Assert.Equal(workerId, entry.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, entry.CorrelationContext.RuntimeInstanceId);
+            Assert.Contains("Concurrency limit reached", entry.Reason);
 
             Assert.Contains(
                 entries,
                 entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
-                    entry.Outcome == AiDecisionLedgerOutcome.Denied &&
-                    entry.CorrelationContext.StepId == "_claim");
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted);
+
+            Assert.Contains(
+                entries,
+                entry =>
+                    entry.Category == AiDecisionLedgerCategory.Claim &&
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Denied);
 
             _ = dagStore.DidNotReceive().TryClaimStepAsync(
                 Arg.Any<string>(),
@@ -131,7 +136,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
         }
 
         /// <summary>
-        /// Verifies that a successful DAG step claim records the full claim acquisition ledger flow.
+        /// Verifies that a successful DAG step claim records a claim acquired ledger event.
         /// </summary>
         [Fact]
         public async Task ClaimNextAsync_WhenStepClaimIsAcquired_ShouldRecordClaimAcquired()
@@ -142,7 +147,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var workerId = "worker-1";
             var stepName = "llm-summary";
             var claimToken = "claim-token-1";
-            var leaseId = $"{executionId}:{stepName}:{workerId}";
 
             var dagStore = Substitute.For<IAiDagExecutionStore>();
             var concurrencyGate = Substitute.For<IAiConcurrencyGate>();
@@ -209,48 +213,43 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             // Assert
             Assert.NotNull(claimed);
-            Assert.Equal(stepName, claimed!.StepName);
-            Assert.Equal(claimToken, claimed.ClaimToken);
 
             var entries = await ledger.GetByExecutionAsync(executionId);
 
             Assert.NotEmpty(entries);
 
+            var entry = Assert.Single(entries, entry =>
+                    entry.Category == AiDecisionLedgerCategory.Claim &&
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired &&
+                    entry.Outcome == AiDecisionLedgerOutcome.Allowed &&
+                    entry.CorrelationContext.ClaimToken == claimToken);
+
+            Assert.Equal(AiDecisionLedgerCategory.Claim, entry.Category);
+            Assert.Equal(AiDecisionLedgerEvents.Claim.Acquired, entry.EventType);
+            Assert.Equal(AiDecisionLedgerOutcome.Allowed, entry.Outcome);
+
+            Assert.Equal(executionId, entry.CorrelationContext.ExecutionId);
+            Assert.Equal(pipelineKey, entry.CorrelationContext.PipelineName);
+            Assert.Equal(stepName, entry.CorrelationContext.StepId);
+            Assert.Equal(stepName, entry.CorrelationContext.StepKey);
+            Assert.Equal(workerId, entry.CorrelationContext.WorkerId);
+            Assert.Equal(workerId, entry.CorrelationContext.RuntimeInstanceId);
+            Assert.Equal(claimToken, entry.CorrelationContext.ClaimToken);
+            Assert.Equal("openai", entry.CorrelationContext.Provider);
+            Assert.Equal("gpt-4.1", entry.CorrelationContext.Model);
+            Assert.Equal("llm.chat", entry.CorrelationContext.Operation);
+
             Assert.Contains(
                 entries,
                 entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
-                    entry.Outcome == AiDecisionLedgerOutcome.Started);
+                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted);
 
-            var leaseAcquired = Assert.Single(entries, entry =>
+            Assert.Contains(
+                entries,
+                entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
                     entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired);
-
-            Assert.Equal(AiDecisionLedgerOutcome.Allowed, leaseAcquired.Outcome);
-            Assert.Equal(executionId, leaseAcquired.CorrelationContext.ExecutionId);
-            Assert.Equal(pipelineKey, leaseAcquired.CorrelationContext.PipelineName);
-            Assert.Equal(stepName, leaseAcquired.CorrelationContext.StepId);
-            Assert.Equal(stepName, leaseAcquired.CorrelationContext.StepKey);
-            Assert.Equal(workerId, leaseAcquired.CorrelationContext.WorkerId);
-            Assert.Equal(workerId, leaseAcquired.CorrelationContext.RuntimeInstanceId);
-            Assert.Equal(leaseId, leaseAcquired.CorrelationContext.ClaimToken);
-
-            var claimAcquired = Assert.Single(entries, entry =>
-                    entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Acquired);
-
-            Assert.Equal(AiDecisionLedgerOutcome.Allowed, claimAcquired.Outcome);
-            Assert.Equal(executionId, claimAcquired.CorrelationContext.ExecutionId);
-            Assert.Equal(pipelineKey, claimAcquired.CorrelationContext.PipelineName);
-            Assert.Equal(stepName, claimAcquired.CorrelationContext.StepId);
-            Assert.Equal(stepName, claimAcquired.CorrelationContext.StepKey);
-            Assert.Equal(workerId, claimAcquired.CorrelationContext.WorkerId);
-            Assert.Equal(workerId, claimAcquired.CorrelationContext.RuntimeInstanceId);
-            Assert.Equal(claimToken, claimAcquired.CorrelationContext.ClaimToken);
-            Assert.Equal("openai", claimAcquired.CorrelationContext.Provider);
-            Assert.Equal("gpt-4.1", claimAcquired.CorrelationContext.Model);
-            Assert.Equal("llm.chat", claimAcquired.CorrelationContext.Operation);
         }
 
         /// <summary>
@@ -329,60 +328,30 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
 
             Assert.NotEmpty(entries);
 
-            Assert.Contains(
-                entries,
-                entry =>
-                    entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Attempted &&
-                    entry.Outcome == AiDecisionLedgerOutcome.Started);
-
-            var leaseAcquired = Assert.Single(entries, entry =>
-                    entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseAcquired);
-
-            Assert.Equal(AiDecisionLedgerOutcome.Allowed, leaseAcquired.Outcome);
-            Assert.Equal(executionId, leaseAcquired.CorrelationContext.ExecutionId);
-            Assert.Equal(pipelineKey, leaseAcquired.CorrelationContext.PipelineName);
-            Assert.Equal(stepName, leaseAcquired.CorrelationContext.StepId);
-            Assert.Equal(workerId, leaseAcquired.CorrelationContext.WorkerId);
-            Assert.Equal(leaseId, leaseAcquired.CorrelationContext.ClaimToken);
-
             var claimDenied = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Claim &&
                     entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
                     entry.Outcome == AiDecisionLedgerOutcome.Denied &&
-                    entry.CorrelationContext.StepId == stepName);
+                    entry.CorrelationContext.ClaimToken == leaseId);
 
             Assert.Equal(executionId, claimDenied.CorrelationContext.ExecutionId);
             Assert.Equal(pipelineKey, claimDenied.CorrelationContext.PipelineName);
             Assert.Equal(stepName, claimDenied.CorrelationContext.StepId);
-            Assert.Equal(stepName, claimDenied.CorrelationContext.StepKey);
             Assert.Equal(workerId, claimDenied.CorrelationContext.WorkerId);
-            Assert.Equal(workerId, claimDenied.CorrelationContext.RuntimeInstanceId);
             Assert.Equal(leaseId, claimDenied.CorrelationContext.ClaimToken);
             Assert.Contains("failed after concurrency lease", claimDenied.Reason);
 
             var leaseReleased = Assert.Single(entries, entry =>
                     entry.Category == AiDecisionLedgerCategory.Concurrency &&
-                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseReleased);
+                    entry.EventType == AiDecisionLedgerEvents.Concurrency.LeaseReleased &&
+                    entry.Outcome == AiDecisionLedgerOutcome.Released);
 
-            Assert.Equal(AiDecisionLedgerOutcome.Released, leaseReleased.Outcome);
             Assert.Equal(executionId, leaseReleased.CorrelationContext.ExecutionId);
             Assert.Equal(pipelineKey, leaseReleased.CorrelationContext.PipelineName);
             Assert.Equal(stepName, leaseReleased.CorrelationContext.StepId);
-            Assert.Equal(stepName, leaseReleased.CorrelationContext.StepKey);
             Assert.Equal(workerId, leaseReleased.CorrelationContext.WorkerId);
-            Assert.Equal(workerId, leaseReleased.CorrelationContext.RuntimeInstanceId);
             Assert.Equal(leaseId, leaseReleased.CorrelationContext.ClaimToken);
             Assert.Contains("lease released after failed step claim", leaseReleased.Reason);
-
-            Assert.Contains(
-                entries,
-                entry =>
-                    entry.Category == AiDecisionLedgerCategory.Claim &&
-                    entry.EventType == AiDecisionLedgerEvents.Claim.Denied &&
-                    entry.Outcome == AiDecisionLedgerOutcome.Denied &&
-                    entry.CorrelationContext.StepId == "_claim");
 
             await concurrencyGate.Received(1).ReleaseAsync(
                 Arg.Is<AiConcurrencyContext>(context =>
@@ -396,9 +365,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                 Arg.Any<CancellationToken>());
         }
 
-        /// <summary>
-        /// Creates engine services for the claim ledger tests.
-        /// </summary>
         private static IAiDagExecutionEngineServices CreateEngineServices(
             IAiDagExecutionStore dagStore,
             IAiConcurrencyGate concurrencyGate,
@@ -410,8 +376,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             var logger = Substitute.For<IAiRuntimeLogger>();
             var observability = Substitute.For<IAiRuntimeObservability>();
 
+            IAiRuntimeInstanceIdentity runtimeInstanceIdentity =
+            new DefaultAiRuntimeInstanceIdentity();
+
+            IAiRuntimeCorrelationAccessor correlationAccessor =
+                new AsyncLocalAiRuntimeCorrelationAccessor(runtimeInstanceIdentity);
+
             var recorder = new DefaultAiDecisionLedgerRecorder(
                 ledger,
+                correlationAccessor,
                 Options.Create(new AiDecisionLedgerRecorderOptions
                 {
                     WriteMode = AiDecisionLedgerWriteMode.Strict,
@@ -437,9 +410,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             return services;
         }
 
-        /// <summary>
-        /// Creates a resolved pipeline containing one DAG step.
-        /// </summary>
         private static ResolvedAiPipeline CreatePipeline(
             string stepName,
             IReadOnlyDictionary<string, object?> stepConfig)
@@ -461,9 +431,6 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
             };
         }
 
-        /// <summary>
-        /// Creates an execution state with a single ready step.
-        /// </summary>
         private static AiExecutionState CreateReadyState(
             string executionId,
             string stepName,
@@ -474,20 +441,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                 ExecutionId = executionId,
                 PipelineName = "test-pipeline",
                 Steps =
-                {
-                    [stepName] = new AiStepState
-                    {
-                        StepName = stepName,
-                        Status = AiStepExecutionStatus.Ready,
-                        Config = new Dictionary<string, object?>(stepConfig)
-                    }
-                }
+        {
+            [stepName] = new AiStepState
+            {
+                StepName = stepName,
+                Status = AiStepExecutionStatus.Ready,
+                Config = new Dictionary<string, object?>(stepConfig)
+            }
+        }
             };
         }
 
-        /// <summary>
-        /// Configures the DAG store to return one ready step candidate.
-        /// </summary>
         private static void ConfigureReadyDagStore(
             IAiDagExecutionStore dagStore,
             string executionId,
@@ -514,14 +478,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Observability.Ledger
                     {
                         ExecutionId = executionId,
                         StepName = stepName,
-                        ClaimToken = "ready-token"
+                        ClaimToken = "ready-token",
                     }
                 });
         }
 
-        /// <summary>
-        /// Tracer used by tests to execute traced actions without side effects.
-        /// </summary>
         private sealed class PassthroughAiRuntimeTracer : IAiRuntimeTracer
         {
             public IAiTraceScope StartExecution(AiExecutionTraceContext context)

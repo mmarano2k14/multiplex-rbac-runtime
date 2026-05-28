@@ -1,4 +1,6 @@
-﻿using Multiplexed.AI.Runtime.Metrics.Retention;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.Retention;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
@@ -8,7 +10,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
         [Fact]
         public void RecordPlanCreated_Should_Increment_Count()
         {
-            var metrics = new AiRetentionPlanMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPlanCreated("execution-1", 10, 5, 85);
             metrics.RecordPlanCreated("execution-2", 20, 10, 70);
@@ -19,7 +21,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
         [Fact]
         public void RecordPlanCreated_Should_Aggregate_Values()
         {
-            var metrics = new AiRetentionPlanMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPlanCreated("execution-1", 10, 5, 85);
             metrics.RecordPlanCreated("execution-1", 20, 10, 70);
@@ -33,7 +35,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
         [Fact]
         public void RecordPlanCreated_Should_Handle_Zero_Values()
         {
-            var metrics = new AiRetentionPlanMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPlanCreated("execution-1", 0, 0, 100);
 
@@ -46,7 +48,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
         [Fact]
         public void RecordPlanCreated_Should_Accept_Invalid_ExecutionId()
         {
-            var metrics = new AiRetentionPlanMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPlanCreated("", 10, 5, 85);
             metrics.RecordPlanCreated(" ", 20, 10, 70);
@@ -58,7 +60,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
         [Fact]
         public void PlanMetrics_Should_Handle_Mixed_Cases()
         {
-            var metrics = new AiRetentionPlanMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordPlanCreated("execution-1", 10, 0, 90);
             metrics.RecordPlanCreated("execution-2", 0, 5, 95);
@@ -68,6 +70,12 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Retention
             Assert.Equal(10, metrics.TotalCompactedSteps);
             Assert.Equal(5, metrics.TotalEvictedSteps);
             Assert.Equal(285, metrics.TotalKeepSteps);
+        }
+
+        private static AiRetentionPlanMetrics CreateMetrics()
+        {
+            return new AiRetentionPlanMetrics(
+                NoOpAiRuntimeMetricWriter.Instance);
         }
     }
 }

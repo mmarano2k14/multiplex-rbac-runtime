@@ -1,4 +1,6 @@
-﻿using Multiplexed.AI.Runtime.Metrics.Resolvers;
+﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.AI.Runtime.Metrics;
+using Multiplexed.AI.Runtime.Metrics.Resolvers;
 using System;
 using Xunit;
 
@@ -9,7 +11,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void RecordResolveStarted_Should_Increment_Count()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveStarted("execution-1", "step-1", "state.input");
             metrics.RecordResolveStarted("execution-1", "step-2", "state.input");
@@ -20,7 +22,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void RecordResolveSuccess_Should_Increment_Count()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveSuccess("execution-1", "step-1", "state.input");
             metrics.RecordResolveSuccess("execution-1", "step-2", "steps.step-1.result");
@@ -31,7 +33,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void RecordResolveMiss_Should_Increment_Count()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveMiss("execution-1", "step-1", "state.missing");
             metrics.RecordResolveMiss("execution-1", "step-2", "steps.unknown.result");
@@ -42,7 +44,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void RecordResolveFailed_Should_Increment_Count_And_Group_By_Exception()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveFailed("execution-1", "step-1", "state.input", new InvalidOperationException());
             metrics.RecordResolveFailed("execution-2", "step-2", "state.input", new InvalidOperationException());
@@ -56,7 +58,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void ResolverMetrics_Should_Group_Operations_By_Path()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveStarted("execution-1", "step-1", "state.input");
             metrics.RecordResolveSuccess("execution-1", "step-1", "state.input");
@@ -69,7 +71,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void ResolverMetrics_Should_Normalize_Path()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveStarted("execution-1", "step-1", "");
             metrics.RecordResolveSuccess("execution-1", "step-1", " ");
@@ -81,7 +83,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void ResolverMetrics_Should_Trim_Path()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveStarted("execution-1", "step-1", " state.input ");
             metrics.RecordResolveSuccess("execution-1", "step-1", "state.input");
@@ -92,7 +94,7 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
         [Fact]
         public void ResolverMetrics_Should_Handle_Mixed_Cases()
         {
-            var metrics = new AiResolverMetrics();
+            var metrics = CreateMetrics();
 
             metrics.RecordResolveStarted("execution-1", "step-1", "state.input");
             metrics.RecordResolveSuccess("execution-1", "step-1", "state.input");
@@ -103,6 +105,12 @@ namespace Multiplexed.AI.Tests.Runtime.Metrics.Resolvers
             Assert.Equal(1, metrics.ResolvedSuccessCount);
             Assert.Equal(1, metrics.ResolvedMissCount);
             Assert.Equal(1, metrics.ResolvedFailedCount);
+        }
+
+        private static AiResolverMetrics CreateMetrics()
+        {
+            return new AiResolverMetrics(
+                NoOpAiRuntimeMetricWriter.Instance);
         }
     }
 }

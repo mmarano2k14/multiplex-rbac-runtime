@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
 
@@ -37,5 +38,21 @@ namespace Multiplexed.Abstractions.AI.Observability
         /// Gets the decision ledger recorder used to record important runtime decisions.
         /// </summary>
         IAiDecisionLedgerRecorder Ledger { get; }
+
+        /// <summary>
+        /// Gets the ambient runtime correlation accessor.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The correlation accessor exposes the current in-process asynchronous correlation
+        /// context for controller flows, worker flows, metrics, tracing, and optional ledger
+        /// enrichment.
+        /// </para>
+        ///
+        /// <para>
+        /// This accessor is passive and must not be used to load durable execution state.
+        /// </para>
+        /// </remarks>
+        IAiRuntimeCorrelationAccessor Correlation { get; }
     }
 }

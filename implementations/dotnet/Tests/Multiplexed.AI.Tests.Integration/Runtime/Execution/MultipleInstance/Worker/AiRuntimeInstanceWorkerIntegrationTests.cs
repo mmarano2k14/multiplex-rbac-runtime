@@ -43,7 +43,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 CreateOptions($"{pipelineName}.json"));
 
             var worker = host.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorker>();
-            var identity = host.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
+            var workerIdentity = host.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
             var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
 
             var created = await host.Engine.CreateAsync(
@@ -65,13 +65,14 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 Assert.True(
                     cyclesByRuntimeInstance.TryGetValue(
-                        identity.RuntimeInstanceId,
+                        workerIdentity.WorkerId,
                         out var cycleCount),
-                    $"No worker cycle metrics were recorded for runtime instance '{identity.RuntimeInstanceId}'.");
+                    $"No worker cycle metrics were recorded for worker id '{workerIdentity.WorkerId}'. " +
+                    $"Available keys: '{string.Join(", ", cyclesByRuntimeInstance.Keys)}'.");
 
                 Assert.True(
                     cycleCount > 0,
-                    $"Expected at least one worker cycle for runtime instance '{identity.RuntimeInstanceId}'.");
+                    $"Expected at least one worker cycle for worker id '{workerIdentity.WorkerId}'.");
 
                 var terminalByStatus =
                     metrics.Worker.GetTerminalByStatus();
@@ -122,9 +123,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
             var workerB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorker>();
             var workerC = hostC.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorker>();
 
-            var identityA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
-            var identityB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
-            var identityC = hostC.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
+            var workerIdentityA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
+            var workerIdentityB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
+            var workerIdentityC = hostC.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
 
             var metricsA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
             var metricsB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
@@ -156,13 +157,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Equal(4, final.CompletedSteps.Count);
 
                 var dagStore = hostA.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
-                var record = await dagStore.GetRecordAsync(created.ExecutionId);
+
+                var record = await dagStore.GetRecordAsync(
+                    created.ExecutionId);
 
                 Assert.NotNull(record);
                 Assert.True(record!.IsTerminal);
                 Assert.Equal(AiExecutionStatus.Completed, record.Status);
 
-                var state = await dagStore.GetStateAsync(created.ExecutionId);
+                var state = await dagStore.GetStateAsync(
+                    created.ExecutionId);
 
                 Assert.NotNull(state);
                 Assert.Equal(4, state!.Steps.Count);
@@ -180,15 +184,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 AssertWorkerRecordedCycles(
                     metricsA,
-                    identityA.RuntimeInstanceId);
+                    workerIdentityA.WorkerId);
 
                 AssertWorkerRecordedCycles(
                     metricsB,
-                    identityB.RuntimeInstanceId);
+                    workerIdentityB.WorkerId);
 
                 AssertWorkerRecordedCycles(
                     metricsC,
-                    identityC.RuntimeInstanceId);
+                    workerIdentityC.WorkerId);
             }
             finally
             {
@@ -228,9 +232,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
             var group = hostA.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerGroup>();
 
-            var identityA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
-            var identityB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
-            var identityC = hostC.ServiceProvider.GetRequiredService<IAiRuntimeInstanceIdentity>();
+            var workerIdentityA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
+            var workerIdentityB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
+            var workerIdentityC = hostC.ServiceProvider.GetRequiredService<IAiRuntimeInstanceWorkerIdentity>();
 
             var metricsA = hostA.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
             var metricsB = hostB.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
@@ -249,9 +253,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     created.ExecutionId,
                     new[]
                     {
-                        workerA,
-                        workerB,
-                        workerC
+                workerA,
+                workerB,
+                workerC
                     },
                     timeout.Token);
 
@@ -286,15 +290,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
 
                 AssertWorkerRecordedCycles(
                     metricsA,
-                    identityA.RuntimeInstanceId);
+                    workerIdentityA.WorkerId);
 
                 AssertWorkerRecordedCycles(
                     metricsB,
-                    identityB.RuntimeInstanceId);
+                    workerIdentityB.WorkerId);
 
                 AssertWorkerRecordedCycles(
                     metricsC,
-                    identityC.RuntimeInstanceId);
+                    workerIdentityC.WorkerId);
 
                 var terminalByStatus =
                     metricsA.Worker.GetTerminalByStatus();

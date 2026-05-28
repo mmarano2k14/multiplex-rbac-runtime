@@ -1,51 +1,97 @@
-﻿using Multiplexed.Abstractions.AI.Metrics.Retention;
-using System;
-using System.Collections.Concurrent;
-using System.Threading;
+﻿using System.Collections.Concurrent;
+using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Metrics.Retention;
 
 namespace Multiplexed.AI.Runtime.Metrics.Retention
 {
     /// <summary>
     /// In-memory implementation of <see cref="IAiRetentionTriggerMetrics"/>.
-    ///
-    /// PURPOSE:
-    /// - Track retention trigger activity inside the runtime.
-    /// - Keep lightweight counters for diagnostics and integration tests.
-    ///
-    /// THREAD SAFETY:
-    /// - This implementation is safe to use as a singleton.
-    /// - Counters are updated using atomic operations.
-    /// - Reason-based counts are stored in concurrent dictionaries.
-    ///
-    /// IMPORTANT:
-    /// - This implementation is intentionally in-memory.
-    /// - It does not export to Prometheus, OpenTelemetry, MongoDB, or logs directly.
-    /// - Exporters can be added later without changing the runtime contract.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This implementation tracks retention trigger activity inside the runtime,
+    /// including triggered and skipped retention evaluations grouped by reason.
+    /// </para>
+    ///
+    /// <para>
+    /// This implementation is safe for singleton usage. Scalar counters use atomic
+    /// operations and reason-based counters use concurrent dictionaries.
+    /// </para>
+    ///
+    /// <para>
+    /// In addition to maintaining in-memory counters, this implementation emits
+    /// append-only correlated metric records through <see cref="IAiRuntimeMetricWriter"/>.
+    /// The writer is responsible for attaching the current runtime correlation context
+    /// and persisting the metric to the configured metric store.
+    /// </para>
+    ///
+    /// <para>
+    /// Metrics are observational only and must not influence retention triggering,
+    /// retention policy evaluation, compaction, eviction, replay, or execution state.
+    /// </para>
+    /// </remarks>
     public sealed class AiRetentionTriggerMetrics : IAiRetentionTriggerMetrics
     {
+        private const string Category = "RetentionTrigger";
+
+        private readonly IAiRuntimeMetricWriter _metricWriter;
+
         private long _triggeredCount;
         private long _skippedCount;
 
-        private readonly ConcurrentDictionary<string, long> _triggeredByReason = new();
-        private readonly ConcurrentDictionary<string, long> _skippedByReason = new();
+        private readonly ConcurrentDictionary<string, long> _triggeredByReason =
+            new(StringComparer.Ordinal);
 
-        /// <inheritdoc />
-        public void RecordTriggered(string executionId, string reason)
+        private readonly ConcurrentDictionary<string, long> _skippedByReason =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiRetentionTriggerMetrics"/> class.
+        /// </summary>
+        /// <param name="metricWriter">The correlated runtime metric writer.</param>
+        public AiRetentionTriggerMetrics(
+            IAiRuntimeMetricWriter metricWriter)
         {
-            _ = executionId;
-
-            Interlocked.Increment(ref _triggeredCount);
-            IncrementReason(_triggeredByReason, reason);
+            _metricWriter = metricWriter
+                ?? throw new ArgumentNullException(nameof(metricWriter));
         }
 
         /// <inheritdoc />
-        public void RecordSkipped(string executionId, string reason)
+        public void RecordTriggered(
+            string executionId,
+            string reason)
         {
-            _ = executionId;
+            Interlocked.Increment(ref _triggeredCount);
 
+            var normalizedReason = NormalizeReason(reason);
+
+            IncrementReason(
+                _triggeredByReason,
+                normalizedReason);
+
+            RecordMetric(
+                "retention.trigger.triggered",
+                executionId,
+                normalizedReason);
+        }
+
+        /// <inheritdoc />
+        public void RecordSkipped(
+            string executionId,
+            string reason)
+        {
             Interlocked.Increment(ref _skippedCount);
-            IncrementReason(_skippedByReason, reason);
+
+            var normalizedReason = NormalizeReason(reason);
+
+            IncrementReason(
+                _skippedByReason,
+                normalizedReason);
+
+            RecordMetric(
+                "retention.trigger.skipped",
+                executionId,
+                normalizedReason);
         }
 
         /// <summary>
@@ -68,19 +114,54 @@ namespace Multiplexed.AI.Runtime.Metrics.Retention
         /// </summary>
         public IReadOnlyDictionary<string, long> SkippedByReason => _skippedByReason;
 
+        /// <summary>
+        /// Records a correlated append-only retention trigger metric without blocking the caller.
+        /// </summary>
+        /// <param name="name">The metric name.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="reason">The retention trigger reason.</param>
+        private void RecordMetric(
+            string name,
+            string executionId,
+            string reason)
+        {
+            var tags = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                ["execution.id"] = executionId ?? string.Empty,
+                ["reason"] = reason ?? string.Empty
+            };
+
+            _ = _metricWriter.RecordAsync(
+                Category,
+                name,
+                value: 1,
+                tags,
+                CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Increments a reason-based dimensional counter.
+        /// </summary>
+        /// <param name="target">The target reason counter dictionary.</param>
+        /// <param name="reason">The normalized reason.</param>
         private static void IncrementReason(
             ConcurrentDictionary<string, long> target,
             string reason)
         {
-            var key = NormalizeReason(reason);
-
             target.AddOrUpdate(
-                key,
+                reason,
                 _ => 1,
                 (_, current) => current + 1);
         }
 
-        private static string NormalizeReason(string reason)
+        /// <summary>
+        /// Normalizes a retention reason.
+        /// </summary>
+        /// <param name="reason">The retention reason.</param>
+        /// <returns>The normalized retention reason.</returns>
+        private static string NormalizeReason(
+            string reason)
         {
             return string.IsNullOrWhiteSpace(reason)
                 ? "unknown"

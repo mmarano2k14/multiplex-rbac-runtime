@@ -9,7 +9,7 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
     /// </summary>
     /// <remarks>
     /// PURPOSE:
-    /// - Centralizes creation of <see cref="AiRuntimeCorrelationContext"/>.
+    /// - Centralizes creation of <see cref="AiRuntimeLedgerEventCorrelationContext"/>.
     /// - Avoids duplicating correlation mapping across runtime services.
     /// - Keeps observability correlation independent from the observability facade.
     ///
@@ -36,19 +36,27 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
         /// The optional concurrency context used to enrich step key, provider, model,
         /// operation, and runtime instance correlation.
         /// </param>
+        /// <param name="runId">
+        /// The optional controller run identifier associated with this runtime event.
+        /// </param>
+        /// <param name="correlationId">
+        /// The optional external or controller-level correlation identifier.
+        /// </param>
         /// <returns>The runtime correlation context.</returns>
         /// <remarks>
         /// This overload is kept for backward compatibility.
         /// When no explicit technical step key is supplied, the helper falls back to
         /// <paramref name="stepName"/> unless the concurrency context provides a step key.
         /// </remarks>
-        public static AiRuntimeCorrelationContext Create(
+        public static AiRuntimeLedgerEventCorrelationContext Create(
             string executionId,
             string pipelineKey,
             string stepName,
             string workerId,
             string? claimToken = null,
-            AiConcurrencyContext? concurrencyContext = null)
+            AiConcurrencyContext? concurrencyContext = null,
+            string? runId = null,
+            string? correlationId = null)
         {
             var resolvedStepKey = !string.IsNullOrWhiteSpace(concurrencyContext?.StepKey)
                 ? concurrencyContext.StepKey
@@ -61,7 +69,9 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
                 resolvedStepKey,
                 workerId,
                 claimToken,
-                concurrencyContext);
+                concurrencyContext,
+                runId,
+                correlationId);
         }
 
         /// <summary>
@@ -84,6 +94,12 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
         /// The optional concurrency context used to enrich provider, model, operation,
         /// runtime instance, and optionally override the technical step key when present.
         /// </param>
+        /// <param name="runId">
+        /// The optional controller run identifier associated with this runtime event.
+        /// </param>
+        /// <param name="correlationId">
+        /// The optional external or controller-level correlation identifier.
+        /// </param>
         /// <returns>The runtime correlation context.</returns>
         /// <remarks>
         /// <para>
@@ -93,18 +109,25 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
         /// <c>StepKey</c> is the runtime implementation/type key.
         /// </para>
         /// <para>
+        /// <c>RunId</c> is separate from <c>ExecutionId</c>. Controller run and queue
+        /// events may use a durable execution identifier while still preserving the
+        /// controller run identifier for observability and replay diagnostics.
+        /// </para>
+        /// <para>
         /// This overload should be preferred when the caller knows both the logical
         /// DAG step name and the technical step key.
         /// </para>
         /// </remarks>
-        public static AiRuntimeCorrelationContext Create(
+        public static AiRuntimeLedgerEventCorrelationContext Create(
             string executionId,
             string pipelineKey,
             string stepName,
             string stepKey,
             string workerId,
             string? claimToken = null,
-            AiConcurrencyContext? concurrencyContext = null)
+            AiConcurrencyContext? concurrencyContext = null,
+            string? runId = null,
+            string? correlationId = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
             ArgumentException.ThrowIfNullOrWhiteSpace(pipelineKey);
@@ -120,9 +143,16 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
                 ? concurrencyContext.RuntimeInstanceId
                 : workerId;
 
-            return new AiRuntimeCorrelationContext
+            var resolvedCorrelationId = !string.IsNullOrWhiteSpace(correlationId)
+                ? correlationId
+                : !string.IsNullOrWhiteSpace(runId)
+                    ? runId
+                    : executionId;
+
+            return new AiRuntimeLedgerEventCorrelationContext
             {
                 ExecutionId = executionId,
+                RunId = runId,
                 PipelineName = pipelineKey,
 
                 // Logical DAG step identity.
@@ -137,7 +167,7 @@ namespace Multiplexed.AI.Runtime.Observability.Helpers
                 Provider = concurrencyContext?.Provider,
                 Model = concurrencyContext?.Model,
                 Operation = concurrencyContext?.Operation,
-                CorrelationId = executionId
+                CorrelationId = resolvedCorrelationId
             };
         }
     }
