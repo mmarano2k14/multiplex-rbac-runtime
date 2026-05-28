@@ -20,6 +20,9 @@ Focused AI runtime documentation is organized under:
 | [`runtime-internals.md`](runtime-internals.md) | Complete technical reference preserved from the original README. |
 | [`enterprise-readiness.md`](enterprise-readiness.md) | Matrix of enterprise AI execution questions and runtime answers. |
 | [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime decision ledger, audit foundations, retention auditability, and replay-ledger roadmap direction. |
+| [`ai/observability.md`](ai/observability.md) | High-level observability index summarizing ledger, tracing, metrics, logs, correlation, and current observability roadmap. |
+| [`ai/observability-tracing.md`](ai/observability-tracing.md) | Runtime tracing, trace timelines, correlation, trace storage modes, Mongo trace persistence, MemoryAndMongo mode, and tracing improvements. |
+| [`ai/runtime-metrics.md`](ai/runtime-metrics.md) | Runtime metric domains, metric storage modes, worker/retention/storage/resolver/hot-state/policy metrics, and metrics improvements. |
 | [`comparison-existing-tools.md`](comparison-existing-tools.md) | Ecosystem positioning against agent frameworks, workflow engines, orchestration tools, observability platforms, and distributed infrastructure. |
 | [`roadmap.md`](roadmap.md) | Project roadmap organized by phases. |
 
@@ -45,8 +48,11 @@ Start with:
 1. [`../README.md`](../README.md)
 2. [`ai/architecture-overview.md`](ai/architecture-overview.md)
 3. [`enterprise-readiness.md`](enterprise-readiness.md)
-4. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
-5. [`runtime-internals.md`](runtime-internals.md)
+4. [`ai/observability.md`](ai/observability.md)
+5. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
+6. [`ai/observability-tracing.md`](ai/observability-tracing.md)
+7. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
+8. [`runtime-internals.md`](runtime-internals.md)
 
 This path gives both the strategic positioning and the complete technical depth.
 
@@ -60,8 +66,10 @@ Start with:
 4. [`ai/context-resolution-and-helpers.md`](ai/context-resolution-and-helpers.md)
 5. [`ai/step-plugins.md`](ai/step-plugins.md)
 6. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
-7. [`runtime-internals.md`](runtime-internals.md)
-8. [`roadmap.md`](roadmap.md)
+7. [`ai/observability-tracing.md`](ai/observability-tracing.md)
+8. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
+9. [`runtime-internals.md`](runtime-internals.md)
+10. [`roadmap.md`](roadmap.md)
 
 This path gives the current architecture, configuration model, context resolution layer, extension model, technical reference, and next planned improvements.
 
@@ -129,6 +137,53 @@ This document explains:
 
 The document also explains why replay-specific ledger events are intentionally deferred until the official Replay API.
 
+### [`ai/observability.md`](ai/observability.md)
+
+High-level observability index and summary.
+
+This document links the three focused observability areas:
+
+- execution-correlated decision ledger
+- observability and tracing
+- runtime metrics
+
+It explains how logs, metrics, traces, and ledger entries work together around a shared runtime correlation model.
+
+### [`ai/observability-tracing.md`](ai/observability-tracing.md)
+
+Runtime observability and tracing foundations.
+
+This document explains:
+
+- runtime observability facade
+- runtime tracing facade
+- in-memory trace recorder
+- in-memory trace timeline
+- trace correlation context
+- trace store abstraction
+- MongoDB-backed trace persistence
+- trace storage modes: `Disabled`, `Memory`, `Mongo`, and `MemoryAndMongo`
+- distributed chaos trace diagnostics
+- tracing TODO and improvement roadmap
+
+### [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
+
+Runtime metrics foundations.
+
+This document explains:
+
+- runtime metrics facade
+- execution metrics
+- worker metrics
+- retention metrics
+- storage metrics
+- resolver metrics
+- hot-state metrics
+- policy metrics
+- metric storage modes: `Disabled`, `Memory`, `Mongo`, and `MemoryAndMongo`
+- distributed chaos metrics diagnostics
+- metrics TODO and improvement roadmap
+
 ### [`comparison-existing-tools.md`](comparison-existing-tools.md)
 
 A high-level ecosystem positioning document comparing the runtime with existing categories such as:
@@ -169,6 +224,7 @@ The project roadmap organized into phases:
 | [`ai/execution-control-state.md`](ai/execution-control-state.md) | ExecutionId-level pause, resume, cancel, waiting-for-input, and control-state behavior. |
 | [`ai/runtime-queue-control.md`](ai/runtime-queue-control.md) | RunId-level background controller queue control, hot enqueue, and RunId versus ExecutionId separation. |
 | [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime auditability, runtime decision recording, and future replay/audit foundations. |
+| [`ai/observability.md`](ai/observability.md) | High-level observability index and summary linking ledger, tracing, metrics, and logs. |
 
 ---
 
@@ -188,7 +244,9 @@ The project roadmap organized into phases:
 | Document | Purpose |
 |---|---|
 | [`ai/distributed-concurrency-throttling.md`](ai/distributed-concurrency-throttling.md) | Redis ZSET concurrency gate, provider/model/operation throttling, and admission policies. |
-| [`ai/observability.md`](ai/observability.md) | Metrics, tracing foundations, logs, runtime diagnostics, and future dashboard direction. |
+| [`ai/observability.md`](ai/observability.md) | High-level observability index summarizing logs, metrics, traces, ledger, correlation, and roadmap direction. |
+| [`ai/observability-tracing.md`](ai/observability-tracing.md) | Runtime tracing, trace timelines, trace records, Mongo trace persistence, Memory/Mongo/MemoryAndMongo modes, and tracing improvements. |
+| [`ai/runtime-metrics.md`](ai/runtime-metrics.md) | Runtime metric domains, metric storage modes, worker/retention/storage/resolver/hot-state/policy metrics, and metrics improvements. |
 | [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated decision ledger, runtime audit visibility, and structured runtime lifecycle evidence. |
 | [`ai/testing-strategy.md`](ai/testing-strategy.md) | Integration testing strategy and validation approach for distributed runtime guarantees. |
 
@@ -208,7 +266,7 @@ The project roadmap organized into phases:
 
 ## Documentation Status
 
-Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, and execution-correlated decision ledger foundations.
+Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, execution-correlated decision ledger foundations, observability/tracing foundations, and runtime metrics foundations.
 
 The complete technical reference remains preserved in:
 
@@ -235,3 +293,4 @@ When adding new documentation:
 5. Preserve the complete technical reference in `runtime-internals.md`.
 6. Clearly distinguish between implemented features, available foundations, and planned work.
 7. Keep replay-specific ledger documentation separated from the current runtime ledger foundations until the official Replay API is implemented.
+8. Keep observability overview, tracing, and runtime metrics linked together because they describe different layers of the same runtime visibility model.

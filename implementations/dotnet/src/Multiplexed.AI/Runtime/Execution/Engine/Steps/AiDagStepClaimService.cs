@@ -1031,7 +1031,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
                     new AiStorageTraceContext
                     {
-                        ExecutionId = context.ExecutionId,
+                        ExecutionId = _services?.ObservabilityService?.Correlation?.Current?.ExecutionId ?? context.ExecutionId,
                         StepId = stepName,
                         Backend = "Redis",
                         Operation = "TryAcquireConcurrencyLease"
@@ -1044,7 +1044,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         trace.SetTag("concurrency.provider", context.Provider ?? string.Empty);
                         trace.SetTag("concurrency.model", context.Model ?? string.Empty);
                         trace.SetTag("concurrency.operation", context.Operation ?? string.Empty);
-                        trace.SetTag("workerId", context.RuntimeInstanceId);
+                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? context.RuntimeInstanceId);
 
                         var policyDecision = await EvaluateConfiguredConcurrencyPoliciesAsync(
                                 context,
@@ -1313,7 +1313,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             .ConfigureAwait(false);
 
                         trace.SetTag("claimAcquired", result is not null);
-                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
                         trace.SetTag("stepId", stepName);
 
                         if (result is not null)
@@ -1411,7 +1411,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             .ConfigureAwait(false);
 
                         trace.SetTag("recoveredCount", result);
-                        trace.SetTag("workerId", workerId);
+                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
                         trace.SetTag("recovered", result > 0);
 
                         if (result <= 0)

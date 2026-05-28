@@ -843,19 +843,19 @@ Full ledger output is available here:
 ============================================================
 EXECUTION-CORRELATED DECISION LEDGER
 ============================================================
-ExecutionId: d878882dbc1341da9178213bd526f05f
-Pipeline:    distributed-chaos-100-feaff048dedd47ff81e3851dd1008959
+ExecutionId: 6b5c904620f4492e9114abea71a60bb0
+Pipeline:    distributed-chaos-100-1da54d410606417885e95afc812a9854
 Steps:       100
 Workers:     10
-Events:      2061
+Events:      2116
 
 SUMMARY BY CATEGORY / EVENT / OUTCOME
 ------------------------------------------------------------
 Claim            | claim.acquired                           | Allowed      | Count=111
-Claim            | claim.attempted                          | Started      | Count=211
-Claim            | claim.denied                             | Denied       | Count=184
-Concurrency      | concurrency.lease_acquired               | Allowed      | Count=195
-Concurrency      | concurrency.lease_released               | Released     | Count=195
+Claim            | claim.attempted                          | Started      | Count=224
+Claim            | claim.denied                             | Denied       | Count=210
+Concurrency      | concurrency.lease_acquired               | Allowed      | Count=209
+Concurrency      | concurrency.lease_released               | Released     | Count=209
 Execution        | execution.completed                      | Completed    | Count=1
 Execution        | execution.created                        | Persisted    | Count=1
 Execution        | execution.finalized                      | Completed    | Count=1
@@ -863,16 +863,16 @@ Finalization     | finalization.completed                   | Completed    | Cou
 Finalization     | finalization.race_lost                   | Denied       | Count=8
 Finalization     | finalization.started                     | Started      | Count=9
 Payload          | payload.externalized                     | Persisted    | Count=15
-Payload          | payload.rehydrated                       | Applied      | Count=111
+Payload          | payload.rehydrated                       | Applied      | Count=101
 Policy           | policy.allowed                           | Allowed      | Count=224
 Policy           | policy.evaluated                         | Started      | Count=224
 Retention        | retention.compacted                      | Applied      | Count=15
 Retention        | retention.evaluated                      | Started      | Count=112
-Retention        | retention.evicted                        | Applied      | Count=74
-Retention        | retention.skipped                        | Skipped      | Count=23
-Retention        | retention.triggered                      | Triggered    | Count=89
+Retention        | retention.evicted                        | Applied      | Count=77
+Retention        | retention.skipped                        | Skipped      | Count=20
+Retention        | retention.triggered                      | Triggered    | Count=92
 Retry            | retry.evaluated                          | Started      | Count=11
-Retry            | retry.scheduled                          | Applied      | Count=11
+Retry            | retry.scheduled                          | Applied      | Count=6
 Run              | run.completed                            | Completed    | Count=1
 Run              | run.started                              | Started      | Count=1
 Snapshot         | snapshot.created                         | Persisted    | Count=11
@@ -882,13 +882,24 @@ Step             | step.started                             | Started      | Cou
 
 TIMELINE
 ------------------------------------------------------------
-2026-05-26T09:00:04.9530744+00:00 | Execution        | execution.created                        | Persisted    | StepId=_execution | StepKey=_execution | Worker=MSI:7424:cfd62c5031b8473488b62ea65804de32 | Reason=DAG execution created and persisted. | Metadata=[context.key=70e7cc8abd99404fbf6f3ac2689c8b01, execution.mode=Dag, pipeline.name=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959, pipeline.version=1.0.0, step.count=100]
-2026-05-26T09:00:04.9540629+00:00 | Run              | run.started                              | Started      | StepId=pipeline-run | StepKey=pipeline-run | Worker=pipeline-background-controller | Reason=Pipeline run started execution processing. | Metadata=[distributed.enabled=True, distributed.worker.count=10, execution.id=d878882dbc1341da9178213bd526f05f, pipeline.name=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959, run.id=8d405e3bc4de47358e2de74bc2aa1c03]
-2026-05-26T09:00:05.0644893+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:7424:cfd62c5031b8473488b62ea65804de32 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959:1.0.0, worker.id=MSI:7424:cfd62c5031b8473488b62ea65804de32]
-2026-05-26T09:00:05.0645133+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:7424:cfd62c5031b8473488b62ea65804de32 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959:1.0.0, worker.id=MSI:7424:cfd62c5031b8473488b62ea65804de32]
-2026-05-26T09:00:05.0645441+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:7424:cfd62c5031b8473488b62ea65804de32 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959:1.0.0, worker.id=MSI:7424:cfd62c5031b8473488b62ea65804de32]
-2026-05-26T09:00:05.0645803+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:7424:cfd62c5031b8473488b62ea65804de32 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-feaff048dedd47ff81e3851dd1008959:1.0.0, worker.id=MSI:7424:cfd62c5031b8473488b62ea65804de32]
-...
+2026-05-28T05:14:45.7581746+00:00 | Execution        | execution.created                        | Persisted    | StepId=_execution | StepKey=_execution | Worker=pipeline-background-controller | Reason=DAG execution created and persisted. | Metadata=[context.key=03c31e87d76c443392ae198a24314dfa, execution.mode=Dag, pipeline.name=distributed-chaos-100-1da54d410606417885e95afc812a9854, pipeline.version=1.0.0, step.count=100]
+2026-05-28T05:14:45.7582034+00:00 | Run              | run.started                              | Started      | StepId=pipeline-run | StepKey=pipeline-run | Worker=pipeline-background-controller | Reason=Pipeline run started execution processing. | Metadata=[distributed.enabled=True, distributed.worker.count=10, execution.id=6b5c904620f4492e9114abea71a60bb0, pipeline.name=distributed-chaos-100-1da54d410606417885e95afc812a9854, run.id=8e56705dcdd34bbe8968a525300749da]
+2026-05-28T05:14:45.9217992+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:4:4db91ebc24e849d7889483eaadcef703 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9217994+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:5:8f66c4bf16cc40ba8643297c438f6885 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9224809+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:7:77a638c87d1e46619402255ecb3fa963 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9225415+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:8:8f5e195a48124c35bbc088eda052c878 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9225420+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:3:167d09d6c67541fe9ebd8711242d2d6c | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9225447+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:1:05fc4870fd5640c4b4e43f3f4f0183c0 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9225596+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:9:8e9240dbc86e4135ac75cf56b110d7db | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9231293+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:10:4760bf8466a74a10a6bbe63d81abb8f1 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9231391+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:2:97053d2b53a84c2ca05813cc7c7b0e37 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:45.9231622+00:00 | Claim            | claim.attempted                          | Started      | StepId=_claim | StepKey=_claim | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:6:254fb521139c452a9ab491cb5732c597 | Reason=Batch claim attempt started. | Metadata=[claim.mode=batch, max.steps=1, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4746474+00:00 | Concurrency      | concurrency.lease_acquired               | Allowed      | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:10:4760bf8466a74a10a6bbe63d81abb8f1 | Reason=Concurrency lease acquired before batch step claim. | Metadata=[claim.mode=batch, lease.id=6b5c904620f4492e9114abea71a60bb0:chaos-step-001:MSI:34196:5578191c9d0b435bb817fba324b2d34b, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4746475+00:00 | Concurrency      | concurrency.lease_acquired               | Allowed      | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:5:8f66c4bf16cc40ba8643297c438f6885 | Reason=Concurrency lease acquired before batch step claim. | Metadata=[claim.mode=batch, lease.id=6b5c904620f4492e9114abea71a60bb0:chaos-step-001:MSI:34196:5578191c9d0b435bb817fba324b2d34b, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4758400+00:00 | Claim            | claim.denied                             | Denied       | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:5:8f66c4bf16cc40ba8643297c438f6885 | Reason=Batch step claim failed after concurrency lease was acquired. | Metadata=[claim.mode=batch, lease.id=6b5c904620f4492e9114abea71a60bb0:chaos-step-001:MSI:34196:5578191c9d0b435bb817fba324b2d34b, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4758434+00:00 | Claim            | claim.acquired                           | Allowed      | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:10:4760bf8466a74a10a6bbe63d81abb8f1 | Reason=Step claim acquired. | Metadata=[claim.mode=batch, claim.token=344254933d644e8394a7c8f5f16d5ed2, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4758809+00:00 | Step             | step.started                             | Started      | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:10:4760bf8466a74a10a6bbe63d81abb8f1 | Reason=Step execution started. | Metadata=[claim.token=344254933d644e8394a7c8f5f16d5ed2, pipeline.name=distributed-chaos-100-1da54d410606417885e95afc812a9854, pipeline.version=1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
+2026-05-28T05:14:46.4776522+00:00 | Concurrency      | concurrency.lease_released               | Released     | StepId=chaos-step-001 | StepKey=hello-world | Worker=MSI:34196:5578191c9d0b435bb817fba324b2d34b:worker:5:8f66c4bf16cc40ba8643297c438f6885 | Reason=Concurrency lease released after failed batch step claim. | Metadata=[claim.mode=batch, lease.id=6b5c904620f4492e9114abea71a60bb0:chaos-step-001:MSI:34196:5578191c9d0b435bb817fba324b2d34b, pipeline.key=distributed-chaos-100-1da54d410606417885e95afc812a9854:1.0.0, step.key=hello-world, step.name=chaos-step-001, worker.id=MSI:34196:5578191c9d0b435bb817fba324b2d34b]
 
 ```
 

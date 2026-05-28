@@ -93,11 +93,15 @@ namespace Multiplexed.AI.Runtime.Tracing
         {
             ArgumentNullException.ThrowIfNull(context);
 
+            var stepKey = !string.IsNullOrWhiteSpace(context.StepKey)
+                ? context.StepKey
+                : context.StepType;
+
             return Start(
                 operation: "step",
-                executionId: context.ExecutionId,
+                executionId: _correlationAccessor?.Current?.ExecutionId ?? context.ExecutionId,
                 stepId: context.StepId,
-                stepKey: context.StepType,
+                stepKey: stepKey,
                 workerId: context.WorkerId,
                 claimToken: context.ClaimToken,
                 provider: null,
@@ -107,6 +111,7 @@ namespace Multiplexed.AI.Runtime.Tracing
                 configure: record =>
                 {
                     record.Tags["stepType"] = context.StepType;
+                    record.Tags["stepKey"] = context.StepKey;
                     record.Tags["status"] = context.Status;
                     record.Tags["retryCount"] = context.RetryCount;
                     record.Tags["recoveryCount"] = context.RecoveryCount;

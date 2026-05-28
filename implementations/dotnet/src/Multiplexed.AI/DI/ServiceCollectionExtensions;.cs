@@ -410,6 +410,7 @@ namespace Multiplexed.AI.DI
             // ------------------------------------------------------------
 
             services.AddSingleton<IAiTraceTimeline, InMemoryAiTraceTimeline>();
+
             services.AddSingleton<NoOpAiRuntimeTraceStore>();
             services.AddSingleton<InMemoryAiRuntimeTraceStore>();
             services.AddSingleton<MongoAiRuntimeTraceStore>();
@@ -421,11 +422,20 @@ namespace Multiplexed.AI.DI
             services.AddSingleton<IAiTraceRecorder>(sp =>
             {
                 var options = sp.GetRequiredService<IOptions<AiEngineOptions>>().Value;
+                var traceStoreOptions = sp.GetRequiredService<IOptions<AiRuntimeTraceStoreOptions>>().Value;
                 var timeline = sp.GetRequiredService<IAiTraceTimeline>();
+                var traceStore = sp.GetRequiredService<IAiRuntimeTraceStore>();
 
-                return options.Observability.EnableInMemoryRecording
-                    ? new InMemoryAiTraceRecorder(timeline)
-                    : new NoOpAiTraceRecorder();
+                if (!options.Observability.EnableInMemoryRecording)
+                {
+                    return traceStoreOptions.Mode == AiRuntimeTraceStoreMode.Disabled
+                        ? new NoOpAiTraceRecorder()
+                        : new StoreOnlyAiTraceRecorder(traceStore);
+                }
+
+                return new InMemoryAiTraceRecorder(
+                    timeline,
+                    traceStore);
             });
 
             // Tracer 

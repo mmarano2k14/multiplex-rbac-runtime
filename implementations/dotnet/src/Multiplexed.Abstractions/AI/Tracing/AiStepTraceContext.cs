@@ -21,6 +21,11 @@
         public string? StepType { get; set; }
 
         /// <summary>
+        /// Gets or sets the declarative step key used for registry resolution.
+        /// </summary>
+        public string? StepKey { get; set; }
+
+        /// <summary>
         /// Gets or sets the current step status.
         /// </summary>
         public string? Status { get; set; }

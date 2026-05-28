@@ -153,6 +153,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             ExecutionId = record.ExecutionId,
                             StepId = claimedStep.StepName,
                             StepType = resolvedStep.Step.GetType().Name,
+                            StepKey = resolvedStep.StepKey,
                             Status = "Running",
                             RetryCount = stepState?.RetryState?.RetryCount ?? 0,
                             RecoveryCount = stepState?.RecoveryCount ?? 0,

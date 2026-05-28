@@ -176,9 +176,14 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                     {
                         ExecutionId = record.ExecutionId,
                         StepId = step.Name,
-                        StepType = "retry.definition",
-                        Status = "resolving.policy",
-                        WorkerId = _services.RuntimeInstanceIdentity.RuntimeInstanceId
+                        StepType = step.Step.GetType().Name,
+                        StepKey = step.StepKey,
+                        RetryCount = stepState.RetryState?.RetryCount ?? 0,
+                        RecoveryCount = stepState.RecoveryCount,
+                        WorkerId = _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? String.Empty,
+                        ClaimToken = null,
+                        Status = "ResolvingRetryPolicy",
+                        Operation = "retry.definition"
                     },
                     async () =>
                     {

@@ -199,6 +199,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Local
                             ExecutionId = executionId,
                             StepId = nextStep.Name,
                             StepType = nextStep.Step.GetType().Name,
+                            StepKey = nextStep.StepKey,
                             Status = "Running",
                             RetryCount = stepState.RetryState?.RetryCount ?? 0,
                             RecoveryCount = stepState.RecoveryCount,

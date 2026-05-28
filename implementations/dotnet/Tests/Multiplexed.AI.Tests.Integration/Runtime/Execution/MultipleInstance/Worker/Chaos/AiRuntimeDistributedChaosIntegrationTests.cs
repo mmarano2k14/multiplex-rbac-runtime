@@ -5,9 +5,12 @@ using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Steps;
+using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Tracing.Store;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.DI.Engine;
@@ -18,6 +21,7 @@ using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Observability.Ledger.DI;
+using Multiplexed.AI.Runtime.Tracing.Store.Mongo;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Fixtures;
 using Multiplexed.AI.Tests.Integration.Infrastructure;
@@ -1853,6 +1857,385 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                     $"Worker={entry.CorrelationContext.WorkerId} | " +
                     $"Reason={entry.Reason}");
             }
+        }
+
+        /// <summary>
+        /// Runs a distributed chaos execution with tracing configured in MemoryAndMongo mode
+        /// and prints the execution-correlated trace timeline.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Print_Correlated_Traces_With_Memory_And_Mongo()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostWithMemoryAndMongoObservabilityAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var timeline = host.ServiceProvider.GetRequiredService<IAiTraceTimeline>();
+            var mongoTraceStore = host.ServiceProvider.GetRequiredService<MongoAiRuntimeTraceStore>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            tracing = true,
+                            tracingMode = "MemoryAndMongo"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.RunId));
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var memoryEvents = timeline
+                    .Get(executionId)
+                    .Concat(timeline.Get(handle.RunId))
+                    .GroupBy(traceEvent => new
+                    {
+                        traceEvent.TimestampUtc,
+                        traceEvent.Category,
+                        traceEvent.Name,
+                        traceEvent.StepId
+                    })
+                    .Select(group => group.First())
+                    .OrderBy(traceEvent => traceEvent.TimestampUtc)
+                    .ToArray();
+
+                var mongoRecords = await WaitForMongoTraceRecordsAsync(
+                    mongoTraceStore,
+                    executionId,
+                    handle.RunId,
+                    scenario.Timeout);
+
+                if (memoryEvents.Length == 0 && mongoRecords.Count == 0)
+                {
+                    _output.WriteLine("");
+                    _output.WriteLine("TRACE DEBUG - NO TRACE EVENTS FOUND");
+                    _output.WriteLine("------------------------------------------------------------");
+                    _output.WriteLine($"RunId:       {handle.RunId}");
+                    _output.WriteLine($"ExecutionId: {executionId}");
+                    _output.WriteLine("Timeline execution lookup count: 0");
+                    _output.WriteLine("Timeline run lookup count:       0");
+                    _output.WriteLine("Mongo trace record count:        0");
+                }
+
+                Assert.True(
+                    memoryEvents.Length > 0 || mongoRecords.Count > 0,
+                    "Expected at least one trace event either in memory timeline or Mongo trace store.");
+
+                _output.WriteLine("TRACE SUMMARY BY CATEGORY / NAME");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in memoryEvents
+                    .GroupBy(traceEvent => new
+                    {
+                        traceEvent.Category,
+                        traceEvent.Name
+                    })
+                    .OrderBy(group => group.Key.Category, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Name, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.Name,-35} | Count={group.Count()}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("TRACE TIMELINE");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var traceEvent in memoryEvents
+                    .OrderBy(traceEvent => traceEvent.TimestampUtc)
+                    .ThenBy(traceEvent => traceEvent.Category, StringComparer.Ordinal)
+                    .ThenBy(traceEvent => traceEvent.Name, StringComparer.Ordinal))
+                {
+                    var runtime = traceEvent.Correlation?.Runtime;
+
+                    var tags = traceEvent.Tags is null || traceEvent.Tags.Count == 0
+                        ? string.Empty
+                        : string.Join(
+                            ", ",
+                            traceEvent.Tags
+                                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                                .Select(pair => $"{pair.Key}={pair.Value}"));
+
+                    _output.WriteLine(
+                        $"{traceEvent.TimestampUtc:O} | " +
+                        $"{traceEvent.Category,-16} | " +
+                        $"{traceEvent.Name,-35} | " +
+                        $"ExecutionId={traceEvent.Correlation?.Runtime?.ExecutionId ?? string.Empty} | " +
+                        $"RunId={traceEvent.Correlation?.Runtime?.RunId ?? string.Empty} | " +
+                        $"CorrelationId={runtime?.CorrelationId ?? string.Empty} | " +
+                        $"Pipeline={runtime?.PipelineName ?? string.Empty} | " +
+                        $"PipelineKey={runtime?.PipelineKey ?? string.Empty} | " +
+                        $"StepId={traceEvent.StepId ?? traceEvent.Correlation?.StepId ?? string.Empty} | " +
+                        $"StepKey={traceEvent.Correlation?.StepKey ?? string.Empty} | " +
+                        $"ClaimToken={traceEvent.Correlation?.ClaimToken ?? string.Empty} | " +
+                        $"Worker={traceEvent.Correlation?.Runtime?.WorkerId ?? string.Empty} | " +
+                        $"RuntimeInstance={runtime?.RuntimeInstanceId ?? string.Empty} | " +
+                        $"Provider={traceEvent.Correlation?.Provider ?? string.Empty} | " +
+                        $"Model={traceEvent.Correlation?.Model ?? string.Empty} | " +
+                        $"Operation={traceEvent.Correlation?.Operation ?? string.Empty} | " +
+                        $"Tags=[{tags}]");
+                }
+
+                Assert.Contains(
+                    memoryEvents,
+                    traceEvent =>
+                        traceEvent.Correlation?.Runtime?.ExecutionId == executionId);
+
+                Assert.Contains(
+                    memoryEvents,
+                    traceEvent =>
+                        traceEvent.Correlation?.Runtime?.WorkerId is not null);
+
+                Assert.Contains(
+                    mongoRecords,
+                    record =>
+                        record.Correlation?.Runtime?.ExecutionId == executionId);
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Runs a distributed chaos execution with metrics configured in MemoryAndMongo mode
+        /// and prints the runtime worker metric summary.
+        /// </summary>
+        [RedisFact]
+        public async Task DistributedChaos_Should_Print_Runtime_Metrics_With_Memory_And_Mongo()
+        {
+            var scenario = DistributedChaosScenario.Steps100();
+
+            await using var host = await CreateDistributedChaosHostWithMemoryAndMongoObservabilityAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var metrics = host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            stepCount = scenario.StepCount,
+                            workerCount = scenario.WorkerCount,
+                            chaos = true,
+                            metrics = true,
+                            metricsMode = "MemoryAndMongo"
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.RunId));
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                AssertDistributedWorkerMetrics(
+                    scenario,
+                    metrics);
+
+                var workerCycles = metrics.Worker.GetCyclesByRuntimeInstance();
+                var terminalByStatus = metrics.Worker.GetTerminalByStatus();
+
+                Assert.NotEmpty(workerCycles);
+                Assert.NotEmpty(terminalByStatus);
+
+                _output.WriteLine("");
+                _output.WriteLine("============================================================");
+                _output.WriteLine("RUNTIME METRICS - MEMORY + MONGO CONFIGURATION");
+                _output.WriteLine("============================================================");
+                _output.WriteLine($"RunId:       {handle.RunId}");
+                _output.WriteLine($"ExecutionId: {handle.ExecutionId}");
+                _output.WriteLine($"Pipeline:    {scenario.PipelineName}");
+                _output.WriteLine($"Steps:       {scenario.StepCount}");
+                _output.WriteLine($"Workers:     {scenario.WorkerCount}");
+                _output.WriteLine("");
+
+                _output.WriteLine("WORKER CYCLES");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var item in workerCycles
+                    .OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"WorkerId={item.Key,-45} | Cycles={item.Value}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("TERMINAL STATUS METRICS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var item in terminalByStatus
+                    .OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"Status={item.Key,-20} | Count={item.Value}");
+                }
+
+                Assert.True(
+                    terminalByStatus.TryGetValue(
+                        AiExecutionStatus.Completed.ToString(),
+                        out var completedCount),
+                    "No Completed terminal metric was recorded.");
+
+                Assert.True(
+                    completedCount > 0,
+                    "Expected at least one Completed terminal metric.");
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates a distributed chaos host with tracing and metrics configured in
+        /// MemoryAndMongo mode.
+        /// </summary>
+        /// <param name="scenario">The distributed chaos scenario.</param>
+        /// <returns>The created test host.</returns>
+        private static async Task<AiDagExecutionEngineTestHost> CreateDistributedChaosHostWithMemoryAndMongoObservabilityAsync(
+            DistributedChaosScenario scenario)
+        {
+            ArgumentNullException.ThrowIfNull(scenario);
+
+            var options = CreateOptions(
+                scenario);
+
+            options.Observability.EnableTracing = true;
+            options.Observability.EnableInMemoryRecording = true;
+            options.Observability.EnableMetrics = true;
+
+            options.Observability.Tracing.Mode = AiRuntimeTraceStoreMode.MemoryAndMongo;
+            options.Observability.Tracing.MongoConnectionString = "mongodb://localhost:27017";
+            options.Observability.Tracing.MongoDatabaseName = "multiplexed_ai_tests";
+            options.Observability.Tracing.MongoCollectionName =
+                $"ai_runtime_traces_distributed_chaos_{Guid.NewGuid():N}";
+
+            options.Observability.Metrics.Mode = AiRuntimeMetricStoreMode.MemoryAndMongo;
+            options.Observability.Metrics.MongoConnectionString = "mongodb://localhost:27017";
+            options.Observability.Metrics.MongoDatabaseName = "multiplexed_ai_tests";
+            options.Observability.Metrics.MongoCollectionName =
+                $"ai_runtime_metrics_distributed_chaos_{Guid.NewGuid():N}";
+
+            return await AiDagExecutionEngineFixture.CreateAsync(
+                options,
+                configureServices: services =>
+                {
+                    var finalizedHook = new DistributedChaosRunFinalizedHook();
+
+                    services.AddSingleton(finalizedHook);
+                    services.AddSingleton<IAiRuntimePipelineRunLifecycleHook>(
+                        finalizedHook);
+
+                    services.AddInMemoryAiDecisionLedger();
+
+                    services.AddAiStepsFromAssemblies(
+                        typeof(AiRuntimeAssemblyMarker).Assembly,
+                        typeof(AiRuntimeDistributedChaosIntegrationTests).Assembly);
+                });
+        }
+
+        /// <summary>
+        /// Waits until MongoDB-backed trace records are visible for the execution or run.
+        /// </summary>
+        /// <param name="store">The Mongo trace store.</param>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="runId">The run identifier.</param>
+        /// <param name="timeout">The maximum wait time.</param>
+        /// <returns>The trace records.</returns>
+        private static async Task<IReadOnlyList<AiTraceRecord>> WaitForMongoTraceRecordsAsync(
+            MongoAiRuntimeTraceStore store,
+            string executionId,
+            string runId,
+            TimeSpan timeout)
+        {
+            ArgumentNullException.ThrowIfNull(store);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+
+            var deadline = DateTimeOffset.UtcNow.Add(timeout);
+            IReadOnlyList<AiTraceRecord> records = Array.Empty<AiTraceRecord>();
+
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var executionRecords = await store.GetByExecutionAsync(
+                    executionId);
+
+                var runRecords = await store.GetByExecutionAsync(
+                    runId);
+
+                records = executionRecords
+                    .Concat(runRecords)
+                    .GroupBy(record => record.Id, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .OrderBy(record => record.StartedAtUtc)
+                    .ToArray();
+
+                if (records.Count > 0)
+                {
+                    return records;
+                }
+
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(100));
+            }
+
+            return records;
         }
 
         /// <summary>

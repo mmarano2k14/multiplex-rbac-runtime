@@ -2,11 +2,11 @@
 
 A deterministic AI execution runtime for production-grade AI workloads.
 
-This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, observability, execution-correlated decision ledger, and executable enterprise demo scenarios.
+This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay foundations, correlated metrics and tracing, execution-correlated decision ledger, and executable enterprise demo scenarios.
 
 The current runtime foundations are intentionally designed as the base for a broader AI execution and MLOps-oriented platform.
 
-[![Version](https://img.shields.io/badge/Version-1.0.5.2-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.5.3-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 ![AI Runtime](https://img.shields.io/badge/AI-Deterministic%20Execution-purple)
 ![Runtime](https://img.shields.io/badge/Runtime-distributed-brightgreen)
@@ -18,7 +18,7 @@ The current runtime foundations are intentionally designed as the base for a bro
 
 ## Latest Updates
 
-The latest major updates focused on turning the runtime from a DAG executor into a controllable distributed execution platform.
+The latest major updates focused on turning the runtime from a DAG executor into a controllable, observable, distributed execution platform.
 
 | Area | Summary |
 |---|---|
@@ -27,6 +27,7 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
 | Execution-correlated decision ledger | Added durable execution-correlated ledger events for execution lifecycle, run lifecycle, queue control, claim acquisition, retry, recovery, concurrency, policy evaluation, snapshot persistence, and runtime control observability. |
+| Correlated metrics and tracing storage modes | Added runtime correlation for metrics and traces with configurable `Disabled`, `Memory`, `Mongo`, and `MemoryAndMongo` storage modes. |
 | Context resolution and helpers | Added a dedicated helper layer for input bindings, previous step outputs, payload rehydration, provider/model/operation context, policy context, RAG context, and replay-safe helpers. |
 | Documentation restructure | Completed Phase 0 V1 with a shorter README, preserved runtime internals, documentation index, roadmap, enterprise readiness matrix, ecosystem comparison, and focused runtime documentation under `docs/ai/`. |
 | Long-term platform direction | Added a dedicated road-to-MLOps direction document to describe how the runtime foundations can evolve toward AI execution infrastructure and MLOps-oriented runtime operations. |
@@ -57,6 +58,7 @@ It provides a state-driven execution layer where:
 - MongoDB stores durable payloads and snapshots
 - context helpers resolve inputs, payloads, provider metadata, and policy context
 - policies control retry, retention, and concurrency
+- metrics, traces, and ledger events share runtime correlation
 - execution can be paused, resumed, cancelled, or blocked for human input
 
 The project should be read as an AI execution infrastructure foundation. The runtime core is already substantial, while the longer-term direction is to evolve toward a broader AI operations and MLOps-oriented platform.
@@ -115,7 +117,7 @@ Without a real execution runtime, these systems often become fragile:
 - unbounded memory growth
 - unclear ownership
 - inconsistent input/context reconstruction
-- poor observability
+- poor or fragmented observability
 - impossible replay
 
 This project explores what an AI execution runtime should look like when reliability, determinism, context resolution, and distributed coordination are treated as first-class design requirements.
@@ -143,9 +145,9 @@ This project explores what an AI execution runtime should look like when reliabi
 | RunId vs ExecutionId separation | Implemented | Controller lifecycle identity is separated from durable DAG execution identity. |
 | Snapshot and replay foundations | Foundation available | Terminal snapshots and replay restoration are available as a foundation for official replay APIs. |
 | Execution-correlated decision ledger | Implemented | Durable correlated ledger events exist for execution lifecycle, run lifecycle, queue control, claims, steps, retry, recovery, policy evaluation, concurrency, execution control, human input, snapshots, storage failures, retention, compaction, and finalization. |
-| Observability and tracing | Foundation available | Runtime metrics, trace recording, realtime events, and console visibility exist; production-grade OpenTelemetry integration and dashboarding remain planned. |
+| Observability, metrics, and tracing | Foundation available | Runtime metrics, trace recording, realtime events, correlated trace timelines, and configurable Memory/Mongo/MemoryAndMongo persistence exist; production-grade OpenTelemetry integration and dashboarding remain planned. |
 | MLOps-oriented platform evolution | Direction defined | Long-term platform direction is documented in `docs/road-to-mlops.md`. |
-| Durable decision ledger | Foundation available | Execution-correlated runtime ledger foundations are implemented; replay-specific ledger events and audit APIs remain planned. |
+| Durable decision ledger | Foundation available | Execution-correlated runtime ledger foundations are implemented and aligned with runtime correlation; replay-specific ledger events and audit APIs remain planned. |
 | Public API / SDK polish | Planned | Future work for cleaner external developer experience. |
 
 ---
@@ -206,7 +208,7 @@ MongoDB Payloads / Snapshots / Replay Foundations
 Execution-Correlated Decision Ledger
         |
         v
-Observability / Metrics / Tracing Foundations
+Correlated Observability / Metrics / Tracing Foundations
 ```
 
 The runtime is intentionally split into layers:
@@ -218,7 +220,7 @@ The runtime is intentionally split into layers:
 - policies control runtime behavior
 - workers execute claimed steps
 - persistence stores large payloads and snapshots
-- observability records runtime behavior
+- correlated observability records runtime behavior across ledger, metrics, traces, workers, and executions
 
 ---
 
@@ -231,7 +233,7 @@ The project is designed around production questions that enterprise AI systems m
 | What happens if a worker crashes? | Running steps can be recovered through stale-claim detection and Redis-backed recovery. |
 | How do you prevent duplicate executions? | Atomic Redis Lua claims and claim tokens enforce single step ownership. |
 | How do you replay a workflow? | Terminal snapshots and replay restoration provide replay foundations. |
-| How do you audit an AI decision? | Execution-correlated decision ledger events, execution state, step results, retry metadata, recovery state, snapshots, and observability provide audit foundations. |
+| How do you audit an AI decision? | Execution-correlated decision ledger events, correlated metrics/traces, execution state, step results, retry metadata, recovery state, snapshots, and observability provide audit foundations. |
 | How do you limit concurrency? | Distributed Redis ZSET leases and policy-driven throttling enforce limits. |
 | How do you resolve execution context safely? | Context helpers resolve inputs, step outputs, payload references, provider metadata, and policy context consistently. |
 | How do you pause/resume/cancel safely? | Execution control state blocks new claims and coordinates deterministic finalization. |
@@ -351,10 +353,14 @@ The runtime includes foundations for production visibility and replayability:
 - queue and execution control audit visibility
 - atomic retention and compaction auditability
 - snapshot persistence audit events
-- trace recording foundations
+- correlated trace recording foundations
+- correlated metric and trace storage modes
+- in-memory, MongoDB, and MemoryAndMongo observability persistence
 - terminal snapshots
 - replay restoration
 - deterministic replay fingerprint validation
+
+Runtime metrics and traces can be configured as `Disabled`, `Memory`, `Mongo`, or `MemoryAndMongo`. This allows local diagnostics, durable MongoDB-backed inspection, or both at the same time while keeping the execution runtime independent from observability storage choices.
 
 OpenTelemetry-style distributed tracing, richer dashboards, replay APIs, replay audit tooling, and advanced decision lineage remain roadmap items.
 
@@ -382,14 +388,14 @@ The strongest areas today are:
 - runtime queue control
 - queue and execution control observability
 - replay/snapshot foundations
-- observability and realtime logging foundations
+- correlated observability, tracing, metrics, and realtime logging foundations
 - integration-test-driven validation
 
 Areas still evolving include:
 
 - public API/SDK polish
 - official replay APIs
-- observability, tracing, and metrics polish
+- OpenTelemetry/exporter polish for tracing and metrics
 - operational dashboarding
 - Kubernetes deployment assets
 - real enterprise sample workflows
@@ -422,6 +428,8 @@ It currently includes:
 - `RunId` and `ExecutionId` separation
 - terminal completion through the controller path
 - execution-correlated runtime ledger visibility
+- correlated metrics and tracing diagnostics
+- MemoryAndMongo observability validation
 - queue and execution control audit events
 - retry, recovery, and concurrency ledger validation
 - atomic retention and compaction auditability
@@ -444,7 +452,7 @@ The `throttling-100` scenario demonstrates:
 - bounded provider capacity under worker pressure
 - deterministic convergence despite throttling delays
 
-The demo validates the controller execution path, distributed worker participation, runtime controls, realtime logging, and terminal completion behavior. It is intended to show distributed AI execution infrastructure, not only a simple batch or in-memory execution path.
+The demo validates the controller execution path, distributed worker participation, runtime controls, realtime logging, correlated observability, and terminal completion behavior. It is intended to show distributed AI execution infrastructure, not only a simple batch or in-memory execution path.
 
 Future demo work will expand further into crash recovery, human-in-the-loop, advanced replay workflows, Kubernetes deployment assets, real enterprise sample workflows, and broader AI operations/MLOps-oriented runtime capabilities.
 
@@ -460,7 +468,7 @@ The roadmap is organized into phases.
 | Phase 0 | README review and documentation restructure | Completed (V1) |
 | Phase 1 | Enterprise demo | Completed (V1) - controller demo, distributed workers, runtime controls, chaos scenarios, retention/replay, and throttling scenario validated |
 | Phase 2 | Real enterprise sample | Planned |
-| Phase 3 | Observability, tracing, and metrics | Foundations available / active polish |
+| Phase 3 | Correlated observability, tracing, and metrics | Foundations available / active polish |
 | Phase 4 | Kubernetes deployment demo | Planned |
 | Phase 5 | Public API / SDK polish | Planned |
 | Phase 6 | Replay / Audit APIs and Decision Lineage | Planned |
@@ -501,6 +509,8 @@ Focused AI runtime documentation:
 - [`docs/ai/distributed-concurrency-throttling.md`](docs/ai/distributed-concurrency-throttling.md)
 - [`docs/ai/replay-and-audit.md`](docs/ai/replay-and-audit.md)
 - [`docs/ai/observability.md`](docs/ai/observability.md)
+- [`docs/ai/observability-tracing.md`](docs/ai/observability-tracing.md)
+- [`docs/ai/runtime-metrics.md`](docs/ai/runtime-metrics.md)
 - [`docs/ai/execution-correlated-ledger.md`](docs/ai/execution-correlated-ledger.md)
 - [`docs/ai/testing-strategy.md`](docs/ai/testing-strategy.md)
 - [`docs/ai/config-driven-runtime.md`](docs/ai/config-driven-runtime.md)

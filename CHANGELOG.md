@@ -6,6 +6,167 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.5.3] - 2026-05-28 Correlated Metrics and Tracing Storage Modes
+
+- Added runtime execution correlation support for metrics and tracing.
+- Aligned metrics and tracing with the same correlation model used by the execution-correlated decision ledger.
+- Added shared runtime correlation propagation across:
+  - controller runs
+  - queued executions
+  - DAG executions
+  - runtime workers
+  - distributed step claims
+  - tracing records
+  - timeline events
+  - metric records
+  - future replay diagnostics
+
+- Added `AiRuntimeExecutionCorrelationContext` to carry runtime-level correlation data:
+  - `CorrelationId`
+  - `RunId`
+  - `ExecutionId`
+  - `PipelineName`
+  - `PipelineVersion`
+  - `PipelineKey`
+  - `RuntimeInstanceId`
+  - `WorkerId`
+
+- Added trace correlation context support through `AiRuntimeTraceCorrelationContext`.
+- Added correlation capture inside the in-memory runtime tracer.
+- Added correlation projection into trace records and trace timeline events.
+- Added correlation tags for runtime tracing:
+  - execution id
+  - run id
+  - correlation id
+  - pipeline name
+  - pipeline key
+  - runtime instance id
+  - worker id
+  - step id
+  - step key
+  - claim token
+  - provider
+  - model
+  - operation
+  - trace scope id
+
+- Added runtime metric storage mode support:
+  - `Disabled`
+  - `Memory`
+  - `Mongo`
+  - `MemoryAndMongo`
+
+- Added runtime trace storage mode support:
+  - `Disabled`
+  - `Memory`
+  - `Mongo`
+  - `MemoryAndMongo`
+
+- Added `AiRuntimeMetricStoreOptions` to configure metric persistence.
+- Added `AiRuntimeTraceStoreOptions` to configure trace persistence.
+- Added MongoDB fallback resolution for metrics and tracing so both can reuse the runtime MongoDB configuration when explicit observability options are not provided.
+- Added separate MongoDB collection support for runtime metrics and runtime traces.
+
+- Added trace store abstraction:
+  - `IAiRuntimeTraceStore`
+  - `NoOpAiRuntimeTraceStore`
+  - `InMemoryAiRuntimeTraceStore`
+  - `MongoAiRuntimeTraceStore`
+  - `CompositeAiRuntimeTraceStore`
+
+- Added `MemoryAndMongo` tracing support through a composite trace store.
+- Added `StoreOnlyAiTraceRecorder` for Mongo-only tracing when in-memory trace recording is disabled.
+- Updated `InMemoryAiTraceRecorder` to optionally persist completed trace records to the configured trace store.
+- Updated tracing dependency injection to select the correct trace recorder and trace store based on observability options.
+
+- Added MongoDB-backed trace persistence for completed trace records.
+- Added MongoDB trace indexes for execution, run, correlation, and operation-based trace lookup.
+- Added Mongo runtime resilience around trace index creation to tolerate transient local Docker or socket failures during tests.
+
+- Added correlation-aware tracing output for distributed chaos executions.
+- Added diagnostic tests proving that distributed chaos tracing can be written to both in-memory timeline and MongoDB.
+- Added diagnostic tests proving that runtime metrics remain available when configured with `MemoryAndMongo`.
+- Added test output grouping traces by category and operation name.
+
+- Improved trace visibility for distributed DAG execution by exposing:
+  - execution id
+  - run id
+  - correlation id
+  - pipeline name
+  - pipeline key
+  - step id
+  - step key
+  - claim token
+  - worker id
+  - runtime instance id
+  - provider
+  - model
+  - operation
+  - trace tags
+
+- Fixed tracing recorder wiring so `InMemoryAiTraceRecorder` writes to the configured trace store when trace persistence is enabled.
+- Fixed Mongo trace persistence not being called when in-memory tracing was enabled.
+- Fixed trace lookup validation for both execution id and run id.
+- Fixed trace timeline diagnostics to show full execution-correlated trace output instead of a limited sample.
+- Fixed diagnostic trace output bug where `RunId` was incorrectly printed from `ExecutionId`.
+
+- Improved step tracing correlation by adding explicit step key propagation.
+- Fixed step trace output so declarative step keys are shown correctly:
+  - `hello-world`
+  - `distributed.chaos.flaky-provider`
+
+- Improved storage tracing tags for distributed claim and concurrency operations.
+- Added additional storage trace tags for:
+  - pipeline key
+  - step key
+  - worker id
+  - claim token
+  - concurrency lease id
+  - concurrency provider
+  - concurrency model
+  - concurrency operation
+
+- Improved distributed claim tracing around:
+  - `TryClaimStep`
+  - claim acquisition
+  - claim denial
+  - claim token visibility
+  - worker id visibility
+
+- Improved distributed concurrency tracing around:
+  - `TryAcquireConcurrencyLease`
+  - concurrency admission
+  - concurrency denial
+  - lease acquisition
+  - lease release diagnostics
+
+- Improved recovery tracing around:
+  - `RecoverTimedOutSteps`
+  - recovered step counts
+  - recovered step names
+  - recovery ledger correlation
+
+- Added and updated tests for:
+  - correlated tracing with MemoryAndMongo mode
+  - Mongo-backed trace persistence
+  - runtime trace timeline output
+  - runtime metrics with MemoryAndMongo mode
+  - distributed chaos observability diagnostics
+  - trace category and operation grouping
+  - trace correlation validation by execution id
+  - trace correlation validation by run id
+
+- Known follow-up items:
+  - Split policy tracing from step tracing so retry policy resolution is no longer emitted as `step / execute.succeeded`.
+  - Add dedicated `TracePolicyAsync` support.
+  - Add dedicated correlation fields for `LeaseId` instead of overloading claim-token-oriented diagnostics.
+  - Normalize `WorkerId` versus `RuntimeInstanceId` across all trace contexts.
+  - Propagate `PipelineKey` consistently into ambient runtime correlation at controller, queue, execution, and worker boundaries.
+  - Refactor trace enrichment so context fields and tags are normalized in one place.
+  - Add stricter assertions later for expected trace values per trace category.
+
+---
+
 ## [1.0.5.2] - 2026-05-26 Execution-Correlated Decision Ledger Integration
 
 - Added execution-correlated decision ledger integration across the enterprise runtime.
