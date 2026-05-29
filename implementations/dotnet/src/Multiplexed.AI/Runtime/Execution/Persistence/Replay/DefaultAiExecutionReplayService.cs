@@ -531,6 +531,8 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 ExecutionFound = true,
                 SnapshotFound = true,
 
+                ReplayMetadata = replayReport.ReplayMetadata,
+
                 FingerprintFound = replayReport.FingerprintFound,
                 OriginalFingerprint = replayReport.OriginalFingerprint,
                 ReconstructedFingerprint = replayReport.ReconstructedFingerprint,
