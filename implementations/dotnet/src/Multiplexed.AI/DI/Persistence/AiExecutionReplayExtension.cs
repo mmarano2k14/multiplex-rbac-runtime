@@ -38,6 +38,10 @@ namespace Multiplexed.AI.DI.Persistence
                 IAiExecutionReplayMetadataStore,
                 InMemoryAiExecutionReplayMetadataStore>();
 
+            services.TryAddSingleton<
+                IAiExecutionReplayValidator,
+                DefaultAiExecutionReplayValidator>();
+
             return services;
         }
 

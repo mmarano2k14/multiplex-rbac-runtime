@@ -10,17 +10,6 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
     /// <summary>
     /// Default replay service that restores a persisted execution snapshot
     /// back into the runtime execution store.
-    ///
-    /// PURPOSE:
-    /// - Reload a persisted snapshot from the snapshot store
-    /// - Normalize and validate the snapshot before restore
-    /// - Restore record and state into the runtime store
-    /// - Support idempotent replay when a compatible runtime execution already exists
-    ///
-    /// IMPORTANT:
-    /// - In distributed DAG mode, the authoritative execution truth lives in IAiDagExecutionStore
-    /// - In non-distributed / generic mode, the replay contract uses IAiExecutionStore
-    /// - This service therefore checks both stores when needed
     /// </summary>
     public sealed class DefaultAiExecutionReplayService<TContext> : IAiExecutionReplayService
     {
@@ -28,6 +17,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         private readonly IAiExecutionStore _executionStore;
         private readonly IAiExecutionSnapshotService<TContext> _snapshotService;
         private readonly IAiRuntimeLogger _logger;
+        private readonly IAiExecutionReplayValidator _replayValidator;
         private readonly IAiDagExecutionStore? _dagStore;
 
         /// <summary>
@@ -38,6 +28,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             IAiExecutionStore executionStore,
             IAiExecutionSnapshotService<TContext> snapshotService,
             IAiRuntimeLogger logger,
+            IAiExecutionReplayValidator replayValidator,
             IAiDagExecutionStore? dagStore = null)
         {
             _snapshotStore = snapshotStore
@@ -51,6 +42,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
 
             _logger = logger
                 ?? throw new ArgumentNullException(nameof(logger));
+
+            _replayValidator = replayValidator
+                ?? throw new ArgumentNullException(nameof(replayValidator));
 
             _dagStore = dagStore;
         }
@@ -70,8 +64,6 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             }
 
             var executionId = request.ExecutionId;
-
-            var replayedAtUtc = DateTime.UtcNow;
 
             var snapshot = await _snapshotStore.GetAsync(
                 executionId,
@@ -94,11 +86,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
-            AiExecutionSnapshotRemapper.Remap(
-                snapshot);
+            AiExecutionSnapshotRemapper.Remap(snapshot);
 
-            var validationError = ValidateSnapshot(
-                snapshot);
+            var validationError = ValidateSnapshot(snapshot);
 
             if (validationError is not null)
             {
@@ -117,6 +107,12 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
+            var validationReport = await _replayValidator.ValidateAsync(
+                    snapshot.Record!,
+                    snapshot.State!,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             var existingRecord = await GetExistingRecordAsync(
                 executionId,
                 cancellationToken).ConfigureAwait(false);
@@ -130,32 +126,24 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     executionId,
                     "Replay skipped because a compatible runtime execution already exists.");
 
-                return new AiExecutionReplayReport
-                {
-                    ExecutionId = executionId,
-                    Mode = request.Mode,
-                    ExecutionFound = true,
-                    SnapshotFound = true,
-                    ReplayValid = true,
-                    PipelineName = existingRecord.PipelineName,
-                    Status = existingRecord.Status.ToString(),
-                    TotalSteps = snapshot.State?.Steps?.Count ?? 0
-                };
+                return MergeReport(
+                    validationReport,
+                    request.Mode,
+                    existingRecord.PipelineName,
+                    existingRecord.Status.ToString(),
+                    snapshot.State!,
+                    restored: false);
             }
 
             if (request.Mode == AiExecutionReplayMode.AuditOnly)
             {
-                return new AiExecutionReplayReport
-                {
-                    ExecutionId = executionId,
-                    Mode = request.Mode,
-                    ExecutionFound = true,
-                    SnapshotFound = true,
-                    ReplayValid = true,
-                    PipelineName = snapshot.Record!.PipelineName,
-                    Status = snapshot.Record.Status.ToString(),
-                    TotalSteps = snapshot.State?.Steps?.Count ?? 0
-                };
+                return MergeReport(
+                    validationReport,
+                    request.Mode,
+                    snapshot.Record!.PipelineName,
+                    snapshot.Record.Status.ToString(),
+                    snapshot.State!,
+                    restored: false);
             }
 
             AiExecutionReplayPreparation.Prepare(
@@ -179,22 +167,13 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 snapshot.Record!.Status,
                 snapshot.State?.Steps?.Count ?? 0);
 
-            return new AiExecutionReplayReport
-            {
-                ExecutionId = executionId,
-                Mode = request.Mode,
-                ExecutionFound = true,
-                SnapshotFound = true,
-                ReplayValid = true,
-                PipelineName = snapshot.Record.PipelineName,
-                Status = snapshot.Record.Status.ToString(),
-                TotalSteps = snapshot.State?.Steps?.Count ?? 0,
-                CompletedSteps = snapshot.State?.Steps?.Values.Count(
-                    x => string.Equals(
-                        x.Status.ToString(),
-                        "Completed",
-                        StringComparison.OrdinalIgnoreCase)) ?? 0
-            };
+            return MergeReport(
+                validationReport,
+                request.Mode,
+                snapshot.Record.PipelineName,
+                snapshot.Record.Status.ToString(),
+                snapshot.State!,
+                restored: true);
         }
 
         /// <summary>
@@ -308,31 +287,58 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             AiExecutionRecord existingRecord,
             AiExecutionRecord snapshotRecord)
         {
-            if (!string.Equals(
+            return string.Equals(
                     existingRecord.ExecutionId,
                     snapshotRecord.ExecutionId,
-                    StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (!string.Equals(
+                    StringComparison.Ordinal) &&
+                string.Equals(
                     existingRecord.PipelineName,
                     snapshotRecord.PipelineName,
-                    StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (!string.Equals(
+                    StringComparison.Ordinal) &&
+                string.Equals(
                     existingRecord.ContextKey,
                     snapshotRecord.ContextKey,
-                    StringComparison.Ordinal))
-            {
-                return false;
-            }
+                    StringComparison.Ordinal);
+        }
 
-            return true;
+        /// <summary>
+        /// Applies replay operation context to a validation report.
+        /// </summary>
+        private static AiExecutionReplayReport MergeReport(
+            AiExecutionReplayReport validationReport,
+            AiExecutionReplayMode mode,
+            string? pipelineName,
+            string? status,
+            AiExecutionState state,
+            bool restored)
+        {
+            return new AiExecutionReplayReport
+            {
+                ExecutionId = validationReport.ExecutionId,
+                Mode = mode,
+                PipelineName = pipelineName,
+                Status = status,
+                ExecutionFound = true,
+                SnapshotFound = true,
+                FingerprintFound = validationReport.FingerprintFound,
+                OriginalFingerprint = validationReport.OriginalFingerprint,
+                ReconstructedFingerprint = validationReport.ReconstructedFingerprint,
+                FingerprintMatches = validationReport.FingerprintMatches,
+                DependencyGraphValid = validationReport.DependencyGraphValid,
+                StepStateValid = validationReport.StepStateValid,
+                PayloadReferencesValid = validationReport.PayloadReferencesValid,
+                ReplayValid = validationReport.ReplayValid,
+                FailureReason = validationReport.FailureReason,
+                TotalSteps = state.Steps.Count,
+                CompletedSteps = state.Steps.Values.Count(x => x.IsCompleted),
+                FailedSteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.Failed),
+                WaitingForRetrySteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.WaitingForRetry),
+                RunningSteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.Running),
+                RetryCount = state.Steps.Values.Sum(x => x.RetryState?.RetryCount ?? 0),
+                RecoveryCount = state.Steps.Values.Sum(x => x.RecoveryCount),
+                Issues = validationReport.Issues,
+                Steps = validationReport.Steps
+            };
         }
     }
 }
