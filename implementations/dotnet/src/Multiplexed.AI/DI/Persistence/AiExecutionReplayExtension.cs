@@ -50,6 +50,14 @@ namespace Multiplexed.AI.DI.Persistence
                 IAiExecutionReplayPayloadValidator,
                 DefaultAiExecutionReplayPayloadValidator>();
 
+            services.TryAddSingleton<
+                IAiExecutionReplayStepStateValidator,
+                DefaultAiExecutionReplayStepStateValidator>();
+
+            services.TryAddSingleton<
+                IAiExecutionReplayDependencyGraphValidator,
+                DefaultAiExecutionReplayDependencyGraphValidator>();
+
             return services;
         }
 
