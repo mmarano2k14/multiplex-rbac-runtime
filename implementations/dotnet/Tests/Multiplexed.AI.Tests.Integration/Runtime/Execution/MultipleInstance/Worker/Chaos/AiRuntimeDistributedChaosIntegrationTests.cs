@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Metrics;
@@ -1582,11 +1583,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Null(await dagStore.GetStateAsync(executionId));
 
                 var replayResult = await replayService.ReplayAsync(
-                    executionId);
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = executionId
+                    });
 
                 Assert.NotNull(replayResult);
-                Assert.True(replayResult.Restored);
-                Assert.False(replayResult.AlreadyExists);
+                Assert.True(replayResult.ReplayValid);
+                Assert.True(replayResult.ExecutionFound);
+                Assert.True(replayResult.SnapshotFound);
 
                 var restoredRecord = await dagStore.GetRecordAsync(
                     executionId);

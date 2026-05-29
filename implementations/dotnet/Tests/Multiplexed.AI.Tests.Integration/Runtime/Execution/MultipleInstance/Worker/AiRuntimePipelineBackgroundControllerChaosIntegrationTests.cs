@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
@@ -306,20 +307,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Equal(handle.ExecutionId, snapshot.ExecutionId);
 
                 var replayResult = await replayService.ReplayAsync(
-                    handle.ExecutionId!);
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = handle.ExecutionId,
+                        Mode = AiExecutionReplayMode.ResumeIncomplete
+                    });
 
                 Assert.NotNull(replayResult);
 
                 _output.WriteLine(
-                    $"Replay result for ExecutionId='{handle.ExecutionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
-
-                Assert.False(
-                    replayResult.Restored,
-                    "Replay should not restore when the live execution record/state still exist.");
+                    $"Replay result for ExecutionId='{handle.ExecutionId}': ReplayValid='{replayResult.ReplayValid}'.");
 
                 Assert.True(
-                    replayResult.AlreadyExists,
-                    "Replay should report AlreadyExists when the live execution record/state still exist.");
+                    replayResult.ReplayValid,
+                    "Replay should be valid when the live execution already exists.");
+
+                Assert.True(
+                    replayResult.ExecutionFound,
+                    "Replay should report ExecutionFound when the live execution exists.");
+
+                Assert.True(
+                    replayResult.SnapshotFound,
+                    "Replay should report SnapshotFound when the snapshot exists.");
 
                 var recordAfterReplay = await dagStore.GetRecordAsync(
                     handle.ExecutionId!);
@@ -475,20 +484,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Null(deletedState);
 
                 var replayResult = await replayService.ReplayAsync(
-                    executionId);
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = handle.ExecutionId,
+                        Mode = AiExecutionReplayMode.ResumeIncomplete
+                    });
 
                 Assert.NotNull(replayResult);
 
                 _output.WriteLine(
-                    $"Replay restore result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+                    $"Replay restore result for ExecutionId='{executionId}': ReplayValid='{replayResult.ReplayValid}'.");
 
                 Assert.True(
-                    replayResult.Restored,
+                    replayResult.ReplayValid,
                     "Replay should restore the execution after the live DAG record/state has been deleted.");
 
-                Assert.False(
-                    replayResult.AlreadyExists,
-                    "Replay should not report AlreadyExists after the live DAG record/state has been deleted.");
+                Assert.True(
+                    replayResult.ExecutionFound,
+                    "Replay should report ExecutionFound after restoring the execution.");
+
+                Assert.True(
+                    replayResult.SnapshotFound,
+                    "Replay should report SnapshotFound after restoring the execution.");
 
                 var restoredRecord = await dagStore.GetRecordAsync(
                     executionId);
@@ -771,20 +788,26 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Null(deletedState);
 
                 var replayResult = await replayService.ReplayAsync(
-                    executionId);
-
-                Assert.NotNull(replayResult);
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = handle.ExecutionId,
+                        Mode = AiExecutionReplayMode.ResumeIncomplete
+                    });
 
                 _output.WriteLine(
-                    $"Deterministic replay result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+                    $"Replay result for ExecutionId='{handle.ExecutionId}': ReplayValid='{replayResult.ReplayValid}'.");
 
                 Assert.True(
-                    replayResult.Restored,
-                    "Replay should restore the execution after the live DAG record/state has been deleted.");
+                    replayResult.ReplayValid,
+                    "Replay should be valid when the live execution already exists.");
 
-                Assert.False(
-                    replayResult.AlreadyExists,
-                    "Replay should not report AlreadyExists after the live DAG record/state has been deleted.");
+                Assert.True(
+                    replayResult.ExecutionFound,
+                    "Replay should report ExecutionFound when the live execution exists.");
+
+                Assert.True(
+                    replayResult.SnapshotFound,
+                    "Replay should report SnapshotFound when the snapshot exists.");
 
                 var restoredRecord = await dagStore.GetRecordAsync(
                     executionId);
@@ -1404,20 +1427,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 Assert.Null(deletedState);
 
                 var replayResult = await replayService.ReplayAsync(
-                    executionId);
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = handle.ExecutionId,
+                        Mode = AiExecutionReplayMode.ResumeIncomplete
+                    });
 
                 Assert.NotNull(replayResult);
 
                 _output.WriteLine(
-                    $"Distributed replay result for ExecutionId='{executionId}': Restored='{replayResult.Restored}', AlreadyExists='{replayResult.AlreadyExists}'.");
+                    $"Replay result for ExecutionId='{handle.ExecutionId}': ReplayValid='{replayResult.ReplayValid}'.");
 
                 Assert.True(
-                    replayResult.Restored,
-                    "Replay should restore the distributed execution after live DAG deletion.");
+                    replayResult.ReplayValid,
+                    "Replay should be valid when the live execution already exists.");
 
-                Assert.False(
-                    replayResult.AlreadyExists,
-                    "Replay should not report AlreadyExists after DAG deletion.");
+                Assert.True(
+                    replayResult.ExecutionFound,
+                    "Replay should report ExecutionFound when the live execution exists.");
+
+                Assert.True(
+                    replayResult.SnapshotFound,
+                    "Replay should report SnapshotFound when the snapshot exists.");
 
                 var restoredRecord = await dagStore.GetRecordAsync(
                     executionId);

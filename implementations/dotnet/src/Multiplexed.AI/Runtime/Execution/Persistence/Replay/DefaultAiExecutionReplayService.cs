@@ -1,5 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
@@ -57,16 +58,18 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         /// <summary>
         /// Replays a persisted execution snapshot back into the runtime store.
         /// </summary>
-        public async Task<AiExecutionReplayResult> ReplayAsync(
-            string executionId,
+        public async Task<AiExecutionReplayReport> ReplayAsync(
+            AiExecutionReplayRequest request,
             CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(executionId))
+            if (string.IsNullOrWhiteSpace(request.ExecutionId))
             {
                 throw new ArgumentException(
                     "ExecutionId cannot be null or empty.",
-                    nameof(executionId));
+                    nameof(request.ExecutionId));
             }
+
+            var executionId = request.ExecutionId;
 
             var replayedAtUtc = DateTime.UtcNow;
 
@@ -80,16 +83,14 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     executionId,
                     "Snapshot not found.");
 
-                return new AiExecutionReplayResult
+                return new AiExecutionReplayReport
                 {
                     ExecutionId = executionId,
+                    Mode = request.Mode,
+                    ExecutionFound = false,
                     SnapshotFound = false,
-                    IsValid = false,
-                    AlreadyExists = false,
-                    Restored = false,
-                    ReplayPerformedAtUtc = replayedAtUtc,
-                    Message = "Snapshot not found.",
-                    Reason = "Snapshot not found."
+                    ReplayValid = false,
+                    FailureReason = "Snapshot not found."
                 };
             }
 
@@ -105,16 +106,14 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     executionId,
                     validationError);
 
-                return new AiExecutionReplayResult
+                return new AiExecutionReplayReport
                 {
                     ExecutionId = executionId,
+                    Mode = request.Mode,
+                    ExecutionFound = true,
                     SnapshotFound = true,
-                    IsValid = false,
-                    AlreadyExists = false,
-                    Restored = false,
-                    ReplayPerformedAtUtc = replayedAtUtc,
-                    Message = validationError,
-                    Reason = validationError
+                    ReplayValid = false,
+                    FailureReason = validationError
                 };
             }
 
@@ -131,20 +130,31 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     executionId,
                     "Replay skipped because a compatible runtime execution already exists.");
 
-                return new AiExecutionReplayResult
+                return new AiExecutionReplayReport
                 {
                     ExecutionId = executionId,
+                    Mode = request.Mode,
+                    ExecutionFound = true,
                     SnapshotFound = true,
-                    IsValid = true,
-                    AlreadyExists = true,
-                    Restored = false,
-                    Status = existingRecord.Status,
-                    ExistingStatus = existingRecord.Status,
-                    RestoredStatus = snapshot.Record!.Status,
-                    StepsCount = snapshot.State?.Steps?.Count ?? 0,
-                    ReplayPerformedAtUtc = replayedAtUtc,
-                    Message = "Execution already exists in a compatible state. Replay skipped.",
-                    Reason = "Replay skipped because a compatible runtime execution already exists."
+                    ReplayValid = true,
+                    PipelineName = existingRecord.PipelineName,
+                    Status = existingRecord.Status.ToString(),
+                    TotalSteps = snapshot.State?.Steps?.Count ?? 0
+                };
+            }
+
+            if (request.Mode == AiExecutionReplayMode.AuditOnly)
+            {
+                return new AiExecutionReplayReport
+                {
+                    ExecutionId = executionId,
+                    Mode = request.Mode,
+                    ExecutionFound = true,
+                    SnapshotFound = true,
+                    ReplayValid = true,
+                    PipelineName = snapshot.Record!.PipelineName,
+                    Status = snapshot.Record.Status.ToString(),
+                    TotalSteps = snapshot.State?.Steps?.Count ?? 0
                 };
             }
 
@@ -169,19 +179,21 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 snapshot.Record!.Status,
                 snapshot.State?.Steps?.Count ?? 0);
 
-            return new AiExecutionReplayResult
+            return new AiExecutionReplayReport
             {
                 ExecutionId = executionId,
+                Mode = request.Mode,
+                ExecutionFound = true,
                 SnapshotFound = true,
-                IsValid = true,
-                AlreadyExists = false,
-                Restored = true,
-                Status = snapshot.Record!.Status,
-                ExistingStatus = existingRecord?.Status,
-                RestoredStatus = snapshot.Record.Status,
-                StepsCount = snapshot.State?.Steps?.Count ?? 0,
-                ReplayPerformedAtUtc = replayedAtUtc,
-                Message = "Execution restored successfully from snapshot."
+                ReplayValid = true,
+                PipelineName = snapshot.Record.PipelineName,
+                Status = snapshot.Record.Status.ToString(),
+                TotalSteps = snapshot.State?.Steps?.Count ?? 0,
+                CompletedSteps = snapshot.State?.Steps?.Values.Count(
+                    x => string.Equals(
+                        x.Status.ToString(),
+                        "Completed",
+                        StringComparison.OrdinalIgnoreCase)) ?? 0
             };
         }
 

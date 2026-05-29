@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
@@ -127,10 +128,15 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Rag
 
             var replayService = host.ServiceProvider.GetRequiredService<IAiExecutionReplayService>();
 
-            var replayResult = await replayService.ReplayAsync(created.ExecutionId);
+            var replayResult = await replayService.ReplayAsync(
+                new AiExecutionReplayRequest
+                {
+                    ExecutionId = created.ExecutionId,
+                    Mode = AiExecutionReplayMode.ResumeIncomplete
+                });
 
             Assert.NotNull(replayResult);
-            Assert.True(replayResult.Restored || replayResult.AlreadyExists);
+            Assert.True(replayResult.ReplayValid);
 
             await ValidatePayloadWasRecomposedAfterReplay(host, created.ExecutionId);
 

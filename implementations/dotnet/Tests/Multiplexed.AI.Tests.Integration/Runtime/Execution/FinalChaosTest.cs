@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
@@ -404,7 +405,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
                 {
                     try
                     {
-                        return await replayService.ReplayAsync(created.ExecutionId);
+                        return await replayService.ReplayAsync(
+                            new AiExecutionReplayRequest
+                            {
+                                ExecutionId = created.ExecutionId,
+                                Mode = AiExecutionReplayMode.ResumeIncomplete
+                            });
                     }
                     catch
                     {
@@ -441,12 +447,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             Assert.Contains(results, x =>
                 x is not null &&
-                (x.AlreadyExists || x.Restored));
+                x.ReplayValid);
 
             Assert.DoesNotContain(results, x =>
                 x is not null &&
                 x.SnapshotFound &&
-                !x.IsValid);
+                !x.ReplayValid);
 
             if (finalRecord.IsTerminal)
             {

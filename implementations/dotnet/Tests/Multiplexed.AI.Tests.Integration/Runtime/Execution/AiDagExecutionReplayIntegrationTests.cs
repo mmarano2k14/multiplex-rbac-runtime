@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.Configuration;
@@ -46,9 +47,16 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             await executionStore.DeleteRecordAsync(terminal.ExecutionId);
             await executionStore.DeleteStateAsync(terminal.ExecutionId);
 
-            var replayResult = await replayService.ReplayAsync(terminal.ExecutionId);
+            var replayResult = await replayService.ReplayAsync(
+                new AiExecutionReplayRequest
+                {
+                    ExecutionId = terminal.ExecutionId,
+                    Mode = AiExecutionReplayMode.ResumeIncomplete
+                });
 
-            Assert.True(replayResult.Restored);
+            Assert.True(replayResult.ReplayValid);
+            Assert.True(replayResult.ExecutionFound);
+            Assert.True(replayResult.SnapshotFound);
         }
 
         private static AiEngineOptions CreateOptions()

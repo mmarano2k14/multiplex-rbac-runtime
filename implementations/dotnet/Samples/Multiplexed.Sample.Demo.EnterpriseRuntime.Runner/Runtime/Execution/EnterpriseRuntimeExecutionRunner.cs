@@ -2,6 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
@@ -16,6 +17,7 @@ using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Throttl
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Validation;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios;
 using Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Scenarios.Chaos;
+using System.Reflection.Metadata;
 
 namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
 {
@@ -528,19 +530,27 @@ namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution
             }
 
             var replayResult = await replayService.ReplayAsync(
-                    executionId)
-                .ConfigureAwait(false);
+                new AiExecutionReplayRequest
+                {
+                    ExecutionId = executionId,
+                });
 
-            if (!replayResult.Restored)
+            if (!replayResult.ReplayValid)
             {
                 throw new InvalidOperationException(
                     $"Expected replay to restore execution '{executionId}'.");
             }
 
-            if (replayResult.AlreadyExists)
+            if (!replayResult.ExecutionFound)
             {
                 throw new InvalidOperationException(
-                    $"Expected replay to restore a deleted execution '{executionId}', but it already existed.");
+                    $"Expected replay to find execution '{executionId}'.");
+            }
+
+            if (!replayResult.SnapshotFound)
+            {
+                throw new InvalidOperationException(
+                    $"Expected replay snapshot to exist for execution '{executionId}'.");
             }
 
             var restoredRecord = await _persistenceLoader.LoadPersistedRecordAsync(
