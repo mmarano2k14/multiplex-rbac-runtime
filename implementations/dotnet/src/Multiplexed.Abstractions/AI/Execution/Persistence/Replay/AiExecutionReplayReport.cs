@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿using Multiplexed.Abstractions.AI.Observability.Ledger;
+
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
 {
     /// <summary>
     /// Represents the result of replaying or auditing a persisted AI execution.
@@ -131,5 +133,8 @@
         /// </summary>
         public IReadOnlyList<AiExecutionReplayStepReport> Steps { get; init; } =
             Array.Empty<AiExecutionReplayStepReport>();
+
+        public IReadOnlyList<AiDecisionLedgerEntry> LedgerEvents { get; init; } =
+            Array.Empty<AiDecisionLedgerEntry>();
     }
 }
