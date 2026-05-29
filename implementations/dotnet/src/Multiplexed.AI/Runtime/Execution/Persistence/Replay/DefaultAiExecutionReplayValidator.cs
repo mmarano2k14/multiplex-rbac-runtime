@@ -20,21 +20,6 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiExecutionReplayValidator"/> class.
         /// </summary>
-        /// <param name="metadataStore">
-        /// Replay metadata store containing persisted terminal fingerprints.
-        /// </param>
-        /// <param name="fingerprintBuilder">
-        /// Fingerprint builder used to reconstruct deterministic execution fingerprints.
-        /// </param>
-        /// <param name="payloadValidator">
-        /// Payload validator used to verify replay payload references.
-        /// </param>
-        /// <param name="stepStateValidator">
-        /// Step state validator used to verify replay state consistency.
-        /// </param>
-        /// <param name="dependencyGraphValidator">
-        /// Dependency graph validator used to verify replay dependency integrity.
-        /// </param>
         public DefaultAiExecutionReplayValidator(
             IAiExecutionReplayMetadataStore metadataStore,
             IAiExecutionReplayFingerprintBuilder fingerprintBuilder,
@@ -60,10 +45,12 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
 
         /// <inheritdoc />
         public async Task<AiExecutionReplayReport> ValidateAsync(
+            AiExecutionReplayRequest request,
             AiExecutionRecord record,
             AiExecutionState state,
             CancellationToken cancellationToken = default)
         {
+            ArgumentNullException.ThrowIfNull(request);
             ArgumentNullException.ThrowIfNull(record);
             ArgumentNullException.ThrowIfNull(state);
 
@@ -105,21 +92,24 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 });
             }
 
-            var payloadValidation = await _payloadValidator.ValidateAsync(
-                    state,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var payloadValidation = request.ValidatePayloadReferences
+                ? await _payloadValidator.ValidateAsync(
+                        state,
+                        cancellationToken)
+                    .ConfigureAwait(false)
+                : new AiExecutionReplayPayloadValidationResult
+                {
+                    IsValid = true
+                };
 
-            issues.AddRange(
-                payloadValidation.Issues);
+            issues.AddRange(payloadValidation.Issues);
 
             var stepStateValidation = await _stepStateValidator.ValidateAsync(
                     state,
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            issues.AddRange(
-                stepStateValidation.Issues);
+            issues.AddRange(stepStateValidation.Issues);
 
             var dependencyGraphValidation =
                 await _dependencyGraphValidator.ValidateAsync(
@@ -127,24 +117,25 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                         cancellationToken)
                     .ConfigureAwait(false);
 
-            issues.AddRange(
-                dependencyGraphValidation.Issues);
+            issues.AddRange(dependencyGraphValidation.Issues);
 
-            var steps = state.Steps
-                .OrderBy(x => x.Key, StringComparer.Ordinal)
-                .Select(x => new AiExecutionReplayStepReport
-                {
-                    StepKey = x.Key,
-                    Status = x.Value.Status.ToString(),
-                    HasResult = x.Value.Result is not null,
-                    IsExternalized =
-                        x.Value.Result?.DataPayloads?.Values.Any(
-                            p => !p.IsInline) == true,
-                    PayloadReferenceValid = payloadValidation.IsValid,
-                    RetryCount = x.Value.RetryState?.RetryCount ?? 0,
-                    RecoveryCount = x.Value.RecoveryCount
-                })
-                .ToArray();
+            var steps = request.IncludeStepDetails
+                ? state.Steps
+                    .OrderBy(x => x.Key, StringComparer.Ordinal)
+                    .Select(x => new AiExecutionReplayStepReport
+                    {
+                        StepKey = x.Key,
+                        Status = x.Value.Status.ToString(),
+                        HasResult = x.Value.Result is not null,
+                        IsExternalized =
+                            x.Value.Result?.DataPayloads?.Values.Any(
+                                p => !p.IsInline) == true,
+                        PayloadReferenceValid = payloadValidation.IsValid,
+                        RetryCount = x.Value.RetryState?.RetryCount ?? 0,
+                        RecoveryCount = x.Value.RecoveryCount
+                    })
+                    .ToArray()
+                : Array.Empty<AiExecutionReplayStepReport>();
 
             var replayValid =
                 fingerprintMatches &&
@@ -155,6 +146,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             return new AiExecutionReplayReport
             {
                 ExecutionId = record.ExecutionId,
+                Mode = request.Mode,
                 ExecutionFound = true,
                 SnapshotFound = true,
 

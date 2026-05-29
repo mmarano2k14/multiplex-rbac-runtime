@@ -10,19 +10,8 @@ namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
         /// <summary>
         /// Validates replay determinism for the supplied execution record and state.
         /// </summary>
-        /// <param name="record">
-        /// The execution record to validate.
-        /// </param>
-        /// <param name="state">
-        /// The execution state to validate.
-        /// </param>
-        /// <param name="cancellationToken">
-        /// The cancellation token.
-        /// </param>
-        /// <returns>
-        /// A replay report containing fingerprint comparison and validation status.
-        /// </returns>
         Task<AiExecutionReplayReport> ValidateAsync(
+            AiExecutionReplayRequest request,
             AiExecutionRecord record,
             AiExecutionState state,
             CancellationToken cancellationToken = default);

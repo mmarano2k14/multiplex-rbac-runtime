@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
 {
     /// <summary>
-    /// Default replay executor for supported replay modes.
+    /// Executes supported replay modes after a persisted execution has been loaded.
     /// </summary>
     public sealed class DefaultAiExecutionReplayExecutor : IAiExecutionReplayExecutor
     {
@@ -51,40 +51,12 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 };
             }
 
-            var report = await _validator.ValidateAsync(
+            return await _validator.ValidateAsync(
+                    request,
                     record,
                     state,
                     cancellationToken)
                 .ConfigureAwait(false);
-
-            return new AiExecutionReplayReport
-            {
-                ExecutionId = report.ExecutionId,
-                Mode = request.Mode,
-                PipelineName = report.PipelineName,
-                PipelineKey = report.PipelineKey,
-                Status = report.Status,
-                ExecutionFound = report.ExecutionFound,
-                SnapshotFound = report.SnapshotFound,
-                FingerprintFound = report.FingerprintFound,
-                TotalSteps = report.TotalSteps,
-                CompletedSteps = report.CompletedSteps,
-                FailedSteps = report.FailedSteps,
-                WaitingForRetrySteps = report.WaitingForRetrySteps,
-                RunningSteps = report.RunningSteps,
-                RetryCount = report.RetryCount,
-                RecoveryCount = report.RecoveryCount,
-                OriginalFingerprint = report.OriginalFingerprint,
-                ReconstructedFingerprint = report.ReconstructedFingerprint,
-                FingerprintMatches = report.FingerprintMatches,
-                DependencyGraphValid = report.DependencyGraphValid,
-                StepStateValid = report.StepStateValid,
-                PayloadReferencesValid = report.PayloadReferencesValid,
-                ReplayValid = report.ReplayValid,
-                FailureReason = report.FailureReason,
-                Issues = report.Issues,
-                Steps = report.Steps
-            };
         }
     }
 }

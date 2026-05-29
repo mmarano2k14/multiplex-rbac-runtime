@@ -340,31 +340,42 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             string? status,
             AiExecutionState state)
         {
+            ArgumentNullException.ThrowIfNull(replayReport);
+            ArgumentNullException.ThrowIfNull(state);
+
             return new AiExecutionReplayReport
             {
                 ExecutionId = replayReport.ExecutionId,
                 Mode = mode,
+
                 PipelineName = pipelineName,
                 PipelineKey = replayReport.PipelineKey,
                 Status = status,
+
                 ExecutionFound = true,
                 SnapshotFound = true,
+
                 FingerprintFound = replayReport.FingerprintFound,
                 OriginalFingerprint = replayReport.OriginalFingerprint,
                 ReconstructedFingerprint = replayReport.ReconstructedFingerprint,
                 FingerprintMatches = replayReport.FingerprintMatches,
+
                 DependencyGraphValid = replayReport.DependencyGraphValid,
                 StepStateValid = replayReport.StepStateValid,
                 PayloadReferencesValid = replayReport.PayloadReferencesValid,
+
                 ReplayValid = replayReport.ReplayValid,
                 FailureReason = replayReport.FailureReason,
-                TotalSteps = state.Steps.Count,
-                CompletedSteps = state.Steps.Values.Count(x => x.IsCompleted),
-                FailedSteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.Failed),
-                WaitingForRetrySteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.WaitingForRetry),
-                RunningSteps = state.Steps.Values.Count(x => x.Status == AiStepExecutionStatus.Running),
-                RetryCount = state.Steps.Values.Sum(x => x.RetryState?.RetryCount ?? 0),
-                RecoveryCount = state.Steps.Values.Sum(x => x.RecoveryCount),
+
+                TotalSteps = replayReport.TotalSteps,
+                CompletedSteps = replayReport.CompletedSteps,
+                FailedSteps = replayReport.FailedSteps,
+                WaitingForRetrySteps = replayReport.WaitingForRetrySteps,
+                RunningSteps = replayReport.RunningSteps,
+
+                RetryCount = replayReport.RetryCount,
+                RecoveryCount = replayReport.RecoveryCount,
+
                 Issues = replayReport.Issues,
                 Steps = replayReport.Steps
             };
