@@ -28,6 +28,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         }
 
         /// <inheritdoc />
+        /// <inheritdoc />
         public async Task<AiExecutionReplayReport> ValidateAsync(
             AiExecutionRecord record,
             AiExecutionState state,
@@ -55,6 +56,40 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     reconstructedFingerprint,
                     StringComparison.Ordinal);
 
+            var issues = new List<AiExecutionReplayIssue>();
+
+            if (!fingerprintFound)
+            {
+                issues.Add(new AiExecutionReplayIssue
+                {
+                    Code = "replay.fingerprint.missing",
+                    Message = "Replay fingerprint metadata was not found."
+                });
+            }
+            else if (!fingerprintMatches)
+            {
+                issues.Add(new AiExecutionReplayIssue
+                {
+                    Code = "replay.fingerprint.mismatch",
+                    Message = "Replay fingerprint does not match the persisted terminal fingerprint."
+                });
+            }
+
+            var steps = state.Steps
+                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                .Select(x => new AiExecutionReplayStepReport
+                {
+                    StepKey = x.Key,
+                    Status = x.Value.Status.ToString(),
+                    HasResult = x.Value.Result is not null,
+                    IsExternalized =
+                        x.Value.Result?.DataPayloads?.Values.Any(p => !p.IsInline) == true,
+                    PayloadReferenceValid = true,
+                    RetryCount = x.Value.RetryState?.RetryCount ?? 0,
+                    RecoveryCount = x.Value.RecoveryCount
+                })
+                .ToArray();
+
             return new AiExecutionReplayReport
             {
                 ExecutionId = record.ExecutionId,
@@ -81,7 +116,9 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     ? null
                     : fingerprintFound
                         ? "Replay fingerprint mismatch."
-                        : "Replay fingerprint metadata not found."
+                        : "Replay fingerprint metadata not found.",
+                Issues = issues,
+                Steps = steps
             };
         }
     }
