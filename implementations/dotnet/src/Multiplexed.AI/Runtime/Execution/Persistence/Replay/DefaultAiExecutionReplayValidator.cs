@@ -155,6 +155,8 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 ReconstructedFingerprint = reconstructedFingerprint,
                 FingerprintMatches = fingerprintMatches,
 
+                ReplayMetadata = metadata,
+
                 DependencyGraphValid = dependencyGraphValidation.IsValid,
                 StepStateValid = stepStateValidation.IsValid,
                 PayloadReferencesValid = payloadValidation.IsValid,

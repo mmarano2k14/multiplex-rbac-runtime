@@ -135,6 +135,9 @@ namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
         public IReadOnlyList<AiExecutionReplayStepReport> Steps { get; init; } =
             Array.Empty<AiExecutionReplayStepReport>();
 
+        /// <summary>
+        /// Gets execution-correlated decision ledger events when requested.
+        /// </summary>
         public IReadOnlyList<AiDecisionLedgerEntry> LedgerEvents { get; init; } =
             Array.Empty<AiDecisionLedgerEntry>();
 
@@ -143,5 +146,10 @@ namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
         /// </summary>
         public IReadOnlyList<AiTraceEvent> TimelineEvents { get; init; } =
             Array.Empty<AiTraceEvent>();
+
+        /// <summary>
+        /// Gets persisted replay metadata used for deterministic fingerprint validation.
+        /// </summary>
+        public AiExecutionReplayMetadata? ReplayMetadata { get; init; }
     }
 }
