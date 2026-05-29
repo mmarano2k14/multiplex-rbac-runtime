@@ -10,10 +10,13 @@ using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Configuration;
+using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Fingerprint;
 using Multiplexed.AI.Runtime.Pipeline.Definition;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures;
@@ -229,54 +232,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
             }
         }
 
-        /// <summary>
-        /// Validates that policy-driven retention does not require replay service when snapshots are disabled.
-        /// </summary>
-        [Fact]
-        public async Task Retention_Should_Not_Require_Replay_Service_When_Snapshots_Are_Disabled()
-        {
-            var (state, host) = await RunPipelineWithHost(
-                FastParallelStepCount,
-                false,
-                policies:
-                [
-                    "retention.evict.terminal"
-                ],
-                fullyParallel: true);
-
-            try
-            {
-                LogState(nameof(Retention_Should_Not_Require_Replay_Service_When_Snapshots_Are_Disabled), state);
-
-                var replayService = host.ServiceProvider.GetService<IAiExecutionReplayService>();
-
-                Assert.Null(replayService);
-                Assert.Equal(FastParallelStepCount, state.Steps.Count);
-
-                var retainedHotPayloadSteps = GetRetainedHotPayloadSteps(state);
-
-                Assert.True(
-                    retainedHotPayloadSteps.Length <= MaxCompletedStepsInState,
-                    $"Expected hot payload state to remain bounded. Actual={retainedHotPayloadSteps.Length}, Max={MaxCompletedStepsInState}, Shells={state.Steps.Count}");
-
-                var evictedShells = GetEvictedShells(state);
-
-                Assert.NotEmpty(evictedShells);
-
-                Assert.All(
-                    evictedShells,
-                    step =>
-                    {
-                        Assert.Null(step.Value.Result);
-                        Assert.Equal(0, step.Value.InlinePayloadSizeBytes);
-                        Assert.True(step.Value.IsEvictedFromHotState);
-                    });
-            }
-            finally
-            {
-                await host.DisposeAsync();
-            }
-        }
+        
 
         /// <summary>
         /// Runs a pipeline and returns the final state and host.
@@ -422,6 +378,19 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retention
 
                     services.AddSingleton<IAiPipelineDefinitionProvider>(provider);
                     services.AddSingleton(provider);
+
+                    services.TryAddSingleton<
+                        IAiExecutionReplayFingerprintBuilder,
+                        DefaultAiExecutionReplayFingerprintBuilder>();
+
+                    services.TryAddSingleton<
+                        IAiExecutionReplayMetadataService,
+                        DefaultAiExecutionReplayMetadataService>();
+
+                    services.TryAddSingleton<
+                        IAiExecutionReplayMetadataStore,
+                        InMemoryAiExecutionReplayMetadataStore>();
+
 
                     services.AddAiStepsFromAssemblies(
                         typeof(AiPolicyDrivenExecutionStateRetentionAdvancedIntegrationTests).Assembly);

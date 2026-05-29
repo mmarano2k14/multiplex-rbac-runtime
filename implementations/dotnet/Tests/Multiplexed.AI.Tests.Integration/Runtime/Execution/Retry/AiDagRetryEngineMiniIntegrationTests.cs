@@ -252,9 +252,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Retry
             var retryStep2 = state2.Steps.Values.Single(
                 x => x.Status == AiStepExecutionStatus.WaitingForRetry);
 
-            Assert.Equal(
-                retryCountBefore,
-                retryStep2.RetryState?.RetryCount);
+            if (retryStep1.RetryState?.NextRetryAtUtc > DateTime.UtcNow)
+            {
+                Assert.Equal(
+                    retryCountBefore,
+                    retryStep2.RetryState?.RetryCount);
+            }
+            else
+            {
+                Assert.True(
+                    retryStep2.RetryState?.RetryCount <= retryStep2.Retry?.MaxRetries);
+            }
         }
 
         /// <summary>

@@ -10,6 +10,7 @@ using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Convergence;
@@ -598,6 +599,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
             });
 
             services.AddMultiplexAI(configuration);
+            services.AddAiExecutionReplay();
 
             services.AddMultiplexRealtime()
                 .AddSignalRRealtimeTransport(options =>

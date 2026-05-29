@@ -9,6 +9,7 @@ using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Engine;
+using Multiplexed.AI.DI.Persistence;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -685,6 +686,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 
             // Full AI runtime
             services.AddMultiplexAI(configuration);
+            services.AddAiExecutionReplay();
 
             // Realtime plumbing may still be required by runtime logger dependencies.
             services.AddMultiplexRealtime()

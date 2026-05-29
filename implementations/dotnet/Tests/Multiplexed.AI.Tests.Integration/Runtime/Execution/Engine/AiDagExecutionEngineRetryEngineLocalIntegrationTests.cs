@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Pipeline;
@@ -26,6 +27,8 @@ using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Engine;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Fingerprint;
 using Multiplexed.AI.Runtime.Execution.Scheduling;
 using Multiplexed.AI.Runtime.Execution.State;
 using Multiplexed.AI.Runtime.Logging;
@@ -257,6 +260,17 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
             var executionControlGate = new NoOpAiExecutionControlGate();
             var executionControlService = new NoOpAiExecutionControlService();
 
+            var replayMetadataStore =
+                new InMemoryAiExecutionReplayMetadataStore();
+
+            var replayFingerprintBuilder =
+                new DefaultAiExecutionReplayFingerprintBuilder();
+
+            var replayMetadataService =
+                new DefaultAiExecutionReplayMetadataService(
+                    replayFingerprintBuilder,
+                    replayMetadataStore);
+
             var serviceProvider = new TestServiceProvider(new Dictionary<Type, object>
             {
                 [typeof(ExecutionContextAccessor)] = accessor,
@@ -271,9 +285,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 [typeof(IAiRuntimeInstanceIdentity)] = runtimeInstanceIdentity,
                 [typeof(IAiExecutionControlGate)] = executionControlGate,
                 [typeof(IAiExecutionControlService)] = executionControlService,
+                [typeof(IAiExecutionReplayMetadataStore)] = replayMetadataStore,
+                [typeof(IAiExecutionReplayFingerprintBuilder)] = replayFingerprintBuilder,
+                [typeof(IAiExecutionReplayMetadataService)] = replayMetadataService
             });
-
-            
 
             var engineServices = new AiDagExecutionEngineServices(
                 executionStore,
@@ -294,11 +309,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Engine
                 policyFactory,
                 concurrencyGate,
                 stepExecutionOrchestrator,
-                executionControlGate,                
-                executionControlService,   
+                executionControlGate,
+                executionControlService,
+                replayMetadataService,
                 null);
 
-            var runtimeServices =  AiDagExecutionEngineRuntimeServicesFixture.Create(engineServices);
+            var runtimeServices = AiDagExecutionEngineRuntimeServicesFixture.Create(engineServices);
 
             return new AiDagExecutionEngine(engineServices, runtimeServices);
         }
