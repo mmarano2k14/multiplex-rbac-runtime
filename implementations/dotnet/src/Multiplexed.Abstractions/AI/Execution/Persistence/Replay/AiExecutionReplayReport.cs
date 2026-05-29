@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Tracing;
 
 namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
 {
@@ -136,5 +137,11 @@ namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
 
         public IReadOnlyList<AiDecisionLedgerEntry> LedgerEvents { get; init; } =
             Array.Empty<AiDecisionLedgerEntry>();
+
+        /// <summary>
+        /// Gets execution trace events when requested.
+        /// </summary>
+        public IReadOnlyList<AiTraceEvent> TimelineEvents { get; init; } =
+            Array.Empty<AiTraceEvent>();
     }
 }

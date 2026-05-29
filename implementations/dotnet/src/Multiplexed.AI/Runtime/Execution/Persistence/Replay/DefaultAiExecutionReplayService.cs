@@ -3,6 +3,7 @@ using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Observability.Helpers;
@@ -17,10 +18,10 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
     /// The serialized execution context snapshot type stored with the execution snapshot.
     /// </typeparam>
     /// <remarks>
-    /// This service is responsible for loading a persisted execution snapshot,
-    /// validating replay determinism, optionally restoring the execution into the
-    /// authoritative runtime store, and recording replay lifecycle events into the
-    /// decision ledger.
+    /// This service loads persisted execution snapshots, validates replay determinism,
+    /// optionally restores runtime state, records replay lifecycle events into the
+    /// decision ledger, and enriches replay reports with ledger and trace timeline
+    /// data when requested.
     /// </remarks>
     public sealed class DefaultAiExecutionReplayService<TContext> : IAiExecutionReplayService
     {
@@ -36,6 +37,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         private readonly IAiDagExecutionStore? _dagStore;
         private readonly IAiRuntimeObservability _observability;
         private readonly IAiDecisionLedger _decisionLedger;
+        private readonly IAiTraceTimeline _traceTimeline;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DefaultAiExecutionReplayService{TContext}"/> class.
@@ -48,6 +50,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             IAiRuntimeObservability observability,
             IAiExecutionReplayExecutor replayExecutor,
             IAiDecisionLedger decisionLedger,
+            IAiTraceTimeline traceTimeline,
             IAiDagExecutionStore? dagStore = null)
         {
             _snapshotStore = snapshotStore ?? throw new ArgumentNullException(nameof(snapshotStore));
@@ -57,6 +60,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
             _replayExecutor = replayExecutor ?? throw new ArgumentNullException(nameof(replayExecutor));
             _decisionLedger = decisionLedger ?? throw new ArgumentNullException(nameof(decisionLedger));
+            _traceTimeline = traceTimeline ?? throw new ArgumentNullException(nameof(traceTimeline));
             _dagStore = dagStore;
         }
 
@@ -78,231 +82,252 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
 
             try
             {
-                await RecordReplayLedgerEventAsync(
-                        executionId,
-                        AiDecisionLedgerEvents.Replay.Requested,
-                        AiDecisionLedgerOutcome.Started,
-                        "Replay request received.",
-                        new Dictionary<string, string>
+                return await _observability.Tracer
+                    .TraceExecutionAsync(
+                        new AiExecutionTraceContext
                         {
-                            ["replay.mode"] = request.Mode.ToString()
+                            ExecutionId = executionId,
+                            ExecutionMode = "Replay",
+                            Status = request.Mode.ToString(),
+                            WorkerId = ReplayWorkerId
                         },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                var snapshot = await _snapshotStore.GetAsync(
-                        executionId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (snapshot is null)
-                {
-                    _logger.Engine.ExecutionReplaySkipped(
-                        executionId,
-                        "Snapshot not found.");
-
-                    await RecordReplayLedgerEventAsync(
-                            executionId,
-                            AiDecisionLedgerEvents.Replay.Failed,
-                            AiDecisionLedgerOutcome.Failed,
-                            "Replay failed because snapshot was not found.",
-                            new Dictionary<string, string>
-                            {
-                                ["replay.mode"] = request.Mode.ToString(),
-                                ["snapshot.found"] = false.ToString()
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return CreateInvalidReport(
-                        executionId,
-                        request.Mode,
-                        executionFound: false,
-                        snapshotFound: false,
-                        "Snapshot not found.");
-                }
-
-                await RecordReplayLedgerEventAsync(
-                        executionId,
-                        AiDecisionLedgerEvents.Replay.Started,
-                        AiDecisionLedgerOutcome.Started,
-                        "Replay snapshot loaded.",
-                        new Dictionary<string, string>
+                        async () =>
                         {
-                            ["replay.mode"] = request.Mode.ToString(),
-                            ["snapshot.found"] = true.ToString()
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                            await RecordReplayLedgerEventAsync(
+                                    executionId,
+                                    AiDecisionLedgerEvents.Replay.Requested,
+                                    AiDecisionLedgerOutcome.Started,
+                                    "Replay request received.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["replay.mode"] = request.Mode.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
 
-                AiExecutionSnapshotRemapper.Remap(snapshot);
+                            var snapshot = await _snapshotStore.GetAsync(
+                                    executionId,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
 
-                var validationError = ValidateSnapshot(snapshot);
-
-                if (validationError is not null)
-                {
-                    _logger.Engine.ExecutionReplaySkipped(
-                        executionId,
-                        validationError);
-
-                    await RecordReplayLedgerEventAsync(
-                            executionId,
-                            AiDecisionLedgerEvents.Replay.Failed,
-                            AiDecisionLedgerOutcome.Failed,
-                            validationError,
-                            new Dictionary<string, string>
+                            if (snapshot is null)
                             {
-                                ["replay.mode"] = request.Mode.ToString(),
-                                ["snapshot.found"] = true.ToString(),
-                                ["snapshot.valid"] = false.ToString()
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                                _logger.Engine.ExecutionReplaySkipped(
+                                    executionId,
+                                    "Snapshot not found.");
 
-                    return CreateInvalidReport(
-                        executionId,
-                        request.Mode,
-                        executionFound: true,
-                        snapshotFound: true,
-                        validationError);
-                }
+                                await RecordReplayLedgerEventAsync(
+                                        executionId,
+                                        AiDecisionLedgerEvents.Replay.Failed,
+                                        AiDecisionLedgerOutcome.Failed,
+                                        "Replay failed because snapshot was not found.",
+                                        new Dictionary<string, string>
+                                        {
+                                            ["replay.mode"] = request.Mode.ToString(),
+                                            ["snapshot.found"] = false.ToString()
+                                        },
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
 
-                IReadOnlyList<AiDecisionLedgerEntry> ledgerEvents = Array.Empty<AiDecisionLedgerEntry>();
+                                return CreateInvalidReport(
+                                    executionId,
+                                    request.Mode,
+                                    executionFound: false,
+                                    snapshotFound: false,
+                                    "Snapshot not found.");
+                            }
 
-                var replayReport = await _replayExecutor.ExecuteAsync(
-                        request,
-                        snapshot.Record!,
-                        snapshot.State!,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                            await RecordReplayLedgerEventAsync(
+                                    executionId,
+                                    AiDecisionLedgerEvents.Replay.Started,
+                                    AiDecisionLedgerOutcome.Started,
+                                    "Replay snapshot loaded.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["replay.mode"] = request.Mode.ToString(),
+                                        ["snapshot.found"] = true.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
 
-                ledgerEvents = await LoadLedgerEventsAsync(
-                        request,
-                        executionId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                            AiExecutionSnapshotRemapper.Remap(snapshot);
 
-                await RecordReplayLedgerEventAsync(
-                        executionId,
-                        AiDecisionLedgerEvents.Replay.ComparisonCompleted,
-                        replayReport.ReplayValid
-                            ? AiDecisionLedgerOutcome.Completed
-                            : AiDecisionLedgerOutcome.Failed,
-                        replayReport.ReplayValid
-                            ? "Replay validation completed successfully."
-                            : replayReport.FailureReason,
-                        new Dictionary<string, string>
-                        {
-                            ["replay.mode"] = request.Mode.ToString(),
-                            ["replay.valid"] = replayReport.ReplayValid.ToString(),
-                            ["fingerprint.matches"] = replayReport.FingerprintMatches.ToString(),
-                            ["issues.count"] = replayReport.Issues.Count.ToString()
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                            var validationError = ValidateSnapshot(snapshot);
 
-                var existingRecord = await GetExistingRecordAsync(
-                        executionId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (existingRecord is not null &&
-                    IsCompatibleExistingRecord(existingRecord, snapshot.Record!))
-                {
-                    _logger.Engine.ExecutionReplaySkipped(
-                        executionId,
-                        "Replay skipped because a compatible runtime execution already exists.");
-
-                    await RecordReplayLedgerEventAsync(
-                            executionId,
-                            AiDecisionLedgerEvents.Replay.Completed,
-                            AiDecisionLedgerOutcome.Completed,
-                            "Replay completed without restore because a compatible runtime execution already exists.",
-                            new Dictionary<string, string>
+                            if (validationError is not null)
                             {
-                                ["replay.mode"] = request.Mode.ToString(),
-                                ["replay.valid"] = replayReport.ReplayValid.ToString(),
-                                ["restore.applied"] = false.ToString(),
-                                ["existing.execution"] = true.ToString()
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                                _logger.Engine.ExecutionReplaySkipped(
+                                    executionId,
+                                    validationError);
 
-                    return MergeReport(
-                        replayReport,
-                        request.Mode,
-                        existingRecord.PipelineName,
-                        existingRecord.Status.ToString(),
-                        ledgerEvents);
-                }
+                                await RecordReplayLedgerEventAsync(
+                                        executionId,
+                                        AiDecisionLedgerEvents.Replay.Failed,
+                                        AiDecisionLedgerOutcome.Failed,
+                                        validationError,
+                                        new Dictionary<string, string>
+                                        {
+                                            ["replay.mode"] = request.Mode.ToString(),
+                                            ["snapshot.found"] = true.ToString(),
+                                            ["snapshot.valid"] = false.ToString()
+                                        },
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
 
-                if (request.Mode == AiExecutionReplayMode.AuditOnly)
-                {
-                    await RecordReplayLedgerEventAsync(
-                            executionId,
-                            AiDecisionLedgerEvents.Replay.Completed,
-                            AiDecisionLedgerOutcome.Completed,
-                            "Replay audit completed without restoring runtime state.",
-                            new Dictionary<string, string>
+                                return CreateInvalidReport(
+                                    executionId,
+                                    request.Mode,
+                                    executionFound: true,
+                                    snapshotFound: true,
+                                    validationError);
+                            }
+
+                            IReadOnlyList<AiDecisionLedgerEntry> ledgerEvents = Array.Empty<AiDecisionLedgerEntry>();
+                            IReadOnlyList<AiTraceEvent> timelineEvents = Array.Empty<AiTraceEvent>();
+
+                            var replayReport = await _replayExecutor.ExecuteAsync(
+                                    request,
+                                    snapshot.Record!,
+                                    snapshot.State!,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            ledgerEvents = await LoadLedgerEventsAsync(
+                                    request,
+                                    executionId,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            timelineEvents = LoadTimelineEvents(
+                                request,
+                                executionId);
+
+                            await RecordReplayLedgerEventAsync(
+                                    executionId,
+                                    AiDecisionLedgerEvents.Replay.ComparisonCompleted,
+                                    replayReport.ReplayValid
+                                        ? AiDecisionLedgerOutcome.Completed
+                                        : AiDecisionLedgerOutcome.Failed,
+                                    replayReport.ReplayValid
+                                        ? "Replay validation completed successfully."
+                                        : replayReport.FailureReason,
+                                    new Dictionary<string, string>
+                                    {
+                                        ["replay.mode"] = request.Mode.ToString(),
+                                        ["replay.valid"] = replayReport.ReplayValid.ToString(),
+                                        ["fingerprint.matches"] = replayReport.FingerprintMatches.ToString(),
+                                        ["issues.count"] = replayReport.Issues.Count.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            var existingRecord = await GetExistingRecordAsync(
+                                    executionId,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            if (existingRecord is not null &&
+                                IsCompatibleExistingRecord(existingRecord, snapshot.Record!))
                             {
-                                ["replay.mode"] = request.Mode.ToString(),
-                                ["replay.valid"] = replayReport.ReplayValid.ToString(),
-                                ["restore.applied"] = false.ToString()
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                                _logger.Engine.ExecutionReplaySkipped(
+                                    executionId,
+                                    "Replay skipped because a compatible runtime execution already exists.");
 
-                    return MergeReport(
-                        replayReport,
-                        request.Mode,
-                        snapshot.Record!.PipelineName,
-                        snapshot.Record.Status.ToString(),
-                        ledgerEvents);
-                }
+                                await RecordReplayLedgerEventAsync(
+                                        executionId,
+                                        AiDecisionLedgerEvents.Replay.Completed,
+                                        AiDecisionLedgerOutcome.Completed,
+                                        "Replay completed without restore because a compatible runtime execution already exists.",
+                                        new Dictionary<string, string>
+                                        {
+                                            ["replay.mode"] = request.Mode.ToString(),
+                                            ["replay.valid"] = replayReport.ReplayValid.ToString(),
+                                            ["restore.applied"] = false.ToString(),
+                                            ["existing.execution"] = true.ToString()
+                                        },
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
 
-                AiExecutionReplayPreparation.Prepare(
-                    snapshot.Record,
-                    snapshot.State);
+                                return MergeReport(
+                                    replayReport,
+                                    request.Mode,
+                                    existingRecord.PipelineName,
+                                    existingRecord.Status.ToString(),
+                                    ledgerEvents,
+                                    timelineEvents);
+                            }
 
-                await RestoreToAuthoritativeStoreAsync(
-                        snapshot.Record!,
-                        snapshot.State!,
-                        cancellationToken)
+                            if (request.Mode == AiExecutionReplayMode.AuditOnly)
+                            {
+                                await RecordReplayLedgerEventAsync(
+                                        executionId,
+                                        AiDecisionLedgerEvents.Replay.Completed,
+                                        AiDecisionLedgerOutcome.Completed,
+                                        "Replay audit completed without restoring runtime state.",
+                                        new Dictionary<string, string>
+                                        {
+                                            ["replay.mode"] = request.Mode.ToString(),
+                                            ["replay.valid"] = replayReport.ReplayValid.ToString(),
+                                            ["restore.applied"] = false.ToString()
+                                        },
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                return MergeReport(
+                                    replayReport,
+                                    request.Mode,
+                                    snapshot.Record!.PipelineName,
+                                    snapshot.Record.Status.ToString(),
+                                    ledgerEvents,
+                                    timelineEvents);
+                            }
+
+                            AiExecutionReplayPreparation.Prepare(
+                                snapshot.Record,
+                                snapshot.State);
+
+                            await RestoreToAuthoritativeStoreAsync(
+                                    snapshot.Record!,
+                                    snapshot.State!,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            await _snapshotService.TryPersistAsync(
+                                    snapshot.Record!,
+                                    snapshot.State!,
+                                    snapshot.ContextKey,
+                                    snapshot.ContextSnapshot,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            _logger.Engine.ExecutionReplayRestored(
+                                executionId,
+                                snapshot.Record!.Status,
+                                snapshot.State?.Steps?.Count ?? 0);
+
+                            await RecordReplayLedgerEventAsync(
+                                    executionId,
+                                    AiDecisionLedgerEvents.Replay.Completed,
+                                    AiDecisionLedgerOutcome.Completed,
+                                    "Replay completed and runtime state was restored.",
+                                    new Dictionary<string, string>
+                                    {
+                                        ["replay.mode"] = request.Mode.ToString(),
+                                        ["replay.valid"] = replayReport.ReplayValid.ToString(),
+                                        ["restore.applied"] = true.ToString()
+                                    },
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            return MergeReport(
+                                replayReport,
+                                request.Mode,
+                                snapshot.Record.PipelineName,
+                                snapshot.Record.Status.ToString(),
+                                ledgerEvents,
+                                timelineEvents);
+                        })
                     .ConfigureAwait(false);
-
-                await _snapshotService.TryPersistAsync(
-                        snapshot.Record!,
-                        snapshot.State!,
-                        snapshot.ContextKey,
-                        snapshot.ContextSnapshot,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                _logger.Engine.ExecutionReplayRestored(
-                    executionId,
-                    snapshot.Record!.Status,
-                    snapshot.State?.Steps?.Count ?? 0);
-
-                await RecordReplayLedgerEventAsync(
-                        executionId,
-                        AiDecisionLedgerEvents.Replay.Completed,
-                        AiDecisionLedgerOutcome.Completed,
-                        "Replay completed and runtime state was restored.",
-                        new Dictionary<string, string>
-                        {
-                            ["replay.mode"] = request.Mode.ToString(),
-                            ["replay.valid"] = replayReport.ReplayValid.ToString(),
-                            ["restore.applied"] = true.ToString()
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                return MergeReport(
-                    replayReport,
-                    request.Mode,
-                    snapshot.Record.PipelineName,
-                    snapshot.Record.Status.ToString(),
-                    ledgerEvents);
             }
             catch (Exception exception)
             {
@@ -480,42 +505,25 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         }
 
         /// <summary>
-        /// Applies replay execution context and optional ledger information
+        /// Applies replay execution context and optional observability information
         /// to a replay validation report.
         /// </summary>
-        /// <param name="replayReport">
-        /// The replay validation report produced by the replay executor.
-        /// </param>
-        /// <param name="mode">
-        /// The replay mode used for the operation.
-        /// </param>
-        /// <param name="pipelineName">
-        /// The pipeline name associated with the execution.
-        /// </param>
-        /// <param name="status">
-        /// The execution status associated with the execution.
-        /// </param>
-        /// <param name="ledgerEvents">
-        /// The execution-correlated ledger events loaded for the replay.
-        /// </param>
-        /// <returns>
-        /// A replay report enriched with execution context information.
-        /// </returns>
         private static AiExecutionReplayReport MergeReport(
             AiExecutionReplayReport replayReport,
             AiExecutionReplayMode mode,
             string? pipelineName,
             string? status,
-            IReadOnlyList<AiDecisionLedgerEntry> ledgerEvents)
+            IReadOnlyList<AiDecisionLedgerEntry> ledgerEvents,
+            IReadOnlyList<AiTraceEvent> timelineEvents)
         {
             ArgumentNullException.ThrowIfNull(replayReport);
             ArgumentNullException.ThrowIfNull(ledgerEvents);
+            ArgumentNullException.ThrowIfNull(timelineEvents);
 
             return new AiExecutionReplayReport
             {
                 ExecutionId = replayReport.ExecutionId,
                 Mode = mode,
-
                 PipelineName = pipelineName,
                 PipelineKey = replayReport.PipelineKey,
                 Status = status,
@@ -547,7 +555,8 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                 Issues = replayReport.Issues,
                 Steps = replayReport.Steps,
 
-                LedgerEvents = ledgerEvents
+                LedgerEvents = ledgerEvents,
+                TimelineEvents = timelineEvents
             };
         }
 
@@ -584,7 +593,7 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
         }
 
         /// <summary>
-        /// Loads replay ledger events when requested.
+        /// Loads execution-correlated decision ledger events when requested.
         /// </summary>
         private async Task<IReadOnlyList<AiDecisionLedgerEntry>> LoadLedgerEventsAsync(
             AiExecutionReplayRequest request,
@@ -601,6 +610,21 @@ namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
                     executionId,
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Loads execution trace timeline events when requested.
+        /// </summary>
+        private IReadOnlyList<AiTraceEvent> LoadTimelineEvents(
+            AiExecutionReplayRequest request,
+            string executionId)
+        {
+            if (!request.IncludeTimeline)
+            {
+                return Array.Empty<AiTraceEvent>();
+            }
+
+            return _traceTimeline.Get(executionId);
         }
     }
 }
