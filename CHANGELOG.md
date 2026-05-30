@@ -9,16 +9,24 @@ This project follows a deterministic runtime and observability model designed fo
 ## [Unreleased]
 
 ### Added
-- Added replay control-plane abstraction for adapter-neutral replay operations.
-- Added `IAiReplayControlPlane` with replay, audit, restore, report, ledger, and timeline operations.
-- Added runtime replay control-plane facade over `IAiExecutionReplayService`.
-- Added DI registration for control-plane services.
-- Added unit tests validating safe replay mode mapping.
+- Added local runtime queue control-plane contracts.
+- Added runtime queue control-plane facade over the existing background controller.
+- Added run and queue visibility snapshots for control-plane/dashboard use.
+- Added `GetRunStateAsync` and `GetQueueStateAsync` to the runtime pipeline background controller.
+- Added run-id based queue cancellation APIs.
+- Added local queue pause/resume APIs without requiring a run handle.
+- Added unit tests for runtime queue control-plane operations.
 
-### Safety
-- Replay, audit, report, ledger, and timeline operations map to `AuditOnly`.
-- Restore maps to `ResumeIncomplete`.
-- `ReExecuteAll` is intentionally not exposed by the replay control-plane facade.
+### Changed
+- Updated queue pause/resume ledger correlation to resolve the best active controller run when called externally.
+- Preserved execution-correlated queue ledger events for active runs.
+
+### Notes
+- Local queues remain preserved.
+- RuntimeQueue ControlPlane controls only the local queue of one runtime instance.
+- It does not represent the future shared/global queue.
+- It does not replace DAG execution, workers, or runtime instance logic.
+
 
 ---
 

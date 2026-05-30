@@ -703,6 +703,18 @@ namespace Multiplexed.AI.Runtime.Execution.Control
             return state;
         }
 
+        /// <inheritdoc />
+        public async Task<AiExecutionControlState?> GetStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateExecutionId(executionId);
+
+            return await _store
+                .GetAsync(executionId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         private static AiExecutionControlState ApplyMarkCancelled(
             AiExecutionControlState? existing,
             string executionId,

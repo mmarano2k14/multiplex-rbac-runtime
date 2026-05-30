@@ -459,12 +459,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.MultipleInstance.Wo
                 }
 
                 await controller.PauseQueueAsync(
-                    handle,
                     reason: "test-pause",
                     requestedBy: "integration-test");
 
                 await controller.ResumeQueueAsync(
-                    handle,
                     requestedBy: "integration-test");
 
                 var final = await handle.Completion.WaitAsync(scenario.Timeout);

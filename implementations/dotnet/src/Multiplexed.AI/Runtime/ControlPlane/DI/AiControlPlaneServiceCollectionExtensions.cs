@@ -1,9 +1,15 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.ControlPlane.Execution;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
+using Multiplexed.AI.Runtime.ControlPlane.Execution;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.Replay;
+using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
+using Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue;
 using Multiplexed.AI.Runtime.Observability.Logging;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.DI
@@ -21,10 +27,14 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
         /// </summary>
         /// <param name="services">The service collection.</param>
         /// <param name="configureReplay">Optional replay control-plane options configuration.</param>
+        /// <param name="configureExecution">Optional execution control-plane options configuration.</param>
+        /// <param name="configureRuntimeQueue">Optional local runtime queue control-plane options configuration.</param>
         /// <returns>The same service collection for chaining.</returns>
         public static IServiceCollection AddAiControlPlane(
             this IServiceCollection services,
-            Action<AiReplayControlOptions>? configureReplay = null)
+            Action<AiReplayControlOptions>? configureReplay = null,
+            Action<AiExecutionControlPlaneOptions>? configureExecution = null,
+            Action<AiRuntimeQueueControlPlaneOptions>? configureRuntimeQueue = null)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -37,8 +47,31 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
                 services.Configure(configureReplay);
             }
 
+            if (configureExecution is null)
+            {
+                services.AddOptions<AiExecutionControlPlaneOptions>();
+            }
+            else
+            {
+                services.Configure(configureExecution);
+            }
+
+            if (configureRuntimeQueue is null)
+            {
+                services.AddOptions<AiRuntimeQueueControlPlaneOptions>();
+            }
+            else
+            {
+                services.Configure(configureRuntimeQueue);
+            }
+
             services.TryAddSingleton<IAiControlPlaneObserver, NoopAiControlPlaneObserver>();
+
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
+            services.TryAddSingleton<IAiExecutionControlPlane, AiExecutionControlPlane>();
+            services.TryAddSingleton<IAiRuntimeQueueControlPlane, AiRuntimeQueueControlPlane>();
+
+            services.TryAddSingleton<IAiRuntimeInstanceRegistry, InMemoryAiRuntimeInstanceRegistry>();
 
             return services;
         }

@@ -309,7 +309,6 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
         /// <inheritdoc />
         public async Task PauseQueueAsync(
-            AiRuntimeWorkerRunHandle handle,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
@@ -322,6 +321,8 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     "The runtime pipeline background controller has been stopped and cannot be paused.");
             }
 
+            var ledgerTarget = ResolveQueueLedgerTarget();
+
             _queuePaused = true;
             _queuePauseReason = reason;
             _queuePauseRequestedBy = requestedBy;
@@ -331,9 +332,9 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 $"[AI PIPELINE CONTROLLER] Queue paused. Reason='{reason}', RequestedBy='{requestedBy}'.");
 
             await RecordQueueLedgerAsync(
-                    executionId: handle.ExecutionId ?? handle.RunId,
-                    runId: handle.RunId,
-                    pipelineName: "pipeline-controller",
+                    executionId: ledgerTarget.ExecutionId,
+                    runId: ledgerTarget.RunId,
+                    pipelineName: ledgerTarget.PipelineName,
                     eventType: AiDecisionLedgerEvents.Queue.Paused,
                     outcome: AiDecisionLedgerOutcome.Applied,
                     reason: reason ?? "Pipeline controller queue paused.",
@@ -348,7 +349,6 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
         /// <inheritdoc />
         public async Task ResumeQueueAsync(
-            AiRuntimeWorkerRunHandle handle,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
@@ -360,7 +360,9 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     "The runtime pipeline background controller has been stopped and cannot be resumed.");
             }
 
+            var ledgerTarget = ResolveQueueLedgerTarget();
             var pausedSince = _queuePausedAtUtc;
+            var previousRequestedBy = _queuePauseRequestedBy;
 
             _queuePaused = false;
             _queuePauseReason = null;
@@ -371,16 +373,16 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                 $"[AI PIPELINE CONTROLLER] Queue resumed. RequestedBy='{requestedBy}', PausedSinceUtc='{pausedSince:O}'.");
 
             await RecordQueueLedgerAsync(
-                    executionId: handle.ExecutionId ?? handle.RunId,
-                    runId: handle.RunId,
-                    pipelineName: "pipeline-controller",
+                    executionId: ledgerTarget.ExecutionId,
+                    runId: ledgerTarget.RunId,
+                    pipelineName: ledgerTarget.PipelineName,
                     eventType: AiDecisionLedgerEvents.Queue.Resumed,
                     outcome: AiDecisionLedgerOutcome.Applied,
                     reason: "Pipeline controller queue resumed.",
                     metadata: new Dictionary<string, string>
                     {
                         ["requested.by"] = requestedBy ?? string.Empty,
-                        ["previous.requested.by"] = requestedBy ?? string.Empty,
+                        ["previous.requested.by"] = previousRequestedBy ?? string.Empty,
                         ["paused.since.utc"] = pausedSince?.ToString("O") ?? string.Empty
                     },
                     cancellationToken: cancellationToken)
@@ -389,15 +391,15 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 
         /// <inheritdoc />
         public async Task<bool> CancelQueuedRunAsync(
-            AiRuntimeWorkerRunHandle handle,
+            string runId,
             string? reason = null,
             string? requestedBy = null,
             CancellationToken cancellationToken = default)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(handle.RunId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!_queuedRuns.TryRemove(handle.RunId, out var queuedRun))
+            if (!_queuedRuns.TryRemove(runId, out var queuedRun))
             {
                 return false;
             }
@@ -412,23 +414,23 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             queuedRun.CompletionSource.TrySetResult(
                 new AiExecutionRecord
                 {
-                    ExecutionId = handle.ExecutionId ?? handle.RunId,
+                    ExecutionId = queuedRun.Handle.ExecutionId ?? queuedRun.Handle.RunId,
                     Status = AiExecutionStatus.Cancelled,
                     CompletedAtUtc = DateTime.UtcNow
                 });
 
             _logger.Engine.LogInformation(
-                $"[AI PIPELINE CONTROLLER] Queued run cancelled. RunId='{handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+                $"[AI PIPELINE CONTROLLER] Queued run cancelled. RunId='{runId}', Pipeline='{queuedRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
 
             await RecordRunLedgerAsync(
-                    handle.RunId,
+                    runId,
                     queuedRun.Request.PipelineName,
                     AiDecisionLedgerEvents.Run.Cancelled,
                     AiDecisionLedgerOutcome.Cancelled,
                     reason: reason ?? "Queued pipeline run cancelled before execution creation.",
                     metadata: new Dictionary<string, string>
                     {
-                        ["run.id"] = handle.RunId,
+                        ["run.id"] = runId,
                         ["pipeline.name"] = queuedRun.Request.PipelineName,
                         ["requested.by"] = requestedBy ?? string.Empty,
                         ["run.status"] = AiRuntimeWorkerRunStatus.Cancelled.ToString()
@@ -450,7 +452,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             cancellationToken.ThrowIfCancellationRequested();
 
             var queuedCancelled = await CancelQueuedRunAsync(
-                    handle,
+                    handle.RunId,
                     reason,
                     requestedBy,
                     cancellationToken)
@@ -679,6 +681,110 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         },
                         CancellationToken.None)
                     .ConfigureAwait(false);
+            }
+        }
+
+        /// <inheritdoc />
+        public Task<AiRuntimePipelineRunState?> GetRunStateAsync(
+            string runId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(runId))
+            {
+                throw new ArgumentException(
+                    "RunId is required.",
+                    nameof(runId));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_runningRuns.TryGetValue(runId, out var runningRun))
+            {
+                return Task.FromResult<AiRuntimePipelineRunState?>(
+                    CreateRunState(
+                        runningRun.Handle,
+                        runningRun.Request.PipelineName,
+                        _runtimeInstanceIdentity.RuntimeInstanceId,
+                        isQueued: false,
+                        isRunning: true));
+            }
+
+            if (_queuedRuns.TryGetValue(runId, out var queuedRun))
+            {
+                return Task.FromResult<AiRuntimePipelineRunState?>(
+                    CreateRunState(
+                        queuedRun.Handle,
+                        queuedRun.Request.PipelineName,
+                        _runtimeInstanceIdentity.RuntimeInstanceId,
+                        isQueued: true,
+                        isRunning: false));
+            }
+
+            return Task.FromResult<AiRuntimePipelineRunState?>(null);
+        }
+
+        /// <inheritdoc />
+        public Task<AiRuntimePipelineQueueState> GetQueueStateAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var queuedRunCount = _queuedRuns.Count;
+            var runningRunCount = _runningRuns.Count;
+            var activeRunCount = _activeRuns.Count;
+            var availableRunSlots = Math.Max(0, _options.MaxConcurrentRuns - runningRunCount);
+
+            return Task.FromResult(new AiRuntimePipelineQueueState
+            {
+                RuntimeInstanceId = _observability.Correlation?.Current?.RuntimeInstanceId,
+                IsPaused = _queuePaused,
+                QueuedRunCount = queuedRunCount,
+                RunningRunCount = runningRunCount,
+                ActiveRunCount = activeRunCount,
+                QueueCapacity = _options.QueueCapacity,
+                MaxConcurrentRuns = _options.MaxConcurrentRuns,
+                AvailableRunSlots = availableRunSlots,
+                CanAcceptRun =
+                    !_queuePaused &&
+                    queuedRunCount < _options.QueueCapacity &&
+                    availableRunSlots > 0,
+                SnapshotAtUtc = DateTimeOffset.UtcNow
+            });
+        }
+
+        /// <summary>
+        /// Marks all queued, not-yet-started runs as cancelled.
+        /// </summary>
+        private void CancelQueuedRuns()
+        {
+            foreach (var item in _queuedRuns.ToArray())
+            {
+                if (!_queuedRuns.TryRemove(item.Key, out var queuedRun))
+                {
+                    continue;
+                }
+
+                queuedRun.Handle.MarkCancelled();
+
+                queuedRun.CompletionSource.TrySetCanceled();
+
+                _logger.Engine.LogInformation(
+                    $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
+            }
+
+            while (_queue.Reader.TryRead(out var queuedRun))
+            {
+                if (queuedRun.Handle.Status == AiRuntimeWorkerRunStatus.Cancelled)
+                {
+                    continue;
+                }
+
+                queuedRun.Handle.MarkCancelled();
+
+                queuedRun.CompletionSource.TrySetCanceled();
+
+                _logger.Engine.LogInformation(
+                    $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
             }
         }
 
@@ -1070,40 +1176,69 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             return state;
         }
 
-        /// <summary>
-        /// Marks all queued, not-yet-started runs as cancelled.
-        /// </summary>
-        private void CancelQueuedRuns()
+        /// <inheritdoc />
+        public async Task<bool> CancelRunAsync(
+            string runId,
+            string? reason = null,
+            string? requestedBy = null,
+            CancellationToken cancellationToken = default)
         {
-            foreach (var item in _queuedRuns.ToArray())
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var queuedCancelled = await CancelQueuedRunAsync(
+                    runId,
+                    reason,
+                    requestedBy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (queuedCancelled)
             {
-                if (!_queuedRuns.TryRemove(item.Key, out var queuedRun))
-                {
-                    continue;
-                }
-
-                queuedRun.Handle.MarkCancelled();
-
-                queuedRun.CompletionSource.TrySetCanceled();
-
-                _logger.Engine.LogInformation(
-                    $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
+                return true;
             }
 
-            while (_queue.Reader.TryRead(out var queuedRun))
+            if (!_runningRuns.TryGetValue(runId, out var runningRun))
             {
-                if (queuedRun.Handle.Status == AiRuntimeWorkerRunStatus.Cancelled)
-                {
-                    continue;
-                }
-
-                queuedRun.Handle.MarkCancelled();
-
-                queuedRun.CompletionSource.TrySetCanceled();
-
-                _logger.Engine.LogInformation(
-                    $"[AI PIPELINE CONTROLLER] Queued run cancelled before execution. RunId='{queuedRun.Handle.RunId}', Pipeline='{queuedRun.Request.PipelineName}'.");
+                return false;
             }
+
+            var executionId = runningRun.Handle.ExecutionId;
+
+            if (string.IsNullOrWhiteSpace(executionId))
+            {
+                return false;
+            }
+
+            await _executionControlService.CancelExecutionAsync(
+                    executionId,
+                    reason ?? "Running pipeline run cancellation requested.",
+                    requestedBy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            _logger.Engine.LogInformation(
+                $"[AI PIPELINE CONTROLLER] Running run cancellation requested. RunId='{runId}', ExecutionId='{executionId}', Pipeline='{runningRun.Request.PipelineName}', RequestedBy='{requestedBy}', Reason='{reason}'.");
+
+            await RecordRunLedgerAsync(
+                    runId,
+                    runningRun.Request.PipelineName,
+                    AiDecisionLedgerEvents.Run.Cancelled,
+                    AiDecisionLedgerOutcome.Applied,
+                    executionId,
+                    reason ?? "Running pipeline run cancellation delegated to execution control.",
+                    new Dictionary<string, string>
+                    {
+                        ["run.id"] = runId,
+                        ["execution.id"] = executionId,
+                        ["pipeline.name"] = runningRun.Request.PipelineName,
+                        ["requested.by"] = requestedBy ?? string.Empty,
+                        ["run.status"] = runningRun.Handle.Status.ToString()
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return true;
         }
 
         /// <summary>
@@ -1148,6 +1283,149 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Determines whether the specified run is currently present in the local pending queue.
+        /// </summary>
+        /// <param name="runId">The runtime run identifier.</param>
+        /// <returns>
+        /// <c>true</c> when the run is currently queued locally; otherwise, <c>false</c>.
+        /// </returns>
+        private bool IsQueued(
+            string runId)
+        {
+            return _queuedRuns.ContainsKey(runId);
+        }
+
+        /// <summary>
+        /// Creates an immutable visibility snapshot for a runtime pipeline run.
+        /// </summary>
+        /// <param name="handle">The runtime worker run handle.</param>
+        /// <param name="pipelineName">The pipeline name associated with the run.</param>
+        /// <param name="runtimeInstanceId">The runtime instance id that owns the local run.</param>
+        /// <param name="isQueued">Indicates whether the run is currently queued locally.</param>
+        /// <param name="isRunning">Indicates whether the run is currently running locally.</param>
+        /// <returns>An immutable runtime pipeline run state snapshot.</returns>
+        private static AiRuntimePipelineRunState CreateRunState(
+            AiRuntimeWorkerRunHandle handle,
+            string? pipelineName,
+            string? runtimeInstanceId,
+            bool isQueued,
+            bool isRunning)
+        {
+            return new AiRuntimePipelineRunState
+            {
+                RunId = handle.RunId,
+                ExecutionId = handle.ExecutionId,
+                PipelineKey = pipelineName,
+                PipelineName = pipelineName,
+                RuntimeInstanceId = runtimeInstanceId,
+                Status = ToStableRunStatus(handle.Status),
+                IsQueued = isQueued,
+                IsRunning = isRunning,
+                CancellationRequested = handle.Status == AiRuntimeWorkerRunStatus.Cancelled,
+                QueuedAtUtc = null,
+                StartedAtUtc = null,
+                CompletedAtUtc = handle.Completion.IsCompleted
+                    ? DateTimeOffset.UtcNow
+                    : null,
+                FailureReason = handle.Completion.IsFaulted
+                    ? handle.Completion.Exception?.GetBaseException().Message
+                    : null
+            };
+        }
+
+        /// <summary>
+        /// Converts the runtime worker run status to a stable lowercase status value.
+        /// </summary>
+        /// <param name="status">The runtime worker run status.</param>
+        /// <returns>
+        /// A stable lowercase status value suitable for control-plane visibility,
+        /// diagnostics, logs, dashboards, and future Kubernetes observability.
+        /// </returns>
+        private static string ToStableRunStatus(
+            AiRuntimeWorkerRunStatus status)
+        {
+            return status switch
+            {
+                AiRuntimeWorkerRunStatus.Queued => "queued",
+                AiRuntimeWorkerRunStatus.CreatingExecution => "creating-execution",
+                AiRuntimeWorkerRunStatus.Running => "running",
+                AiRuntimeWorkerRunStatus.Completed => "completed",
+                AiRuntimeWorkerRunStatus.Failed => "failed",
+                AiRuntimeWorkerRunStatus.Cancelled => "cancelled",
+
+                _ => "unknown"
+            };
+        }
+
+        /// <summary>
+        /// Resolves the best available ledger correlation target for a queue-level operation.
+        /// </summary>
+        /// <returns>
+        /// A queue ledger target using an active execution when possible, otherwise a queued run,
+        /// otherwise a controller-level fallback.
+        /// </returns>
+        /// <remarks>
+        /// Queue pause and resume are queue-level operations, but when a run is already active
+        /// they should remain execution-correlated for diagnostics, replay visibility,
+        /// and integration-test visibility.
+        /// </remarks>
+        private QueueLedgerTarget ResolveQueueLedgerTarget()
+        {
+            var runningRun = _runningRuns.Values.FirstOrDefault(
+                run => !string.IsNullOrWhiteSpace(run.Handle.ExecutionId));
+
+            if (runningRun is not null)
+            {
+                return new QueueLedgerTarget
+                {
+                    ExecutionId = runningRun.Handle.ExecutionId!,
+                    RunId = runningRun.Handle.RunId,
+                    PipelineName = runningRun.Request.PipelineName
+                };
+            }
+
+            var queuedRun = _queuedRuns.Values.FirstOrDefault();
+
+            if (queuedRun is not null)
+            {
+                return new QueueLedgerTarget
+                {
+                    ExecutionId = queuedRun.Handle.ExecutionId ?? queuedRun.Handle.RunId,
+                    RunId = queuedRun.Handle.RunId,
+                    PipelineName = queuedRun.Request.PipelineName
+                };
+            }
+
+            return new QueueLedgerTarget
+            {
+                ExecutionId = "pipeline-controller",
+                RunId = "pipeline-controller",
+                PipelineName = "pipeline-controller"
+            };
+        }
+
+        /// <summary>
+        /// Represents the ledger correlation target for a queue-level controller operation.
+        /// </summary>
+        private sealed class QueueLedgerTarget
+        {
+            /// <summary>
+            /// Gets the execution identifier used to index the ledger event.
+            /// </summary>
+            public required string ExecutionId { get; init; }
+
+            /// <summary>
+            /// Gets the controller run identifier associated with the queue event.
+            /// </summary>
+            public required string RunId { get; init; }
+
+            /// <summary>
+            /// Gets the pipeline name associated with the queue event.
+            /// </summary>
+            public required string PipelineName { get; init; }
         }
     }
 }

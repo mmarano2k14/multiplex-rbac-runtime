@@ -32,7 +32,6 @@
   <ItemGroup>
     <Folder Include="Runtime\Execution\State\" />
     <Folder Include="Runtime\Retry\" />
-    <Folder Include="Unit\ControlPlane\Observability\" />
   </ItemGroup>
 
 </Project>

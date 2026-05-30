@@ -2,8 +2,11 @@
 using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
+using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
 using Multiplexed.AI.Runtime.Observability.Logging;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
@@ -77,6 +80,39 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
             Assert.Equal(
                 typeof(LoggedAiControlPlaneObserver),
                 observerDescriptors[0].ImplementationType);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_RuntimeQueue_ControlPlane()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiRuntimeQueueControlPlane));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_RuntimeInstance_Registry()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiRuntimeInstanceRegistry));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+            Assert.Equal(
+                typeof(InMemoryAiRuntimeInstanceRegistry),
+                descriptor.ImplementationType);
         }
     }
 }

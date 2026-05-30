@@ -153,5 +153,28 @@ namespace Multiplexed.Abstractions.AI.Execution.Control
             string executionId,
             string? requestedBy = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Gets the current durable execution control state for an execution.
+        /// </summary>
+        /// <param name="executionId">The durable execution identifier.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>
+        /// The current execution control state, or <c>null</c> when no control state
+        /// exists for the execution.
+        /// </returns>
+        /// <remarks>
+        /// This method is intended for control-plane, dashboard, MCP, HTTP API,
+        /// CLI, and diagnostic use.
+        ///
+        /// It is different from <see cref="CheckCanAdvanceAsync"/>:
+        /// <see cref="CheckCanAdvanceAsync"/> returns a runtime-facing decision used
+        /// by workers/runners to determine whether execution may continue advancing,
+        /// while this method returns the durable control state for visibility,
+        /// audit, and operator diagnostics.
+        /// </remarks>
+        Task<AiExecutionControlState?> GetStateAsync(
+            string executionId,
+            CancellationToken cancellationToken = default);
     }
 }
