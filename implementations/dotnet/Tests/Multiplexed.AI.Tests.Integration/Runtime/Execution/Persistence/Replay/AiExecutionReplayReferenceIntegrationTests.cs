@@ -501,6 +501,207 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Persistence.Replay
             }
         }
 
+        [RedisFact]
+        public async Task Replay_Should_Print_Ledger_And_Timeline_Report()
+        {
+            var scenario = ReplayReferenceScenario.Steps100();
+
+            await using var host = await CreateReplayReferenceHostAsync(
+                scenario);
+
+            var controller = host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>();
+            var dagStore = host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>();
+            var replayService = host.ServiceProvider.GetRequiredService<IAiExecutionReplayService>();
+            var finalizedHook = host.ServiceProvider.GetRequiredService<DistributedChaosRunFinalizedHook>();
+
+            await controller.StartAsync();
+
+            AiRuntimeWorkerRunHandle? handle = null;
+
+            try
+            {
+                handle = await controller.EnqueueAsync(
+                    new AiRuntimePipelineRunRequest
+                    {
+                        PipelineName = scenario.PipelineName,
+                        PipelineDefinition = scenario.PipelineDefinition,
+                        Input = new
+                        {
+                            candidateId = scenario.CandidateId,
+                            source = scenario.Name,
+                            replayDiagnostic = true
+                        }
+                    });
+
+                Assert.NotNull(handle);
+
+                var final = await handle.Completion.WaitAsync(
+                    scenario.Timeout);
+
+                Assert.NotNull(final);
+                Assert.Equal(AiExecutionStatus.Completed, final.Status);
+                Assert.False(string.IsNullOrWhiteSpace(handle.ExecutionId));
+
+                var executionId = handle.ExecutionId!;
+
+                var finalized = await finalizedHook.WaitAsync(
+                    scenario.SnapshotWaitTimeout);
+
+                Assert.Equal(executionId, finalized.ExecutionId);
+
+                await CleanupDagExecutionAsync(
+                    host.ServiceProvider,
+                    executionId);
+
+                var report = await replayService.ReplayAsync(
+                    new AiExecutionReplayRequest
+                    {
+                        ExecutionId = executionId,
+                        Mode = AiExecutionReplayMode.ResumeIncomplete,
+                        IncludeLedgerEvents = true,
+                        IncludeTimeline = true,
+                        IncludeStepDetails = true,
+                        ValidatePayloadReferences = true
+                    });
+
+                Assert.True(report.ReplayValid);
+                Assert.NotEmpty(report.LedgerEvents);
+                Assert.NotEmpty(report.TimelineEvents);
+
+                _output.WriteLine("");
+                _output.WriteLine("============================================================");
+                _output.WriteLine("REPLAY DIAGNOSTIC REPORT");
+                _output.WriteLine("============================================================");
+                _output.WriteLine($"ExecutionId:            {report.ExecutionId}");
+                _output.WriteLine($"Mode:                   {report.Mode}");
+                _output.WriteLine($"PipelineName:           {report.PipelineName}");
+                _output.WriteLine($"Status:                 {report.Status}");
+                _output.WriteLine($"ReplayValid:            {report.ReplayValid}");
+                _output.WriteLine($"FingerprintFound:       {report.FingerprintFound}");
+                _output.WriteLine($"FingerprintMatches:     {report.FingerprintMatches}");
+                _output.WriteLine($"DependencyGraphValid:   {report.DependencyGraphValid}");
+                _output.WriteLine($"StepStateValid:         {report.StepStateValid}");
+                _output.WriteLine($"PayloadReferencesValid: {report.PayloadReferencesValid}");
+                _output.WriteLine($"TotalSteps:             {report.TotalSteps}");
+                _output.WriteLine($"CompletedSteps:         {report.CompletedSteps}");
+                _output.WriteLine($"FailedSteps:            {report.FailedSteps}");
+                _output.WriteLine($"WaitingForRetrySteps:   {report.WaitingForRetrySteps}");
+                _output.WriteLine($"RunningSteps:           {report.RunningSteps}");
+                _output.WriteLine($"RetryCount:             {report.RetryCount}");
+                _output.WriteLine($"RecoveryCount:          {report.RecoveryCount}");
+                _output.WriteLine($"Issues:                 {report.Issues.Count}");
+                _output.WriteLine($"StepReports:            {report.Steps.Count}");
+                _output.WriteLine($"LedgerEvents:           {report.LedgerEvents.Count}");
+                _output.WriteLine($"TimelineEvents:         {report.TimelineEvents.Count}");
+
+                if (report.ReplayMetadata is not null)
+                {
+                    _output.WriteLine("");
+                    _output.WriteLine("REPLAY METADATA");
+                    _output.WriteLine("------------------------------------------------------------");
+                    _output.WriteLine($"Metadata.ExecutionId:        {report.ReplayMetadata.ExecutionId}");
+                    _output.WriteLine($"Metadata.FingerprintVersion: {report.ReplayMetadata.FingerprintVersion}");
+                    _output.WriteLine($"Metadata.GeneratedAtUtc:     {report.ReplayMetadata.GeneratedAtUtc:O}");
+                    _output.WriteLine($"Metadata.Fingerprint:        {report.ReplayMetadata.Fingerprint}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("LEDGER SUMMARY BY CATEGORY / EVENT / OUTCOME");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in report.LedgerEvents
+                    .GroupBy(entry => new
+                    {
+                        entry.Category,
+                        entry.EventType,
+                        entry.Outcome
+                    })
+                    .OrderBy(group => group.Key.Category.ToString(), StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.EventType, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Outcome.ToString(), StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.EventType,-40} | {group.Key.Outcome,-12} | Count={group.Count()}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("REPLAY LEDGER EVENTS");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var entry in report.LedgerEvents
+                    .Where(entry => entry.Category == AiDecisionLedgerCategory.Replay)
+                    .OrderBy(entry => entry.TimestampUtc))
+                {
+                    _output.WriteLine(
+                        $"{entry.TimestampUtc:O} | " +
+                        $"{entry.EventType,-40} | " +
+                        $"{entry.Outcome,-12} | " +
+                        $"Worker={entry.CorrelationContext.WorkerId} | " +
+                        $"StepId={entry.CorrelationContext.StepId} | " +
+                        $"StepKey={entry.CorrelationContext.StepKey} | " +
+                        $"Reason={entry.Reason}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("TRACE SUMMARY BY CATEGORY / NAME");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var group in report.TimelineEvents
+                    .GroupBy(traceEvent => new
+                    {
+                        traceEvent.Category,
+                        traceEvent.Name
+                    })
+                    .OrderBy(group => group.Key.Category, StringComparer.Ordinal)
+                    .ThenBy(group => group.Key.Name, StringComparer.Ordinal))
+                {
+                    _output.WriteLine(
+                        $"{group.Key.Category,-16} | {group.Key.Name,-40} | Count={group.Count()}");
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("TRACE TIMELINE SAMPLE");
+                _output.WriteLine("------------------------------------------------------------");
+
+                foreach (var traceEvent in report.TimelineEvents
+                    .OrderBy(traceEvent => traceEvent.TimestampUtc)
+                    .Take(80))
+                {
+                    var runtime = traceEvent.Correlation?.Runtime;
+
+                    var tags = traceEvent.Tags is null || traceEvent.Tags.Count == 0
+                        ? string.Empty
+                        : string.Join(
+                            ", ",
+                            traceEvent.Tags
+                                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                                .Select(pair => $"{pair.Key}={pair.Value}"));
+
+                    _output.WriteLine(
+                        $"{traceEvent.TimestampUtc:O} | " +
+                        $"{traceEvent.Category,-16} | " +
+                        $"{traceEvent.Name,-40} | " +
+                        $"ExecutionId={runtime?.ExecutionId ?? traceEvent.ExecutionId} | " +
+                        $"RunId={runtime?.RunId ?? string.Empty} | " +
+                        $"Worker={runtime?.WorkerId ?? string.Empty} | " +
+                        $"StepId={traceEvent.StepId ?? traceEvent.Correlation?.StepId ?? string.Empty} | " +
+                        $"StepKey={traceEvent.Correlation?.StepKey ?? string.Empty} | " +
+                        $"Tags=[{tags}]");
+                }
+            }
+            finally
+            {
+                await controller.StopAsync();
+
+                if (!string.IsNullOrWhiteSpace(handle?.ExecutionId))
+                {
+                    await CleanupDagExecutionAsync(
+                        host.ServiceProvider,
+                        handle.ExecutionId);
+                }
+            }
+        }
+
         private static async Task<AiDagExecutionEngineTestHost> CreateReplayReferenceHostAsync(
             ReplayReferenceScenario scenario)
         {
