@@ -1,8 +1,10 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
+using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.Replay;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.Replay
@@ -199,6 +201,8 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.Replay
             Assert.Equal("operator-1", result.RequestedBy);
         }
 
+
+
         [Fact]
         public async Task ReplayAsync_Should_Set_Duration_And_Timestamps()
         {
@@ -215,13 +219,50 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.Replay
             Assert.True(result.DurationMs >= 0);
         }
 
+        [Fact]
+        public async Task ReplayAsync_Should_Record_ControlPlane_Started_And_Completed_Events()
+        {
+            var fakeReplayService = new FakeExecutionReplayService();
+            var observer = new CapturingControlPlaneObserver();
+
+            var controlPlane = new AiReplayControlPlane(
+                fakeReplayService,
+                Options.Create(new AiReplayControlOptions()),
+                observer);
+
+            var result = await controlPlane.ReplayAsync(new AiReplayControlRequest
+            {
+                ExecutionId = "execution-1",
+                Operation = AiReplayOperation.Replay,
+                CorrelationId = "correlation-1",
+                Source = "unit-test",
+                RequestedBy = "tester"
+            });
+
+            Assert.True(result.Success);
+
+            Assert.Equal(2, observer.Events.Count);
+
+            Assert.Equal(AiControlPlaneEventType.OperationStarted, observer.Events[0].EventType);
+            Assert.Equal(AiControlPlaneEventType.OperationCompleted, observer.Events[1].EventType);
+
+            Assert.All(observer.Events, controlPlaneEvent =>
+            {
+                Assert.Equal(AiControlPlaneArea.Replay, controlPlaneEvent.Area);
+                Assert.Equal("Replay", controlPlaneEvent.Operation);
+                Assert.Equal("execution-1", controlPlaneEvent.Correlation.ExecutionId);
+                Assert.Equal("correlation-1", controlPlaneEvent.Correlation.CorrelationId);
+            });
+        }
+
         private static AiReplayControlPlane CreateControlPlane(
             IAiExecutionReplayService replayService,
             AiReplayControlOptions? options = null)
         {
             return new AiReplayControlPlane(
                 replayService,
-                Options.Create(options ?? new AiReplayControlOptions()));
+                Options.Create(options ?? new AiReplayControlOptions()),
+                new NoopAiControlPlaneObserver());
         }
 
         private sealed class FakeExecutionReplayService : IAiExecutionReplayService
@@ -242,6 +283,20 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.Replay
                     SnapshotFound = true,
                     ReplayValid = true
                 });
+            }
+        }
+
+        private sealed class CapturingControlPlaneObserver : IAiControlPlaneObserver
+        {
+            public List<AiControlPlaneEvent> Events { get; } = new();
+
+            public Task RecordAsync(
+                AiControlPlaneEvent controlPlaneEvent,
+                CancellationToken cancellationToken = default)
+            {
+                Events.Add(controlPlaneEvent);
+
+                return Task.CompletedTask;
             }
         }
     }

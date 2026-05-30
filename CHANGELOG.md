@@ -6,6 +6,22 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [Unreleased]
+
+### Added
+- Added replay control-plane abstraction for adapter-neutral replay operations.
+- Added `IAiReplayControlPlane` with replay, audit, restore, report, ledger, and timeline operations.
+- Added runtime replay control-plane facade over `IAiExecutionReplayService`.
+- Added DI registration for control-plane services.
+- Added unit tests validating safe replay mode mapping.
+
+### Safety
+- Replay, audit, report, ledger, and timeline operations map to `AuditOnly`.
+- Restore maps to `ResumeIncomplete`.
+- `ReExecuteAll` is intentionally not exposed by the replay control-plane facade.
+
+---
+
 ## [1.0.5.4] - 2026-05-30 Runtime Package Structure and Observability Reorganization
 
 ### Replay Package Reorganization

@@ -1,8 +1,10 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
+using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Tracing;
 
@@ -33,13 +35,16 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
     {
         private readonly IAiExecutionReplayService _replayService;
         private readonly AiReplayControlOptions _options;
+        private readonly IAiControlPlaneObserver _observer;
 
         public AiReplayControlPlane(
             IAiExecutionReplayService replayService,
-            IOptions<AiReplayControlOptions> options)
+            IOptions<AiReplayControlOptions> options,
+            IAiControlPlaneObserver observer)
         {
             _replayService = replayService ?? throw new ArgumentNullException(nameof(replayService));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+            _observer = observer ?? throw new ArgumentNullException(nameof(observer));
         }
 
         public Task<AiReplayControlResult> ExecuteAsync(
@@ -128,11 +133,18 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
             CancellationToken cancellationToken)
         {
             var startedAtUtc = DateTimeOffset.UtcNow;
+            var correlation = CreateCorrelation(request);
 
             try
             {
                 ValidateRequest(request);
                 EnsureEnabled(operation);
+
+                await RecordStartedAsync(
+                    request,
+                    operation,
+                    correlation,
+                    cancellationToken).ConfigureAwait(false);
 
                 var replayRequest = new AiExecutionReplayRequest
                 {
@@ -149,7 +161,17 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
                     .ConfigureAwait(false);
 
                 var completedAtUtc = DateTimeOffset.UtcNow;
+                var durationMs = CalculateDurationMs(startedAtUtc, completedAtUtc);
                 var success = !request.StrictDeterminism || report.ReplayValid;
+
+                await RecordCompletedAsync(
+                    request,
+                    operation,
+                    correlation,
+                    success,
+                    report.ReplayValid,
+                    durationMs,
+                    cancellationToken).ConfigureAwait(false);
 
                 return new AiReplayControlResult
                 {
@@ -168,18 +190,27 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
                         ? BuildDiagnostics(report)
                         : Array.Empty<string>(),
                     Deterministic = report.ReplayValid,
-                    CorrelationId = request.CorrelationId,
+                    CorrelationId = correlation.CorrelationId,
                     RuntimeInstanceId = request.RuntimeInstanceId,
                     RequestedBy = request.RequestedBy,
                     StartedAtUtc = startedAtUtc,
                     CompletedAtUtc = completedAtUtc,
-                    DurationMs = CalculateDurationMs(startedAtUtc, completedAtUtc),
+                    DurationMs = durationMs,
                     FailureReason = success ? null : report.FailureReason
                 };
             }
             catch (Exception exception) when (_options.ReturnFailureResultInsteadOfThrowing)
             {
                 var completedAtUtc = DateTimeOffset.UtcNow;
+                var durationMs = CalculateDurationMs(startedAtUtc, completedAtUtc);
+
+                await RecordFailedAsync(
+                    request,
+                    operation,
+                    correlation,
+                    exception,
+                    durationMs,
+                    cancellationToken).ConfigureAwait(false);
 
                 return new AiReplayControlResult
                 {
@@ -190,12 +221,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
                     Diagnostics = request?.IncludeDiagnostics == true
                         ? new[] { exception.Message }
                         : Array.Empty<string>(),
-                    CorrelationId = request?.CorrelationId,
+                    CorrelationId = correlation.CorrelationId,
                     RuntimeInstanceId = request?.RuntimeInstanceId,
                     RequestedBy = request?.RequestedBy,
                     StartedAtUtc = startedAtUtc,
                     CompletedAtUtc = completedAtUtc,
-                    DurationMs = CalculateDurationMs(startedAtUtc, completedAtUtc),
+                    DurationMs = durationMs,
                     FailureReason = exception.Message
                 };
             }
@@ -216,6 +247,114 @@ namespace Multiplexed.AI.Runtime.ControlPlane.Replay
                 _ => throw new NotSupportedException(
                     $"Replay control-plane operation '{operation}' is not supported.")
             };
+        }
+
+        private static AiRuntimeExecutionCorrelationContext CreateCorrelation(
+            AiReplayControlRequest request)
+        {
+            return new AiRuntimeExecutionCorrelationContext
+            {
+                CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId)
+                    ? Guid.NewGuid().ToString("N")
+                    : request.CorrelationId,
+
+                ExecutionId = request.ExecutionId,
+                RuntimeInstanceId = request.RuntimeInstanceId
+            };
+        }
+
+        private async Task RecordStartedAsync(
+            AiReplayControlRequest request,
+            AiReplayOperation operation,
+            AiRuntimeExecutionCorrelationContext correlation,
+            CancellationToken cancellationToken)
+        {
+            await _observer.RecordAsync(
+                new AiControlPlaneEvent
+                {
+                    EventType = AiControlPlaneEventType.OperationStarted,
+                    Area = AiControlPlaneArea.Replay,
+                    Operation = operation.ToString(),
+                    Correlation = correlation,
+                    Message = $"Replay control-plane operation '{operation}' started.",
+                    Properties = new Dictionary<string, object?>
+                    {
+                        ["source"] = request.Source,
+                        ["requestedBy"] = request.RequestedBy,
+                        ["reason"] = request.Reason,
+                        ["includeReport"] = request.IncludeReport,
+                        ["includeLedger"] = request.IncludeLedger,
+                        ["includeTimeline"] = request.IncludeTimeline,
+                        ["includeDiagnostics"] = request.IncludeDiagnostics,
+                        ["strictDeterminism"] = request.StrictDeterminism
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task RecordCompletedAsync(
+            AiReplayControlRequest request,
+            AiReplayOperation operation,
+            AiRuntimeExecutionCorrelationContext correlation,
+            bool success,
+            bool replayValid,
+            long durationMs,
+            CancellationToken cancellationToken)
+        {
+            await _observer.RecordAsync(
+                new AiControlPlaneEvent
+                {
+                    EventType = success
+                        ? AiControlPlaneEventType.OperationCompleted
+                        : AiControlPlaneEventType.OperationDiagnostic,
+
+                    Area = AiControlPlaneArea.Replay,
+                    Operation = operation.ToString(),
+                    Outcome = success
+                        ? AiControlPlaneOperationOutcome.Succeeded
+                        : AiControlPlaneOperationOutcome.CompletedWithIssues,
+
+                    Correlation = correlation,
+                    DurationMs = durationMs,
+                    Message = BuildResultMessage(operation, success, replayValid),
+                    Properties = new Dictionary<string, object?>
+                    {
+                        ["source"] = request.Source,
+                        ["requestedBy"] = request.RequestedBy,
+                        ["replayValid"] = replayValid,
+                        ["strictDeterminism"] = request.StrictDeterminism
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task RecordFailedAsync(
+            AiReplayControlRequest? request,
+            AiReplayOperation operation,
+            AiRuntimeExecutionCorrelationContext correlation,
+            Exception exception,
+            long durationMs,
+            CancellationToken cancellationToken)
+        {
+            await _observer.RecordAsync(
+                new AiControlPlaneEvent
+                {
+                    EventType = AiControlPlaneEventType.OperationFailed,
+                    Area = AiControlPlaneArea.Replay,
+                    Operation = operation.ToString(),
+                    Outcome = AiControlPlaneOperationOutcome.Failed,
+                    Correlation = correlation,
+                    DurationMs = durationMs,
+                    Message = $"Replay control-plane operation '{operation}' failed.",
+                    FailureReason = exception.Message,
+                    Properties = new Dictionary<string, object?>
+                    {
+                        ["source"] = request?.Source,
+                        ["requestedBy"] = request?.RequestedBy,
+                        ["exceptionType"] = exception.GetType().Name
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         private static void ValidateRequest(AiReplayControlRequest request)
