@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
@@ -125,6 +126,21 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
 
             var descriptor = services.SingleOrDefault(service =>
                 service.ServiceType == typeof(IAiRuntimeInstanceControlPlane));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_RunAdmission_Controller()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiRunAdmissionController));
 
             Assert.NotNull(descriptor);
             Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);

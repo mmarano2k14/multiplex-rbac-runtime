@@ -1,10 +1,12 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Execution;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
+using Multiplexed.AI.Runtime.ControlPlane.Admission;
 using Multiplexed.AI.Runtime.ControlPlane.Execution;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.Replay;
@@ -30,13 +32,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
         /// <param name="configureExecution">Optional execution control-plane options configuration.</param>
         /// <param name="configureRuntimeQueue">Optional local runtime queue control-plane options configuration.</param>
         /// <param name="configureRuntimeInstance">Optional runtime instance control-plane options configuration.</param>
+        /// <param name="configureAdmission">Optional run admission options configuration.</param>
         /// <returns>The same service collection for chaining.</returns>
         public static IServiceCollection AddAiControlPlane(
             this IServiceCollection services,
             Action<AiReplayControlOptions>? configureReplay = null,
             Action<AiExecutionControlPlaneOptions>? configureExecution = null,
             Action<AiRuntimeQueueControlPlaneOptions>? configureRuntimeQueue = null,
-            Action<AiRuntimeInstanceControlPlaneOptions>? configureRuntimeInstance = null)
+            Action<AiRuntimeInstanceControlPlaneOptions>? configureRuntimeInstance = null,
+            Action<AiRunAdmissionOptions>? configureAdmission = null)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -76,6 +80,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
                 services.Configure(configureRuntimeInstance);
             }
 
+            if (configureAdmission is null)
+            {
+                services.AddOptions<AiRunAdmissionOptions>();
+            }
+            else
+            {
+                services.Configure(configureAdmission);
+            }
+
             services.TryAddSingleton<IAiControlPlaneObserver, NoopAiControlPlaneObserver>();
 
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
@@ -84,6 +97,8 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
 
             services.TryAddSingleton<IAiRuntimeInstanceRegistry, InMemoryAiRuntimeInstanceRegistry>();
             services.TryAddSingleton<IAiRuntimeInstanceControlPlane, AiRuntimeInstanceControlPlane>();
+
+            services.TryAddSingleton<IAiRunAdmissionController, AiRunAdmissionController>();
 
             return services;
         }
