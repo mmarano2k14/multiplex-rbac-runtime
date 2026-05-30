@@ -6,6 +6,156 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
+## [1.0.5.4] - 2026-05-29 Replay API, Deterministic Validation, Ledger and Timeline Diagnostics
+
+- Added the first complete Replay API implementation for deterministic AI runtime executions.
+- Added replay-as-validation support for persisted executions using an `ExecutionId`.
+- Added replay modes for:
+  - audit-only validation
+  - restore from persisted snapshot / resume incomplete execution state
+
+- Added replay request and report models:
+  - `AiExecutionReplayRequest`
+  - `AiExecutionReplayReport`
+  - `AiExecutionReplayIssue`
+  - `AiExecutionReplayStepReport`
+  - `AiExecutionReplaySummaryResponse`
+  - `AiExecutionReplayMetadata`
+
+- Added replay service abstractions and implementation:
+  - `IAiExecutionReplayService`
+  - `DefaultAiExecutionReplayService<TContext>`
+  - `IAiExecutionReplayExecutor`
+  - `DefaultAiExecutionReplayExecutor`
+  - `IAiExecutionReplayValidator`
+  - `DefaultAiExecutionReplayValidator`
+  - `IAiExecutionReplayPayloadValidator`
+  - `DefaultAiExecutionReplayPayloadValidator`
+
+- Added replay snapshot loading from persisted execution snapshots.
+- Added replay snapshot validation for:
+  - missing snapshot
+  - missing execution record
+  - missing execution state
+  - execution id mismatch between snapshot, record, and state
+  - missing pipeline name
+
+- Added deterministic replay validation for:
+  - original fingerprint presence
+  - reconstructed fingerprint generation
+  - original fingerprint vs reconstructed fingerprint comparison
+  - dependency graph validity
+  - final step state validity
+  - payload reference validity
+  - archived / compacted / evicted payload reference validation
+  - replay validity summary
+
+- Added replay metadata exposure inside replay reports.
+- Added persisted replay metadata propagation into `AiExecutionReplayReport`.
+- Fixed replay report merging so metadata is preserved after service-level report enrichment.
+
+- Added execution-correlated replay ledger events:
+  - `replay.requested`
+  - `replay.started`
+  - `replay.comparison_completed`
+  - `replay.completed`
+  - `replay.failed`
+
+- Added replay lifecycle recording through the existing execution-correlated decision ledger.
+- Added replay ledger correlation using:
+  - execution id
+  - replay pipeline key
+  - replay step id
+  - replay worker id
+
+- Added optional replay report enrichment with decision ledger events.
+- Added `IncludeLedgerEvents` support to load all execution-correlated ledger entries for the replayed execution.
+- Added replay report support for full ledger event output through `LedgerEvents`.
+
+- Added optional replay report enrichment with trace timeline events.
+- Added `IncludeTimeline` support using the existing `IAiTraceTimeline`.
+- Added replay report support for full trace timeline output through `TimelineEvents`.
+- Confirmed that completed trace records are already projected into the timeline by the trace recorder.
+
+- Added replay tracing around the replay operation through `TraceExecutionAsync`.
+- Added replay execution tracing without changing the tracing runtime core.
+- Added replay exception handling that records failed replay lifecycle events before rethrowing unexpected exceptions.
+
+- Added replay report merge support for:
+  - replay metadata
+  - ledger events
+  - timeline events
+  - replay execution mode
+  - pipeline name
+  - execution status
+
+- Added replay support for restoring execution records and execution state into the authoritative runtime store.
+- Added DAG-store-aware replay restore support when `IAiDagExecutionStore` is available.
+- Added fallback restore support through the generic execution store.
+- Added compatible existing execution detection to avoid unnecessary restore when the runtime already contains the same execution.
+- Added audit-only replay path that validates without restoring runtime state.
+- Added invalid replay report generation instead of throwing for normal replay validation failures.
+
+- Added replay integration test coverage for:
+  - 100-step distributed chaos replay
+  - distributed multi-worker execution
+  - retry validation
+  - retention compaction and eviction validation
+  - snapshot persistence
+  - live execution bundle deletion
+  - restore from persisted snapshot
+  - deterministic fingerprint validation
+  - metadata propagation
+  - ledger event loading
+  - timeline event loading
+  - audit-only replay without restore
+  - missing snapshot failure handling
+  - disabled ledger/timeline loading when not requested
+
+- Added reference replay integration test:
+  - `AiExecutionReplayReferenceIntegrationTests`
+  - `Replay_Should_Restore_100_Step_Distributed_Chaos_With_Metadata_Ledger_Timeline_And_Fingerprint`
+
+- Added replay diagnostic output test:
+  - `Replay_Should_Print_Ledger_And_Timeline_Report`
+
+- Added diagnostic replay output showing:
+  - replay validity
+  - fingerprint validity
+  - dependency graph validity
+  - step state validity
+  - payload reference validity
+  - replay metadata
+  - step counts
+  - retry counts
+  - ledger event counts
+  - timeline event counts
+  - ledger summary by category / event / outcome
+  - replay lifecycle ledger events
+  - trace summary by category / operation
+  - trace timeline samples
+
+- Validated replay against a real distributed 100-step execution producing:
+  - 100 completed steps
+  - 0 failed final steps
+  - 11 retry attempts
+  - more than 2,000 execution-correlated ledger events
+  - more than 1,300 trace timeline events
+  - matching deterministic replay fingerprint
+  - valid dependency graph
+  - valid step states
+  - valid payload references
+
+- Known follow-up items:
+  - Add a runtime-level replay controller abstraction before exposing HTTP APIs.
+  - Add an ASP.NET / HTTP Replay API project later without coupling the core runtime library to ASP.NET.
+  - Add replay endpoints for summary, ledger, timeline, audit, and restore.
+  - Add replay console scenario support.
+  - Add replay dashboard support for timeline, ledger, metadata, and fingerprint comparison.
+  - Consider splitting large replay diagnostics from normal CI if test output becomes too verbose.
+
+---
+
 ## [1.0.5.3] - 2026-05-28 Correlated Metrics and Tracing Storage Modes
 
 - Added runtime execution correlation support for metrics and tracing.

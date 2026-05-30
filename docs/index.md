@@ -19,10 +19,11 @@ Focused AI runtime documentation is organized under:
 | [`../README.md`](../README.md) | Main repository entry point. Short, professional overview. |
 | [`runtime-internals.md`](runtime-internals.md) | Complete technical reference preserved from the original README. |
 | [`enterprise-readiness.md`](enterprise-readiness.md) | Matrix of enterprise AI execution questions and runtime answers. |
-| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime decision ledger, audit foundations, retention auditability, and replay-ledger roadmap direction. |
-| [`ai/observability.md`](ai/observability.md) | High-level observability index summarizing ledger, tracing, metrics, logs, correlation, and current observability roadmap. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime decision ledger, audit foundations, retention auditability, and replay lifecycle event correlation. |
+| [`ai/observability.md`](ai/observability.md) | High-level observability index summarizing ledger, tracing, metrics, logs, correlation, replay diagnostics, and current observability roadmap. |
 | [`ai/observability-tracing.md`](ai/observability-tracing.md) | Runtime tracing, trace timelines, correlation, trace storage modes, Mongo trace persistence, MemoryAndMongo mode, and tracing improvements. |
 | [`ai/runtime-metrics.md`](ai/runtime-metrics.md) | Runtime metric domains, metric storage modes, worker/retention/storage/resolver/hot-state/policy metrics, and metrics improvements. |
+| [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Deterministic Replay Engine V1, snapshot restore, fingerprint validation, replay metadata, ledger/timeline diagnostics, and replay TODO/improvements. |
 | [`comparison-existing-tools.md`](comparison-existing-tools.md) | Ecosystem positioning against agent frameworks, workflow engines, orchestration tools, observability platforms, and distributed infrastructure. |
 | [`roadmap.md`](roadmap.md) | Project roadmap organized by phases. |
 
@@ -52,7 +53,8 @@ Start with:
 5. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
 6. [`ai/observability-tracing.md`](ai/observability-tracing.md)
 7. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
-8. [`runtime-internals.md`](runtime-internals.md)
+8. [`ai/replay-and-audit.md`](ai/replay-and-audit.md)
+9. [`runtime-internals.md`](runtime-internals.md)
 
 This path gives both the strategic positioning and the complete technical depth.
 
@@ -68,8 +70,9 @@ Start with:
 6. [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md)
 7. [`ai/observability-tracing.md`](ai/observability-tracing.md)
 8. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
-9. [`runtime-internals.md`](runtime-internals.md)
-10. [`roadmap.md`](roadmap.md)
+9. [`ai/replay-and-audit.md`](ai/replay-and-audit.md)
+10. [`runtime-internals.md`](runtime-internals.md)
+11. [`roadmap.md`](roadmap.md)
 
 This path gives the current architecture, configuration model, context resolution layer, extension model, technical reference, and next planned improvements.
 
@@ -96,7 +99,8 @@ It includes detailed explanations of:
 - execution control state
 - runtime queue control
 - observability
-- replay and snapshot foundations
+- deterministic replay engine and snapshot foundations
+- replay metadata, ledger, and timeline diagnostics
 - execution-correlated decision ledger
 - roadmap and vision
 
@@ -133,9 +137,27 @@ This document explains:
 - retention and compaction auditability
 - snapshot persistence audit events
 - finalization race visibility
-- replay-ledger future direction
+- replay lifecycle event correlation
 
-The document also explains why replay-specific ledger events are intentionally deferred until the official Replay API.
+The document also explains how replay lifecycle events are correlated with the same execution ledger model used by the rest of the runtime.
+
+### [`ai/replay-and-audit.md`](ai/replay-and-audit.md)
+
+Deterministic replay and audit foundations.
+
+This document explains:
+
+- replay-as-validation using persisted snapshots
+- audit-only replay
+- restore from persisted snapshot
+- deterministic replay fingerprint comparison
+- replay metadata
+- payload reference validation
+- replay lifecycle ledger events
+- replay timeline diagnostics
+- 100-step distributed replay reference tests
+- replay log examples
+- replay TODO and improvement roadmap
 
 ### [`ai/observability.md`](ai/observability.md)
 
@@ -205,11 +227,11 @@ The project roadmap organized into phases:
 - Phase 0 — Documentation Restructure
 - Phase 1 — Enterprise Demo
 - Phase 2 — Real Enterprise Sample
-- Phase 3 — Observability Dashboard
-- Phase 4 — Kubernetes Deployment
+- Phase 3 — Correlated Observability, Tracing, and Metrics
+- Phase 4 — Kubernetes Deployment Demo
 - Phase 5 — Public API / SDK Polish
-- Phase 6 — Replay / Audit APIs and Decision Lineage
-- Phase 7 — Advanced Replay Validation and Audit Tooling
+- Phase 6 — Deterministic Replay Engine and Audit Foundations
+- Phase 7 — Replay Controller, HTTP APIs, Dashboard, and Operational Tooling
 - Phase 8 — Cost and Provider Governance
 - Phase 9 — Articles / Public Positioning
 
@@ -223,7 +245,7 @@ The project roadmap organized into phases:
 | [`ai/distributed-execution.md`](ai/distributed-execution.md) | Distributed workers, Redis coordination, claims, leases, and deterministic convergence. |
 | [`ai/execution-control-state.md`](ai/execution-control-state.md) | ExecutionId-level pause, resume, cancel, waiting-for-input, and control-state behavior. |
 | [`ai/runtime-queue-control.md`](ai/runtime-queue-control.md) | RunId-level background controller queue control, hot enqueue, and RunId versus ExecutionId separation. |
-| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime auditability, runtime decision recording, and future replay/audit foundations. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime auditability, runtime decision recording, and replay lifecycle event correlation. |
 | [`ai/observability.md`](ai/observability.md) | High-level observability index and summary linking ledger, tracing, metrics, and logs. |
 
 ---
@@ -234,8 +256,8 @@ The project roadmap organized into phases:
 |---|---|
 | [`ai/retry-and-recovery.md`](ai/retry-and-recovery.md) | Retry engine, retry state, WaitingForRetry, Redis Lua transitions, and stale worker recovery. |
 | [`ai/retention-and-compaction.md`](ai/retention-and-compaction.md) | Bounded hot state, compaction, eviction, payload externalization, and resolver safety. |
-| [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Snapshot, replay, deterministic replay validation, replay foundations, and future replay APIs. |
-| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated decision ledger, retention auditability, control-state auditability, and future replay lineage direction. |
+| [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Deterministic Replay Engine V1, snapshot restore, audit-only replay, fingerprint validation, replay metadata, ledger/timeline diagnostics, and future replay APIs. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated decision ledger, retention auditability, control-state auditability, and replay lifecycle evidence. |
 
 ---
 
@@ -266,7 +288,7 @@ The project roadmap organized into phases:
 
 ## Documentation Status
 
-Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, execution-correlated decision ledger foundations, observability/tracing foundations, and runtime metrics foundations.
+Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, deterministic replay and audit foundations, execution-correlated decision ledger foundations, observability/tracing foundations, and runtime metrics foundations.
 
 The complete technical reference remains preserved in:
 
@@ -292,5 +314,5 @@ When adding new documentation:
 4. Keep links relative to this file.
 5. Preserve the complete technical reference in `runtime-internals.md`.
 6. Clearly distinguish between implemented features, available foundations, and planned work.
-7. Keep replay-specific ledger documentation separated from the current runtime ledger foundations until the official Replay API is implemented.
-8. Keep observability overview, tracing, and runtime metrics linked together because they describe different layers of the same runtime visibility model.
+7. Keep replay documentation connected to ledger, tracing, and metrics because Replay V1 now exposes replay metadata, replay lifecycle ledger events, and trace timeline diagnostics.
+8. Keep observability overview, tracing, runtime metrics, and replay/audit linked together because they describe different layers of the same runtime visibility model.

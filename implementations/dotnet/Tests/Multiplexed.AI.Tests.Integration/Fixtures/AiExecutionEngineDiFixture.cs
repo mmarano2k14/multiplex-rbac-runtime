@@ -351,9 +351,11 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Fixtures
                 options.Snapshots.Mongo.DatabaseName = databaseName;
 
                 services.AddAiExecutionSnapshots(options);
-                services.AddAiExecutionReplay();
+                
                 services.AddAiStepsFromAssemblies(typeof(AiRuntimeAssemblyMarker).Assembly);
             }
+
+            services.AddAiExecutionReplay();
         }
 
         /// <summary>

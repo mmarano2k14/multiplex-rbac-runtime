@@ -1,8 +1,8 @@
 # Replay and Audit
 
-Status: Documentation split in progress.
+Status: Replay engine V1 implemented and validated. Documentation still evolving for controller, HTTP API, dashboard, and operational tooling.
 
-This document describes the replay, snapshot, deterministic validation, and audit foundations of the Deterministic AI Runtime.
+This document describes the replay, snapshot, deterministic validation, decision ledger, trace timeline, and audit foundations of the Deterministic AI Runtime.
 
 The complete technical reference is currently preserved in:
 
@@ -25,6 +25,9 @@ When an AI workflow completes, fails, is cancelled, or needs to be investigated,
 - what state was persisted?
 - can the execution be restored?
 - can the restored execution be compared with the original?
+- which replay lifecycle events were recorded?
+- which ledger events belong to the same execution?
+- which trace timeline events explain runtime behavior?
 - can a future system audit decisions and runtime transitions?
 
 The replay and audit foundations exist to support these questions.
@@ -33,30 +36,116 @@ The replay and audit foundations exist to support these questions.
 
 ## Current Scope
 
-The runtime currently provides replay and audit foundations.
+The runtime currently provides a validated Replay Engine V1 and audit foundations.
 
-Current validated foundations include:
+Current validated capabilities include:
 
 - terminal snapshots
 - snapshot persistence
 - replay restore from snapshot
 - replay idempotency when live execution already exists
+- audit-only replay without restoring live state
 - deterministic replay validation
 - execution fingerprints
+- persisted replay metadata
+- original fingerprint vs reconstructed fingerprint comparison
+- dependency graph validation
+- step state validation
+- payload reference validation
+- archived / compacted / evicted payload reference validation
 - restored execution comparison
 - retention-compatible resolver reconstruction foundations
 - terminal snapshot and replay compatibility with bounded hot state
+- execution-correlated replay ledger events
+- optional replay report enrichment with decision ledger events
+- optional replay report enrichment with trace timeline events
+- replay diagnostic output for ledger and timeline inspection
+- reference 100-step distributed replay integration tests
 
 The following are planned future capabilities:
 
-- official replay API
-- durable decision ledger
-- richer control/action history
-- full audit timeline
-- replay tooling and UI
+- runtime-level replay controller abstraction
+- HTTP Replay API
+- replay summary endpoint
+- replay ledger endpoint
+- replay timeline endpoint
+- replay dashboard / UI
+- exportable replay reports
+- richer decision lineage tooling
 - compliance-oriented decision inspection
 
-This document intentionally separates implemented foundations from planned audit platform capabilities.
+This document intentionally separates the implemented Replay Engine V1 from future replay operations, API, dashboard, and audit platform capabilities.
+
+---
+
+## Replay Engine V1
+
+Replay Engine V1 is implemented as replay-as-validation and replay-as-restoration.
+
+It does not re-run external providers.
+It does not call LLMs again.
+It does not replay side effects.
+It reconstructs and validates persisted execution state.
+
+Replay Engine V1 can answer:
+
+- can the snapshot be loaded?
+- can execution state be reconstructed?
+- can dependency ordering be validated?
+- can final step states be validated?
+- can payload references be validated?
+- can compacted or evicted payload references still be resolved?
+- does the reconstructed fingerprint match the original persisted fingerprint?
+- can the runtime restore execution state from durable snapshot data?
+- can an audit-only report be produced without restoring state?
+- can ledger events and trace timeline events be attached to the replay report?
+
+Implemented replay modes include:
+
+- `AuditOnly`
+- `ResumeIncomplete` / restore from persisted snapshot
+
+The current Replay Engine V1 is library-level runtime functionality.
+A future controller and HTTP API will expose this capability externally.
+
+---
+
+## Replay Report Model
+
+The replay report exposes a deterministic audit view of an execution.
+
+The report includes:
+
+- execution id
+- replay mode
+- pipeline name
+- pipeline key
+- execution status
+- execution found flag
+- snapshot found flag
+- fingerprint found flag
+- original fingerprint
+- reconstructed fingerprint
+- fingerprint match result
+- dependency graph validation result
+- step state validation result
+- payload reference validation result
+- replay validity
+- failure reason
+- total step count
+- completed step count
+- failed step count
+- waiting-for-retry step count
+- running step count
+- retry count
+- recovery count
+- replay issues
+- step-level replay details
+- optional decision ledger events
+- optional trace timeline events
+- persisted replay metadata
+
+This makes replay useful both for automated validation and for human diagnostics.
 
 ---
 
@@ -467,27 +556,36 @@ These foundations make future audit and decision ledger capabilities possible.
 
 ---
 
-## Durable Decision Ledger Direction
+## Execution-Correlated Decision Ledger
 
-A durable decision ledger is planned.
+The runtime now includes an execution-correlated decision ledger foundation.
 
-It should eventually record important runtime decisions such as:
+It records important runtime decisions such as:
 
+- execution lifecycle decisions
+- run lifecycle decisions
+- queue decisions
 - step claim decisions
 - retry decisions
 - recovery decisions
 - retention decisions
 - concurrency admission decisions
-- cancellation decisions
-- human input submission
-- replay restore events
+- payload externalization and rehydration events
+- snapshot persistence events
+- replay lifecycle events
 - terminal finalization decisions
 
-The decision ledger should be durable, queryable, and suitable for debugging or audit workflows.
+Replay currently records lifecycle events such as:
 
-This is not the same as simple logs.
+- `replay.requested`
+- `replay.started`
+- `replay.comparison_completed`
+- `replay.completed`
+- `replay.failed`
 
-A decision ledger should provide structured evidence of runtime decisions.
+The decision ledger is not the same as simple logs.
+
+A decision ledger provides structured evidence of runtime decisions, correlated by execution context and suitable for diagnostics, replay reports, and future audit workflows.
 
 ---
 
@@ -503,7 +601,7 @@ Logs can be:
 - difficult to correlate
 - transient depending on infrastructure
 
-A future durable decision ledger should be:
+The execution-correlated decision ledger should continue to be:
 
 - structured
 - persisted
@@ -512,7 +610,7 @@ A future durable decision ledger should be:
 - replay-aware
 - queryable
 
-The current runtime already has the foundations required to build this because decisions are centralized and state-driven.
+The current runtime already has the foundations required for this because decisions are centralized, state-driven, and correlated by execution context.
 
 ---
 
@@ -586,25 +684,44 @@ A simplified replay flow is:
 ```text
 ReplayAsync(ExecutionId)
         ↓
-Check if live DAG state already exists
+Record replay.requested
         ↓
-If exists:
-    return AlreadyExists = true
+Load terminal snapshot
         ↓
-If not exists:
-    load terminal snapshot
+If snapshot missing:
+    return invalid replay report
         ↓
-    validate snapshot data
+Record replay.started
         ↓
-    normalize replay state
+Validate snapshot data
         ↓
-    restore DAG record/state
+Execute replay validation
         ↓
-    restore payload references
+Validate dependency graph
+Validate step states
+Validate payload references
+Compare fingerprints
         ↓
-    enable resolver reconstruction
+Optionally load ledger events
+Optionally load trace timeline events
         ↓
-    return Restored = true
+Record replay.comparison_completed
+        ↓
+If live DAG state already exists:
+    return report without restoring
+        ↓
+If AuditOnly:
+    return report without restoring
+        ↓
+Normalize replay state
+        ↓
+Restore DAG record/state
+        ↓
+Persist replay-compatible snapshot state
+        ↓
+Record replay.completed
+        ↓
+Return enriched replay report
 ```
 
 ---
@@ -624,9 +741,9 @@ Delete live DAG state
         ↓
 Replay from snapshot
         ↓
-Build restored execution fingerprint
+Build reconstructed execution fingerprint
         ↓
-Compare fingerprints
+Compare original and reconstructed fingerprints
         ↓
 Original == Restored
 ```
@@ -637,21 +754,179 @@ This validates that replay restores the same terminal execution outcome.
 
 ## Validated Behavior
 
-The current replay and snapshot foundations are validated through integration tests covering:
+The current replay, snapshot, ledger, and timeline foundations are validated through integration tests covering:
 
 - terminal snapshots are created
-- replay reports `AlreadyExists` when live state still exists
+- replay reports compatible existing state when live state still exists
 - replay restores from snapshot after live DAG state deletion
+- audit-only replay validates without restoring live DAG state
 - restored execution fingerprints match original execution fingerprints
+- persisted replay metadata is included in replay reports
 - retry counts are preserved in replay validation
 - retention does not break required completed step resolution
 - archive-backed resolver reconstruction remains compatible with replay foundations
+- payload references remain valid after compaction and eviction
 - terminal lifecycle remains compatible with snapshot creation
 - cancellation finalization outcome is preserved in terminal state
+- missing snapshots fail safely with diagnostics
+- ledger events are included only when requested
+- timeline events are included only when requested
+- replay lifecycle events are recorded in the decision ledger
 
-These tests prove that replay restores the same terminal execution result, not only a successful replay flag.
+A reference replay integration test validates a real distributed 100-step chaos execution with:
 
----
+- distributed multi-worker execution
+- retry behavior
+- retention compaction and eviction
+- terminal snapshot persistence
+- live execution bundle deletion
+- restore from persisted snapshot
+- deterministic fingerprint validation
+- replay metadata propagation
+- ledger event loading
+- timeline event loading
+
+The diagnostic replay test prints:
+
+- replay summary
+- replay metadata
+- ledger summary by category / event / outcome
+- replay lifecycle ledger events
+- trace summary by category / name
+- trace timeline samples
+
+These tests prove that replay restores and validates the same terminal execution result, not only a successful replay flag.
+
+
+## Replay Diagnostic Log Example
+
+The following example is a shortened diagnostic output from the reference replay integration test:
+
+```text
+Multiplexed.AI.Tests.Integration.Runtime.Execution.Persistence.Replay
+.AiExecutionReplayReferenceIntegrationTests
+.Replay_Should_Print_Ledger_And_Timeline_Report
+
+============================================================
+REPLAY DIAGNOSTIC REPORT
+============================================================
+ExecutionId:            e9c1438329b24d6398a79df1b2907115
+Mode:                   ResumeIncomplete
+PipelineName:           replay-reference-chaos-100-1f4294573dc14e3a9c1be54d2c13ed74
+Status:                 Completed
+ReplayValid:            True
+FingerprintFound:       True
+FingerprintMatches:     True
+DependencyGraphValid:   True
+StepStateValid:         True
+PayloadReferencesValid: True
+TotalSteps:             100
+CompletedSteps:         100
+FailedSteps:            0
+WaitingForRetrySteps:   0
+RunningSteps:           0
+RetryCount:             11
+RecoveryCount:          0
+Issues:                 0
+StepReports:            100
+LedgerEvents:           2046
+TimelineEvents:         1382
+```
+
+This proves that the replay report can validate a real distributed 100-step execution and expose both decision-ledger and trace-timeline evidence.
+
+### Replay Metadata Example
+
+```text
+REPLAY METADATA
+------------------------------------------------------------
+Metadata.ExecutionId:        e9c1438329b24d6398a79df1b2907115
+Metadata.FingerprintVersion: v1
+Metadata.GeneratedAtUtc:     2026-05-29T10:09:39.6257486Z
+Metadata.Fingerprint:        CB25C2C5185D89C55D83032FA15DD113E173C532710E983A9B33EE38CAA8B622
+```
+
+The metadata shows the persisted deterministic fingerprint used to compare the original execution state with the reconstructed replay state.
+
+### Ledger Summary Example
+
+```text
+LEDGER SUMMARY BY CATEGORY / EVENT / OUTCOME
+------------------------------------------------------------
+Claim            | claim.acquired                           | Allowed      | Count=111
+Claim            | claim.attempted                          | Started      | Count=212
+Claim            | claim.denied                             | Denied       | Count=184
+Concurrency      | concurrency.lease_acquired               | Allowed      | Count=194
+Concurrency      | concurrency.lease_released               | Released     | Count=194
+Execution        | execution.completed                      | Completed    | Count=1
+Execution        | execution.created                        | Persisted    | Count=1
+Execution        | execution.finalized                      | Completed    | Count=1
+Finalization     | finalization.completed                   | Completed    | Count=1
+Finalization     | finalization.race_lost                   | Denied       | Count=10
+Finalization     | finalization.started                     | Started      | Count=11
+Payload          | payload.externalized                     | Persisted    | Count=13
+Payload          | payload.rehydrated                       | Applied      | Count=100
+Policy           | policy.allowed                           | Allowed      | Count=224
+Policy           | policy.evaluated                         | Started      | Count=224
+Replay           | replay.requested                         | Started      | Count=1
+Replay           | replay.started                           | Started      | Count=1
+Retention        | retention.compacted                      | Applied      | Count=13
+Retention        | retention.evaluated                      | Started      | Count=112
+Retention        | retention.evicted                        | Applied      | Count=73
+Retention        | retention.skipped                        | Skipped      | Count=26
+Retention        | retention.triggered                      | Triggered    | Count=86
+Retry            | retry.evaluated                          | Started      | Count=11
+Retry            | retry.scheduled                          | Applied      | Count=7
+Run              | run.completed                            | Completed    | Count=1
+Run              | run.started                              | Started      | Count=1
+Snapshot         | snapshot.created                         | Persisted    | Count=11
+Step             | step.completed                           | Completed    | Count=100
+Step             | step.failed                              | Failed       | Count=11
+Step             | step.started                             | Started      | Count=111
+```
+
+The ledger summary shows that replay is not isolated from runtime observability. It can return the same execution-correlated decision stream covering claims, concurrency, policy evaluation, retention, retry, snapshots, payload handling, and step lifecycle events.
+
+### Replay Lifecycle Events Example
+
+```text
+REPLAY LEDGER EVENTS
+------------------------------------------------------------
+2026-05-29T10:09:39.9181440+00:00 | replay.requested | Started | Worker=replay-service | StepId=_replay | StepKey=_replay | Reason=Replay request received.
+2026-05-29T10:09:39.9599897+00:00 | replay.started   | Started | Worker=replay-service | StepId=_replay | StepKey=_replay | Reason=Replay snapshot loaded.
+```
+
+Replay emits its own lifecycle events into the same execution-correlated ledger, making replay itself auditable.
+
+### Trace Summary Example
+
+```text
+TRACE SUMMARY BY CATEGORY / NAME
+------------------------------------------------------------
+dag-store        | RecoverTimedOutSteps.succeeded           | Count=212
+dag-store        | TryAcquireConcurrencyLease.succeeded     | Count=194
+dag-store        | TryClaimStep.succeeded                   | Count=194
+dag-store        | TryFinalizeExecution.succeeded           | Count=11
+execution        | execution.succeeded                      | Count=224
+retention        | retention.succeeded                      | Count=112
+step             | execute.completed                        | Count=224
+step             | execute.failed                           | Count=11
+step             | execute.succeeded                        | Count=200
+```
+
+The trace summary provides a timeline-level view of runtime execution behavior. This complements the decision ledger by showing traced runtime operations grouped by category and operation name.
+
+### Trace Timeline Sample
+
+```text
+TRACE TIMELINE SAMPLE
+------------------------------------------------------------
+2026-05-29T10:09:31.9676676Z | step | execute.succeeded | ExecutionId=e9c1438329b24d6398a79df1b2907115 | RunId=f06bde6ea6994181bcbfd162e3bef380 | Worker=pipeline-background-controller | StepId=chaos-step-001 | StepKey=hello-world | Tags=[category=step, durationMs=5.7675, operation=step.execute, stepType=HelloWorldStep, succeeded=True]
+2026-05-29T10:09:31.9950073Z | step | execute.succeeded | ExecutionId=e9c1438329b24d6398a79df1b2907115 | RunId=f06bde6ea6994181bcbfd162e3bef380 | Worker=pipeline-background-controller | StepId=chaos-step-009 | StepKey=distributed.chaos.flaky-provider | Tags=[category=step, durationMs=24.0392, operation=step.execute, stepType=DistributedChaosFlakyProviderStep, succeeded=True]
+```
+
+The full test output contains many more timeline records. The example above is intentionally shortened so the documentation remains readable while still showing how replay diagnostics expose execution id, run id, worker id, step id, step key, trace category, trace name, and structured tags.
+
 
 ## Failure Scenarios Covered
 
@@ -673,23 +948,31 @@ These tests prove that replay restores the same terminal execution result, not o
 
 | Capability | Status |
 |---|---|
-| Terminal snapshots | Implemented / validated foundations |
-| Snapshot persistence | Implemented / validated foundations |
-| Snapshot normalization | Foundation available |
+| Terminal snapshots | Implemented / validated |
+| Snapshot persistence | Implemented / validated |
+| Snapshot normalization | Implemented / validated foundations |
 | Replay when live state exists | Implemented / validated |
+| Audit-only replay | Implemented / validated |
 | Replay from snapshot after live state deletion | Implemented / validated |
 | Deterministic replay validation | Implemented / validated |
 | Execution fingerprint comparison | Implemented / validated |
+| Persisted replay metadata | Implemented / validated |
+| Dependency graph validation | Implemented / validated |
+| Step state validation | Implemented / validated |
+| Payload reference validation | Implemented / validated |
 | Retry-count preservation in replay validation | Implemented / validated |
 | Retention-compatible resolver reconstruction | Implemented / validated foundations |
 | Replay-safe terminal status restoration | Implemented / validated foundations |
-| Official replay API | Planned |
-| Durable decision ledger | Planned |
-| Rich audit history | Planned |
+| Execution-correlated replay ledger events | Implemented / validated |
+| Replay ledger event loading | Implemented / validated |
+| Replay trace timeline loading | Implemented / validated |
+| Replay diagnostic report output | Implemented / validated |
+| Replay Engine V1 | Completed |
+| Runtime replay controller abstraction | Planned |
+| HTTP Replay API | Planned |
 | Replay UI / dashboard | Planned |
+| Replay export tooling | Planned |
 | Compliance-oriented decision inspection | Planned |
-
----
 
 ## Responsibilities by Component
 
@@ -703,7 +986,70 @@ These tests prove that replay restores the same terminal execution result, not o
 | Retention system | Keeps hot state bounded without destroying replay data. |
 | Finalization service | Produces terminal state and triggers snapshot lifecycle. |
 | Observability layer | Provides execution events and diagnostics. |
-| Future decision ledger | Will persist structured runtime decisions for audit. |
+| Decision ledger | Persists structured execution-correlated runtime decisions for diagnostics and audit foundations. |
+| Trace timeline | Provides execution-correlated trace events for replay diagnostics. |
+| Replay validator | Validates fingerprints, dependency graph, step states, and payload references. |
+
+---
+
+## TODO / Improvements
+
+The Replay Engine V1 is implemented and validated, but the operational replay platform still has planned improvements.
+
+### Runtime Abstractions
+
+- Add `IAiExecutionReplayController` as a runtime-level controller abstraction.
+- Add controller request/result models for summary, audit, restore, ledger, and timeline use cases.
+- Keep the replay controller independent from ASP.NET so CLI, HTTP APIs, dashboards, and Kubernetes tooling can reuse it.
+
+### HTTP API
+
+- Add an ASP.NET integration package or host project for replay endpoints.
+- Add endpoint for replay summary by `ExecutionId`.
+- Add endpoint for replay audit-only validation.
+- Add endpoint for replay restore from snapshot.
+- Add endpoint for replay decision ledger events.
+- Add endpoint for replay trace timeline events.
+
+### Report Shape
+
+- Add compact summary DTOs for external API consumers.
+- Add optional ledger and timeline summaries in addition to raw event lists.
+- Add counts for retention actions, concurrency denials, retries, payload rehydrations, and finalization race outcomes.
+- Add safer redaction rules for replay reports that may contain sensitive metadata.
+
+### Diagnostics and Dashboard
+
+- Add replay dashboard support for:
+  - fingerprint comparison
+  - replay validity
+  - dependency graph validation
+  - step state validation
+  - payload validation
+  - ledger timeline
+  - trace timeline
+  - retry and retention summaries
+- Add timeline grouping by step, worker, category, event type, provider, model, and operation.
+
+### Persistence and Querying
+
+- Add durable replay report persistence if replay reports need to be saved after generation.
+- Add replay search by execution id, pipeline, status, fingerprint, date range, and failure reason.
+- Add long-term audit storage strategy for large ledger and timeline histories.
+
+### Testing
+
+- Add targeted tests for fingerprint mismatch once a safe corruption hook or test store helper is available.
+- Add tests for replay report redaction rules.
+- Add tests for replay API DTO mapping when HTTP APIs are introduced.
+- Keep the 100-step replay reference test as the canonical replay proof.
+
+### Operational Concerns
+
+- Decide whether verbose diagnostic output should stay in normal CI or move behind an explicit diagnostic trait.
+- Add replay export to JSON and Markdown.
+- Add replay export to PDF only from tooling or documentation layers, not from the runtime core.
+- Add Kubernetes-aware replay access so any node can inspect an execution from shared durable state.
 
 ---
 
@@ -717,6 +1063,9 @@ These tests prove that replay restores the same terminal execution result, not o
 - [Policy-Driven Execution](policy-driven-execution.md)
 - [Config-Driven Runtime](config-driven-runtime.md)
 - [Observability](observability.md)
+- [Observability Tracing](observability-tracing.md)
+- [Execution-Correlated Ledger](execution-correlated-ledger.md)
+- [Runtime Metrics](runtime-metrics.md)
 - [Testing Strategy](testing-strategy.md)
 
 ---

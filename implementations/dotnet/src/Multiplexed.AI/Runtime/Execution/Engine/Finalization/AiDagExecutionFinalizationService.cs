@@ -8,6 +8,7 @@ using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
 using Multiplexed.AI.Runtime.Execution.Engine.Models;
 using Multiplexed.AI.Runtime.Execution.Engine.Retention;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
 {
@@ -171,6 +172,12 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Finalization
                             completedSteps.Count,
                             pipelineKey,
                             runtimeInstanceId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    await _engineServices.ReplayMetadataService.SaveTerminalFingerprintAsync(
+                            record,
+                            state,
                             cancellationToken)
                         .ConfigureAwait(false);
 

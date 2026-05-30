@@ -55,7 +55,9 @@ The following capabilities are already implemented or available as runtime found
 | Hot enqueue | Implemented |
 | RunId vs ExecutionId separation | Implemented |
 | Terminal snapshots | Foundation available |
-| Replay restoration | Foundation available |
+| Replay restoration | Completed (V1) |
+| Replay validation and fingerprint verification | Completed (V1) |
+| Replay metadata, ledger and timeline diagnostics | Completed (V1) |
 | Runtime metrics and tracing foundations | Foundation available |
 | Enterprise runtime demo scenarios | Completed (V1) |
 | Road to MLOps direction | Platform direction |
@@ -240,46 +242,69 @@ The runtime internals should remain powerful, but the external entry points shou
 
 ---
 
-## Phase 6 — Durable Decision Ledger
+## Phase 6 — Deterministic Replay Engine and Audit Foundations
 
-**Status:** Planned
+**Status:** Completed (V1)
 
-Goal: strengthen auditability and decision history.
+Goal: provide a deterministic replay engine that can validate, inspect, and restore persisted AI executions without re-running external providers, LLM calls, tools, or side effects.
 
-A durable decision ledger may record:
+Completed V1 capabilities include:
 
-- policy decisions
-- retry decisions
-- retention decisions
-- concurrency admission decisions
-- control actions
-- human input submissions
-- replay actions
-- finalization decisions
-- context-resolution failures or important resolver decisions where audit-relevant
+- replay by `ExecutionId`
+- audit-only replay validation
+- snapshot-based replay restoration
+- deterministic fingerprint validation
+- original fingerprint versus reconstructed fingerprint comparison
+- replay metadata exposure
+- replay validation reports
+- replay issue reporting
+- step-level replay reports
+- dependency graph validation
+- final step-state validation
+- payload reference validation
+- archived / compacted / evicted payload reference validation
+- replay ledger events
+- replay timeline diagnostics
+- replay tracing
+- exception-safe replay failure recording
+- compatible existing execution detection
+- restore into the authoritative runtime store
+- DAG-store-aware replay restore support
+- distributed replay integration testing
+- 100-step replay reference scenario with ledger and timeline diagnostics
 
-This would improve auditability, compliance, and debugging.
+Replay V1 proves that the runtime can reconstruct and validate a completed distributed execution from durable state while preserving deterministic convergence guarantees.
+
+Future refinements may continue, but the replay engine and audit foundations are complete as a first version.
 
 ---
 
-## Phase 7 — Official Replay API
+## Phase 7 — Replay Controller, HTTP APIs, Dashboard, and Operational Tooling
 
 **Status:** Planned
 
-Goal: turn replay foundations into a formal public runtime capability.
+Goal: expose the completed replay engine through operational entry points that can be used by APIs, CLIs, dashboards, Kubernetes operators, and future audit tooling.
 
 Possible features:
 
-- replay by ExecutionId
-- replay from snapshot
-- dry-run replay
-- replay with deterministic fingerprint comparison
-- replay validation report
-- replay safety rules
+- `IAiExecutionReplayController`
+- replay controller request/response contracts
+- HTTP replay API
+- replay summary endpoints
+- replay audit endpoints
+- replay restore endpoints
+- replay ledger endpoints
+- replay timeline endpoints
+- replay dashboard
+- replay search by `ExecutionId`
+- replay search by pipeline/date/fingerprint
+- replay export to JSON or Markdown
+- replay operational tooling for support and incident investigation
 - replay access control
-- replay-safe context resolution rules
+- replay-safe context resolution documentation
+- integration with future control plane and Kubernetes runtime operations
 
-Current replay foundations already exist, but this phase would formalize the API and documentation.
+This phase should avoid coupling the core runtime library directly to ASP.NET. The controller abstraction should be created first, then HTTP/API hosting can be added around it.
 
 ---
 
@@ -396,7 +421,7 @@ The current priorities are:
 ```text
 Enterprise demo polish
 Observability polish
-Replay and audit formalization
+Replay controller and HTTP APIs
 Road to MLOps platform direction
 Kubernetes deployment demo
 Articles and public positioning
@@ -406,6 +431,6 @@ Phase 0 documentation restructure is complete as V1.
 
 The runtime foundations are already implemented and validated through distributed integration scenarios.
 
-The focus is now shifting toward operational polish, enterprise demonstration, replay formalization, MLOps-oriented platform direction, and public positioning.
+The focus is now shifting toward operational polish, enterprise demonstration, replay controller/API exposure, MLOps-oriented platform direction, and public positioning.
 
 The dedicated long-term platform direction is documented in [`docs/road-to-mlops.md`](road-to-mlops.md).

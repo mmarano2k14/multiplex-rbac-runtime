@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;
@@ -19,6 +20,7 @@ using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Metrics;
 using Multiplexed.AI.Stores;
@@ -186,5 +188,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
         /// Gets the execution control service used to apply durable control transitions.
         /// </summary>
         IAiExecutionControlService ExecutionControlService { get; }
+
+        /// <summary>
+        /// Gets the replay metadata service responsible for generating
+        /// and persisting deterministic replay fingerprints.
+        /// </summary>
+        IAiExecutionReplayMetadataService ReplayMetadataService { get; }
     }
 }

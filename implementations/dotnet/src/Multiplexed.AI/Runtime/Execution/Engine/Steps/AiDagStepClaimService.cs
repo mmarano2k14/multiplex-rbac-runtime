@@ -1031,7 +1031,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
             return await _services.ObservabilityService.Tracer.TraceStorageAsync(
                     new AiStorageTraceContext
                     {
-                        ExecutionId = _services?.ObservabilityService?.Correlation?.Current?.ExecutionId ?? context.ExecutionId,
+                        ExecutionId = _services.ObservabilityService?.Correlation?.Current?.ExecutionId ?? context.ExecutionId,
                         StepId = stepName,
                         Backend = "Redis",
                         Operation = "TryAcquireConcurrencyLease"
@@ -1044,7 +1044,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                         trace.SetTag("concurrency.provider", context.Provider ?? string.Empty);
                         trace.SetTag("concurrency.model", context.Model ?? string.Empty);
                         trace.SetTag("concurrency.operation", context.Operation ?? string.Empty);
-                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? context.RuntimeInstanceId);
+                        trace.SetTag("workerId", _services.ObservabilityService?.Correlation?.Current?.WorkerId ?? context.RuntimeInstanceId);
 
                         var policyDecision = await EvaluateConfiguredConcurrencyPoliciesAsync(
                                 context,

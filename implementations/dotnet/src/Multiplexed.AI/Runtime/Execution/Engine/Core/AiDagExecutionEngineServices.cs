@@ -6,6 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Observability;
@@ -17,6 +18,7 @@ using Multiplexed.AI.Configuration;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
@@ -52,6 +54,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             IAiDagStepExecutionOrchestrator stepExecutionOrchestrator,
             IAiExecutionControlGate executionControlGate,
             IAiExecutionControlService executionControlService,
+            IAiExecutionReplayMetadataService replayMetadataService,
             IAiDagExecutionStore? dagStore = null,
             IAiExecutionSnapshotService<ExecutionContextSnapshot>? snapshotService = null)
         {
@@ -75,7 +78,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
             StepExecutionOrchestrator = stepExecutionOrchestrator ?? throw new ArgumentNullException(nameof(stepExecutionOrchestrator));
             ExecutionControlGate = executionControlGate ?? throw new ArgumentNullException(nameof(executionControlGate));
             ExecutionControlService = executionControlService ?? throw new ArgumentNullException(nameof(executionControlService));
-            
+            ReplayMetadataService = replayMetadataService ?? throw new ArgumentNullException(nameof(replayMetadataService));
 
             DagStore = dagStore;
             SnapshotService = snapshotService;
@@ -146,5 +149,11 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 
         /// <inheritdoc />
         public IAiExecutionControlService ExecutionControlService { get; }
+
+        /// <summary>
+        /// Gets the replay metadata service responsible for generating
+        /// and persisting deterministic replay fingerprints.
+        /// </summary>
+        public IAiExecutionReplayMetadataService ReplayMetadataService { get; }
     }
 }
