@@ -3,12 +3,11 @@ using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
 using Multiplexed.Abstractions.AI.Observability.Context;
-using System.Collections.Concurrent;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
 {
     /// <summary>
-    /// In-memory V1 implementation of the shared runtime controller.
+    /// V1 implementation of the shared runtime controller.
     /// </summary>
     /// <remarks>
     /// The shared runtime controller sits above run admission, runtime instances,
@@ -28,27 +27,29 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
     public sealed class AiSharedRuntimeController : IAiSharedRuntimeController
     {
         private readonly IAiRunAdmissionController _admissionController;
+        private readonly IAiSharedRunStore _store;
         private readonly AiSharedRuntimeControllerOptions _options;
         private readonly IAiControlPlaneObserver _observer;
-        private readonly ConcurrentDictionary<string, AiSharedRunRecord> _runs =
-            new(StringComparer.Ordinal);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AiSharedRuntimeController"/> class.
         /// </summary>
         /// <param name="admissionController">The run admission controller.</param>
+        /// <param name="store">The shared run store.</param>
         /// <param name="options">The shared runtime controller options.</param>
         /// <param name="observer">The control-plane observer used to record operation events.</param>
         /// <exception cref="ArgumentNullException">
-        /// Thrown when <paramref name="admissionController"/>, <paramref name="options"/>,
-        /// or <paramref name="observer"/> is null.
+        /// Thrown when <paramref name="admissionController"/>, <paramref name="store"/>,
+        /// <paramref name="options"/>, or <paramref name="observer"/> is null.
         /// </exception>
         public AiSharedRuntimeController(
             IAiRunAdmissionController admissionController,
+            IAiSharedRunStore store,
             IOptions<AiSharedRuntimeControllerOptions> options,
             IAiControlPlaneObserver observer)
         {
             _admissionController = admissionController ?? throw new ArgumentNullException(nameof(admissionController));
+            _store = store ?? throw new ArgumentNullException(nameof(store));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
             _observer = observer ?? throw new ArgumentNullException(nameof(observer));
         }
@@ -230,13 +231,13 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
                     await SubmitRunInnerAsync(request, cancellationToken).ConfigureAwait(false),
 
                 AiSharedRuntimeControllerOperation.GetRun =>
-                    GetRunInner(request),
+                    await GetRunInnerAsync(request, cancellationToken).ConfigureAwait(false),
 
                 AiSharedRuntimeControllerOperation.ListRuns =>
-                    ListRunsInner(request),
+                    await ListRunsInnerAsync(request, cancellationToken).ConfigureAwait(false),
 
                 AiSharedRuntimeControllerOperation.CancelRun =>
-                    CancelRunInner(request),
+                    await CancelRunInnerAsync(request, cancellationToken).ConfigureAwait(false),
 
                 _ => throw new NotSupportedException(
                     $"Shared runtime controller operation '{operation}' is not supported.")
@@ -302,15 +303,13 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
                 Metadata = CopyMetadata(request.Metadata)
             };
 
-            if (!_runs.TryAdd(sharedRunId, record))
-            {
-                throw new InvalidOperationException(
-                    $"Shared run '{sharedRunId}' already exists.");
-            }
+            var created = await _store
+                .CreateAsync(record, cancellationToken)
+                .ConfigureAwait(false);
 
             return new SharedRuntimeControllerOperationResult
             {
-                Run = record
+                Run = created
             };
         }
 
@@ -318,11 +317,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// Gets a shared run record.
         /// </summary>
         /// <param name="request">The shared runtime controller request.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The internal shared controller operation result.</returns>
-        private SharedRuntimeControllerOperationResult GetRunInner(
-            AiSharedRuntimeControllerRequest request)
+        private async Task<SharedRuntimeControllerOperationResult> GetRunInnerAsync(
+            AiSharedRuntimeControllerRequest request,
+            CancellationToken cancellationToken)
         {
-            _runs.TryGetValue(request.SharedRunId!, out var record);
+            var record = await _store
+                .GetAsync(request.SharedRunId!, cancellationToken)
+                .ConfigureAwait(false);
 
             return new SharedRuntimeControllerOperationResult
             {
@@ -334,17 +337,19 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// Lists shared run records known by the controller.
         /// </summary>
         /// <param name="request">The shared runtime controller request.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The internal shared controller operation result.</returns>
-        private SharedRuntimeControllerOperationResult ListRunsInner(
-            AiSharedRuntimeControllerRequest request)
+        private async Task<SharedRuntimeControllerOperationResult> ListRunsInnerAsync(
+            AiSharedRuntimeControllerRequest request,
+            CancellationToken cancellationToken)
         {
-            var runs = _runs.Values
-                .Where(run => request.IncludeCancelled || run.Status != AiSharedRunStatus.Cancelled)
-                .Where(run => request.IncludeCompleted || run.Status != AiSharedRunStatus.Completed)
-                .Where(run => request.IncludeFailed || run.Status != AiSharedRunStatus.Failed)
-                .OrderBy(run => run.SubmittedAtUtc)
-                .ThenBy(run => run.SharedRunId, StringComparer.Ordinal)
-                .ToArray();
+            var runs = await _store
+                .ListAsync(
+                    request.IncludeCancelled,
+                    request.IncludeCompleted,
+                    request.IncludeFailed,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             return new SharedRuntimeControllerOperationResult
             {
@@ -356,50 +361,20 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// Cancels a shared run known by the controller.
         /// </summary>
         /// <param name="request">The shared runtime controller request.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         /// <returns>The internal shared controller operation result.</returns>
-        private SharedRuntimeControllerOperationResult CancelRunInner(
-            AiSharedRuntimeControllerRequest request)
+        private async Task<SharedRuntimeControllerOperationResult> CancelRunInnerAsync(
+            AiSharedRuntimeControllerRequest request,
+            CancellationToken cancellationToken)
         {
-            if (!_runs.TryGetValue(request.SharedRunId!, out var existing))
-            {
-                return new SharedRuntimeControllerOperationResult();
-            }
-
-            if (existing.Status is
-                AiSharedRunStatus.Completed or
-                AiSharedRunStatus.Failed or
-                AiSharedRunStatus.Cancelled)
-            {
-                return new SharedRuntimeControllerOperationResult
-                {
-                    Run = existing
-                };
-            }
-
-            var now = DateTimeOffset.UtcNow;
-
-            var updated = new AiSharedRunRecord
-            {
-                SharedRunId = existing.SharedRunId,
-                Status = AiSharedRunStatus.Cancelled,
-                RunRequest = existing.RunRequest,
-                LocalRunId = existing.LocalRunId,
-                ExecutionId = existing.ExecutionId,
-                AssignedRuntimeInstanceId = existing.AssignedRuntimeInstanceId,
-                AdmissionDecision = existing.AdmissionDecision,
-                TenantId = existing.TenantId,
-                PipelineKey = existing.PipelineKey,
-                CorrelationId = existing.CorrelationId,
-                RequestedBy = request.RequestedBy ?? existing.RequestedBy,
-                Source = request.Source ?? existing.Source,
-                Reason = request.Reason ?? existing.Reason,
-                FailureReason = request.Reason ?? "Shared run cancelled.",
-                SubmittedAtUtc = existing.SubmittedAtUtc,
-                UpdatedAtUtc = now,
-                Metadata = existing.Metadata
-            };
-
-            _runs[request.SharedRunId!] = updated;
+            var updated = await _store
+                .CancelAsync(
+                    request.SharedRunId!,
+                    request.Reason,
+                    request.RequestedBy,
+                    request.Source,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             return new SharedRuntimeControllerOperationResult
             {

@@ -369,6 +369,7 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedController
 
             var controller = new AiSharedRuntimeController(
                 admission,
+                new InMemoryAiSharedRunStore(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 observer);
 
@@ -403,6 +404,7 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedController
         {
             return new AiSharedRuntimeController(
                 admissionController,
+                new InMemoryAiSharedRunStore(),
                 Options.Create(options ?? new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
         }

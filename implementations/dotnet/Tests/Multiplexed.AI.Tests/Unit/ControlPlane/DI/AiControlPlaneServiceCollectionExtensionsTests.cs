@@ -161,5 +161,20 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
             Assert.NotNull(descriptor);
             Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
         }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_SharedRun_Store()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedRunStore));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
     }
 }
