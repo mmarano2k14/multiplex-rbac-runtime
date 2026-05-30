@@ -114,5 +114,20 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
                 typeof(InMemoryAiRuntimeInstanceRegistry),
                 descriptor.ImplementationType);
         }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_RuntimeInstance_ControlPlane()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiRuntimeInstanceControlPlane));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
     }
 }

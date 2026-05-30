@@ -29,12 +29,14 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
         /// <param name="configureReplay">Optional replay control-plane options configuration.</param>
         /// <param name="configureExecution">Optional execution control-plane options configuration.</param>
         /// <param name="configureRuntimeQueue">Optional local runtime queue control-plane options configuration.</param>
+        /// <param name="configureRuntimeInstance">Optional runtime instance control-plane options configuration.</param>
         /// <returns>The same service collection for chaining.</returns>
         public static IServiceCollection AddAiControlPlane(
             this IServiceCollection services,
             Action<AiReplayControlOptions>? configureReplay = null,
             Action<AiExecutionControlPlaneOptions>? configureExecution = null,
-            Action<AiRuntimeQueueControlPlaneOptions>? configureRuntimeQueue = null)
+            Action<AiRuntimeQueueControlPlaneOptions>? configureRuntimeQueue = null,
+            Action<AiRuntimeInstanceControlPlaneOptions>? configureRuntimeInstance = null)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -65,6 +67,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
                 services.Configure(configureRuntimeQueue);
             }
 
+            if (configureRuntimeInstance is null)
+            {
+                services.AddOptions<AiRuntimeInstanceControlPlaneOptions>();
+            }
+            else
+            {
+                services.Configure(configureRuntimeInstance);
+            }
+
             services.TryAddSingleton<IAiControlPlaneObserver, NoopAiControlPlaneObserver>();
 
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
@@ -72,6 +83,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiRuntimeQueueControlPlane, AiRuntimeQueueControlPlane>();
 
             services.TryAddSingleton<IAiRuntimeInstanceRegistry, InMemoryAiRuntimeInstanceRegistry>();
+            services.TryAddSingleton<IAiRuntimeInstanceControlPlane, AiRuntimeInstanceControlPlane>();
 
             return services;
         }
