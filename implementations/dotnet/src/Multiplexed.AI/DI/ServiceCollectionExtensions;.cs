@@ -49,6 +49,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Normalization;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry.Policies;
 using Multiplexed.AI.Runtime.Configuration;
+using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.Execution;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Context;
@@ -677,6 +678,13 @@ namespace Multiplexed.AI.DI
             // global execution engine services
             // ------------------------------------------------------------
             services.TryAddScoped<IAiDagExecutionEngineServices, AiDagExecutionEngineServices>();
+
+
+            // ------------------------------------------------------------
+            // control pane
+            // ------------------------------------------------------------
+            services.AddAiControlPlane();
+
             return services;
         }
 
