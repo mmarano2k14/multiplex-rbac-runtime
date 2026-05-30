@@ -5,6 +5,7 @@ using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
@@ -141,6 +142,21 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
 
             var descriptor = services.SingleOrDefault(service =>
                 service.ServiceType == typeof(IAiRunAdmissionController));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_SharedRuntime_Controller()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedRuntimeController));
 
             Assert.NotNull(descriptor);
             Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
