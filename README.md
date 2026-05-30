@@ -23,6 +23,7 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Area | Summary |
 |---|---|
 | Distributed multi-runtime-instance execution | Added foundations for multiple runtime instances and workers to coordinate through shared Redis-backed execution state. |
+| Runtime control plane foundation | Added adapter-neutral control-plane foundations for replay, execution control, local runtime queue control, runtime instance registry/control, and run admission decisions. |
 | Distributed concurrency and throttling demo | Added an executable `throttling-100` enterprise demo scenario with provider-level concurrency control, realtime throttling visibility, Redis lease-based admission control, randomized provider distribution, and bounded provider capacity under worker pressure. |
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
@@ -144,6 +145,9 @@ This project explores what an AI execution runtime should look like when reliabi
 | Policy-driven execution | Implemented | Retry, retention, and concurrency use configurable policy definitions. |
 | Execution control state | Implemented | ExecutionId-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Implemented | RunId-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue. |
+| Runtime control plane foundation | Implemented | Adapter-neutral facades expose replay, execution control, local queue control, runtime instance control, and admission foundations for API/MCP/CLI/dashboard/Kubernetes adapters. |
+| Runtime instance registry and control | Implemented | Runtime instances can register, heartbeat, expose queue capacity, be listed, marked draining, or unregistered. |
+| Run admission / slot decisions | Implemented | Admission can assign runs to an available runtime instance, request scale-out, queue globally later, or reject according to policy. |
 | RunId vs ExecutionId separation | Implemented | Controller lifecycle identity is separated from durable DAG execution identity. |
 | Snapshot and Replay API foundations | Implemented | Terminal snapshots, replay metadata, deterministic fingerprint validation, audit-only replay, restore replay, ledger loading, and timeline loading are available. |
 | Execution-correlated decision ledger | Implemented | Durable correlated ledger events exist for execution lifecycle, run lifecycle, queue control, claims, steps, retry, recovery, policy evaluation, concurrency, execution control, human input, snapshots, storage failures, replay lifecycle, retention, compaction, and finalization. |
@@ -252,7 +256,19 @@ For the detailed enterprise matrix, see [`docs/enterprise-readiness.md`](docs/en
 
 ## Runtime Control Plane
 
-The runtime includes a control plane split into two identity levels.
+The runtime includes an adapter-neutral control-plane foundation for operational runtime control.
+
+The control plane currently exposes foundations for:
+
+- replay and audit control
+- execution control
+- local runtime queue control
+- runtime instance registration and heartbeat
+- runtime instance visibility and draining
+- run admission / slot decisions
+- future API, MCP, CLI, dashboard, and Kubernetes adapters
+
+The control plane is also split into two identity levels.
 
 ```text
 RunId
@@ -288,6 +304,38 @@ Implemented controller queue capabilities include:
 - hot enqueue while queue is paused
 
 This makes the runtime controllable, not only executable.
+
+### Runtime Instance Control
+
+Implemented runtime instance capabilities include:
+
+- register runtime instance
+- heartbeat runtime instance
+- get runtime instance status
+- list runtime instances
+- expose local queue pressure
+- expose available run slots
+- mark runtime instance as draining
+- unregister runtime instance
+
+These foundations prepare the runtime for Kubernetes pod visibility, shared admission, dashboards, and future autoscaling.
+
+### Run Admission / Slot Decisions
+
+Implemented admission capabilities include:
+
+- assign a run to an available runtime instance
+- prefer a requested runtime instance when available
+- select the least-loaded available instance
+- request scale-out when no instance has capacity
+- queue globally later when shared queue fallback is enabled
+- reject when no capacity or fallback exists
+
+Admission does not enqueue runs yet.
+
+It only decides what should happen next.
+
+For details, see [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md).
 
 ---
 
@@ -400,6 +448,9 @@ The strongest areas today are:
 - executable distributed throttling scenario
 - execution control state
 - runtime queue control
+- runtime control-plane foundations
+- runtime instance registry and control
+- run admission / slot decisioning
 - queue and execution control observability
 - replay/snapshot validation foundations
 - replay metadata, ledger, and trace timeline diagnostics
@@ -510,6 +561,7 @@ The full documentation map is available here:
 - [`docs/comparison-existing-tools.md`](docs/comparison-existing-tools.md) — Ecosystem positioning and comparison with existing tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
 - [`docs/road-to-mlops.md`](docs/road-to-mlops.md) — Long-term evolution from deterministic AI runtime foundations toward a broader AI execution and MLOps-oriented platform.
+- [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md) — Runtime control-plane foundation for replay, execution control, runtime queue control, runtime instance visibility/control, and run admission.
 - [`demo/enterprise-runtime/README.md`](demo/enterprise-runtime/README.md) — Local enterprise runtime demo using Docker Compose, Redis, MongoDB, external demo steps, controller execution, distributed workers, and scenario documentation.
 - [`demo/enterprise-runtime/scenarios/06-distributed-throttling.md`](demo/enterprise-runtime/scenarios/06-distributed-throttling.md) — Executable distributed throttling scenario documentation.
 - [`demo/enterprise-runtime/scenarios/08-deterministic-convergence.md`](demo/enterprise-runtime/scenarios/08-deterministic-convergence.md) — Deterministic convergence scenario documentation.
@@ -520,6 +572,7 @@ Focused AI runtime documentation:
 - [`docs/ai/distributed-execution.md`](docs/ai/distributed-execution.md)
 - [`docs/ai/execution-control-state.md`](docs/ai/execution-control-state.md)
 - [`docs/ai/runtime-queue-control.md`](docs/ai/runtime-queue-control.md)
+- [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md)
 - [`docs/ai/retry-and-recovery.md`](docs/ai/retry-and-recovery.md)
 - [`docs/ai/retention-and-compaction.md`](docs/ai/retention-and-compaction.md)
 - [`docs/ai/distributed-concurrency-throttling.md`](docs/ai/distributed-concurrency-throttling.md)

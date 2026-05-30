@@ -6,27 +6,859 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [Unreleased]
+# Changelog — Runtime Control Plane / Runtime Orchestration Foundation
 
-### Added
-- Added local runtime queue control-plane contracts.
-- Added runtime queue control-plane facade over the existing background controller.
-- Added run and queue visibility snapshots for control-plane/dashboard use.
-- Added `GetRunStateAsync` and `GetQueueStateAsync` to the runtime pipeline background controller.
-- Added run-id based queue cancellation APIs.
-- Added local queue pause/resume APIs without requiring a run handle.
-- Added unit tests for runtime queue control-plane operations.
+## Overview
 
-### Changed
-- Updated queue pause/resume ledger correlation to resolve the best active controller run when called externally.
-- Preserved execution-correlated queue ledger events for active runs.
+This update introduces the first complete runtime control-plane foundation for the deterministic AI runtime.
+
+The goal is to expose runtime operations through future external adapters such as:
+
+- HTTP API
+- MCP server
+- CLI
+- Dashboard
+- Kubernetes control-plane pod
+- Shared runtime controller
+
+This work separates runtime internals from external control operations and prepares the system for:
+
+- multi-instance execution
+- Kubernetes visibility
+- runtime instance registration
+- local queue visibility
+- run admission / slot decisioning
+- future shared queue
+- future autoscaling
+- future MCP/API control operations
+- production observability through Kibana, Grafana, and OpenSearch
+
+---
+
+## Added
+
+## Runtime Control Plane Foundation
+
+Added a new runtime control-plane foundation with adapter-neutral abstractions.
+
+The new control-plane layer separates:
+
+- Replay and audit control
+- Execution control
+- Local runtime queue control
+- Runtime instance registry
+- Runtime instance control
+- Run admission / slot decisioning
+- Control-plane observability
+
+External adapters no longer need to call runtime internals directly.
+
+This prepares the architecture for:
+
+- MCP server commands
+- HTTP API endpoints
+- CLI operations
+- Dashboards
+- Kubernetes demos
+- Shared runtime controller
+- Future Grafana / Kibana / OpenSearch observability
+
+---
+
+## Replay Control Plane
+
+Added replay control-plane abstraction over the existing replay service.
+
+Added replay control-plane request, result, and options models.
+
+Added replay control-plane facade for adapter-neutral replay access.
+
+Prepared replay operations to be called later from:
+
+- HTTP API
+- MCP server
+- CLI
+- Dashboard
+- Kubernetes control-plane layer
+
+Added observability events for replay operations:
+
+- operation started
+- operation completed
+- operation failed
+
+Replay remains a control-plane operation only.
+
+`ReExecuteAll` remains intentionally blocked because it may re-run external providers or side effects before provider replay isolation and side-effect safety are implemented.
+
+---
+
+## Execution Control Plane
+
+Added execution control-plane contracts for:
+
+- Pause execution
+- Resume execution
+- Cancel execution
+- Submit human input
+- Get execution control status
+
+Added the following models and contracts:
+
+- `AiExecutionControlPlaneOperation`
+- `AiExecutionControlPlaneRequest`
+- `AiExecutionControlPlaneResult`
+- `AiExecutionControlPlaneOptions`
+- `IAiExecutionControlPlane`
+
+Added runtime implementation:
+
+- `AiExecutionControlPlane`
+
+Added `GetStateAsync` to the execution control service so external control-plane layers can retrieve durable execution control state.
+
+The execution control-plane wraps the existing `IAiExecutionControlService` instead of modifying DAG execution behavior.
+
+Added execution control-plane observability events:
+
+- operation started
+- operation completed
+- operation failed
+
+Added options to enable or disable:
+
+- pause
+- resume
+- cancel
+- submit human input
+- get status
+
+Added structured failure result support.
+
+Added duration measurement for future metrics and Grafana dashboards.
+
+Added unit tests for execution control-plane behavior.
+
+Added DI registration for execution control-plane services.
 
 ### Notes
-- Local queues remain preserved.
-- RuntimeQueue ControlPlane controls only the local queue of one runtime instance.
-- It does not represent the future shared/global queue.
-- It does not replace DAG execution, workers, or runtime instance logic.
 
+Execution ControlPlane does not execute DAG steps.
+
+Execution ControlPlane does not claim work.
+
+Execution ControlPlane does not modify local queues.
+
+Execution ControlPlane wraps the existing durable execution control service.
+
+---
+
+## Runtime Queue Visibility
+
+Added immutable visibility snapshots for local runtime queue and run state:
+
+- `AiRuntimePipelineRunState`
+- `AiRuntimePipelineQueueState`
+
+Added runtime run visibility fields:
+
+- `RunId`
+- `ExecutionId`
+- `PipelineKey`
+- `PipelineName`
+- `RuntimeInstanceId`
+- `Status`
+- `IsQueued`
+- `IsRunning`
+- `CancellationRequested`
+- timestamps when available
+- failure reason when available
+
+Added local queue visibility fields:
+
+- `RuntimeInstanceId`
+- `IsPaused`
+- `QueuedRunCount`
+- `RunningRunCount`
+- `ActiveRunCount`
+- `QueueCapacity`
+- `MaxConcurrentRuns`
+- `AvailableRunSlots`
+- `CanAcceptRun`
+- `SnapshotAtUtc`
+
+Added visibility methods to `IAiRuntimePipelineBackgroundController`:
+
+- `GetRunStateAsync`
+- `GetQueueStateAsync`
+
+Implemented run and queue state snapshots in `AiRuntimePipelineBackgroundController`.
+
+Added stable lowercase run status mapping for diagnostics, logs, dashboards, and future Kubernetes visibility.
+
+---
+
+## Runtime Queue Control Plane
+
+Added local runtime queue control-plane contracts:
+
+- `AiRuntimeQueueControlPlaneOperation`
+- `AiRuntimeQueueControlPlaneRequest`
+- `AiRuntimeQueueControlPlaneResult`
+- `AiRuntimeQueueControlPlaneOptions`
+- `IAiRuntimeQueueControlPlane`
+
+Added runtime implementation:
+
+- `AiRuntimeQueueControlPlane`
+
+Added adapter-neutral local queue operations:
+
+- enqueue run
+- cancel run
+- cancel queued run
+- pause local queue
+- resume local queue
+- get run status
+- get queue status
+
+Renamed the concept from `RunControlPlane` to `RuntimeQueueControlPlane` to avoid confusion with the future shared/global queue.
+
+The RuntimeQueue ControlPlane controls only the local queue owned by one runtime instance.
+
+Updated queue and cancel operations to use:
+
+- `RunId`
+- `Reason`
+- `RequestedBy`
+
+instead of requiring internal `AiRuntimeWorkerRunHandle`.
+
+`AiRuntimeWorkerRunHandle` remains an output for enqueue, but is no longer required as an input for external control-plane operations.
+
+Added runtime queue control-plane observability events:
+
+- operation started
+- operation completed
+- operation failed
+
+Added DI registration.
+
+Added unit tests.
+
+### Notes
+
+Local runtime queues remain unchanged.
+
+RuntimeQueue ControlPlane does not replace local queues.
+
+RuntimeQueue ControlPlane does not execute DAG steps.
+
+RuntimeQueue ControlPlane does not manage distributed/shared queue behavior yet.
+
+It exposes a safe adapter-neutral facade over the existing local runtime controller.
+
+---
+
+## Background Controller API Cleanup
+
+Updated `IAiRuntimePipelineBackgroundController` to make control operations API/control-plane friendly.
+
+Replaced handle-based control signatures with run-id and queue-level signatures:
+
+- `PauseQueueAsync(string? reason, string? requestedBy, CancellationToken)`
+- `ResumeQueueAsync(string? requestedBy, CancellationToken)`
+- `CancelQueuedRunAsync(string runId, string? reason, string? requestedBy, CancellationToken)`
+- `CancelRunAsync(string runId, string? reason, string? requestedBy, CancellationToken)`
+
+Preserved enqueue behavior:
+
+- `EnqueueAsync(AiRuntimePipelineRunRequest, CancellationToken)`
+
+Preserved local queue execution behavior.
+
+Preserved distributed worker execution behavior.
+
+Preserved DAG execution behavior.
+
+---
+
+## Queue Pause / Resume Ledger Correlation Fix
+
+Fixed queue pause/resume decision ledger correlation after removing handle-based API input.
+
+Added internal queue ledger target resolution using controller state:
+
+- running runs
+- queued runs
+- fallback controller-level identity
+
+Added `ResolveQueueLedgerTarget()` inside the runtime pipeline background controller.
+
+Added internal `QueueLedgerTarget` model.
+
+Ensured queue pause/resume ledger events remain execution-correlated when an active run exists.
+
+Preserved integration test expectations for:
+
+- `queue.paused`
+- `queue.resumed`
+- execution-correlated ledger lookup by `ExecutionId`
+- correct `RunId`
+- correct worker id
+- correct metadata
+
+Clarified that `IAiRuntimeCorrelationAccessor` / `AsyncLocal` is not reliable for external control-plane commands because the external caller is not inside the run execution async scope.
+
+Queue-level external commands now reconstruct correlation from controller state instead of relying on the current `AsyncLocal` accessor.
+
+### Reason
+
+The runtime correlation accessor only contains the context of the current async flow.
+
+External calls such as `PauseQueueAsync()` and `ResumeQueueAsync()` are not executed inside the `ProcessQueuedRunAsync()` correlation scope.
+
+Therefore, the accessor can be empty or only partially populated.
+
+The controller must use its own local state to reconstruct the best correlation target.
+
+---
+
+## Runtime Instance Registry
+
+Added runtime instance registry contracts:
+
+- `AiRuntimeInstanceStatus`
+- `AiRuntimeInstanceRegistration`
+- `AiRuntimeInstanceSnapshot`
+- `IAiRuntimeInstanceRegistry`
+
+Added runtime instance statuses:
+
+- `Unknown`
+- `Ready`
+- `Busy`
+- `Paused`
+- `Draining`
+- `Unhealthy`
+- `Stopped`
+
+Added runtime instance registration model with:
+
+- `RuntimeInstanceId`
+- `HostName`
+- `ProcessId`
+- Kubernetes namespace
+- Kubernetes pod name
+- Kubernetes node name
+- `WorkerCount`
+- `MaxConcurrentRuns`
+- `QueueCapacity`
+- `RuntimeVersion`
+- `Metadata`
+
+Added runtime instance snapshot model with:
+
+- status
+- worker count
+- queued run count
+- running run count
+- active run count
+- queue capacity
+- max concurrent runs
+- available run slots
+- queue paused state
+- can accept run
+- registered timestamp
+- heartbeat timestamp
+- snapshot timestamp
+- host/pod metadata
+
+Added in-memory implementation:
+
+- `InMemoryAiRuntimeInstanceRegistry`
+
+Added registry operations:
+
+- register/update runtime instance
+- heartbeat runtime instance
+- get runtime instance
+- list runtime instances
+- mark draining
+- unregister / mark stopped
+
+Added DI registration for `IAiRuntimeInstanceRegistry`.
+
+Added unit tests for:
+
+- registration
+- lookup
+- heartbeat
+- listing
+- draining
+- unregister
+- excluding stopped instances by default
+- including stopped instances when requested
+- reactivating stopped instances through registration
+
+### Notes
+
+The in-memory registry is intended for local, single-process, and test scenarios.
+
+A Redis-backed registry will be required later for true Kubernetes multi-instance coordination.
+
+This registry prepares shared run admission, runtime instance visibility, dashboards, MCP, and autoscaling.
+
+---
+
+## Runtime Instance Control Plane
+
+Added runtime instance control-plane contracts:
+
+- `AiRuntimeInstanceControlPlaneOperation`
+- `AiRuntimeInstanceControlPlaneRequest`
+- `AiRuntimeInstanceControlPlaneResult`
+- `AiRuntimeInstanceControlPlaneOptions`
+- `IAiRuntimeInstanceControlPlane`
+
+Added runtime implementation:
+
+- `AiRuntimeInstanceControlPlane`
+
+Added adapter-neutral operations:
+
+- register runtime instance
+- heartbeat runtime instance
+- get runtime instance
+- list runtime instances
+- mark runtime instance as draining
+- unregister runtime instance
+
+Added operation options:
+
+- enable register
+- enable heartbeat
+- enable get instance
+- enable list instances
+- enable mark draining
+- enable unregister
+- structured failure result handling
+- duration measurement
+
+Added observability events for runtime instance control-plane operations:
+
+- operation started
+- operation completed
+- operation failed
+
+Added DI registration for runtime instance control-plane services.
+
+Added unit tests for:
+
+- register
+- heartbeat
+- get
+- list
+- mark draining
+- unregister
+- execute dispatching
+- missing input validation
+- disabled operation behavior
+- observability event recording
+
+### Notes
+
+Runtime Instance ControlPlane does not create Kubernetes pods.
+
+Runtime Instance ControlPlane does not scale deployments yet.
+
+Runtime Instance ControlPlane does not execute DAG steps.
+
+Runtime Instance ControlPlane does not claim work.
+
+Runtime Instance ControlPlane exposes visibility and control over registered runtime instances.
+
+---
+
+## Run Admission / Slot System V1
+
+Added run admission contracts:
+
+- `AiRunAdmissionDecisionType`
+- `AiRunAdmissionRequest`
+- `AiRunAdmissionDecision`
+- `AiRunAdmissionOptions`
+- `IAiRunAdmissionController`
+
+Added admission decision types:
+
+- `Unknown`
+- `AssignToInstance`
+- `QueueGlobally`
+- `RequestScaleOut`
+- `Reject`
+
+Added admission request model with:
+
+- pipeline run request
+- optional run id
+- tenant id
+- pipeline key
+- preferred runtime instance id
+- correlation id
+- requested by
+- source
+- reason
+- metadata
+
+Added admission decision model with:
+
+- decision type
+- accepted flag
+- assigned runtime instance id
+- assigned instance snapshot
+- scale-out flag
+- global queue flag
+- rejected flag
+- reason
+- diagnostics
+- visible instance count
+- available instance count
+- current instance count
+- max instance count
+- metadata
+- decided timestamp
+
+Added admission policy options:
+
+- enabled
+- max instance count
+- enable scale-out request
+- enable global queue fallback
+- reject when no capacity
+- allow paused instances
+- allow draining instances
+- allow unhealthy instances
+- prefer requested runtime instance
+- duration measurement
+
+Added runtime implementation:
+
+- `AiRunAdmissionController`
+
+Admission now evaluates registered runtime instances and returns:
+
+- assign to least-loaded available instance
+- assign to preferred instance when available
+- request scale-out when capacity is unavailable and scale-out is allowed
+- queue globally when fallback is allowed
+- reject when no capacity and no fallback exists
+
+Added DI registration for `IAiRunAdmissionController`.
+
+Added unit tests for:
+
+- assignment to available instance
+- least-loaded selection
+- preferred instance selection
+- ignoring unavailable preferred instance
+- scale-out request
+- global queue fallback
+- rejection
+- disabled admission
+- paused instance policy
+- no registered instances
+- null request validation
+
+### Notes
+
+Admission does not enqueue runs.
+
+Admission does not modify local queues.
+
+Admission does not create Kubernetes replicas.
+
+Admission does not execute DAG steps.
+
+Admission only decides what should happen next.
+
+This prepares the future Shared Runtime Controller.
+
+---
+
+## Control Plane Observability
+
+Added shared control-plane observer abstraction.
+
+Added no-op control-plane observer.
+
+Added logged control-plane observer.
+
+Added structured logging support for control-plane events.
+
+Added control-plane events across:
+
+- replay
+- execution control
+- runtime queue control
+- runtime instance control
+
+Added control-plane event fields useful for future dashboards:
+
+- event type
+- area
+- operation
+- outcome
+- correlation context
+- duration
+- message
+- failure reason
+- properties
+
+Added control-plane areas including:
+
+- replay
+- execution-control
+- run-control
+- instance-registry
+- admission
+- shared-queue
+- shared-controller
+- scaling
+
+Prepared the architecture for future Kibana, Grafana, and OpenSearch export.
+
+---
+
+## Dependency Injection
+
+Updated `AiControlPlaneServiceCollectionExtensions`.
+
+Added DI registration for:
+
+- `IAiReplayControlPlane`
+- `IAiExecutionControlPlane`
+- `IAiRuntimeQueueControlPlane`
+- `IAiRuntimeInstanceRegistry`
+- `IAiRuntimeInstanceControlPlane`
+- `IAiRunAdmissionController`
+- `IAiControlPlaneObserver`
+- optional logging observer
+
+Added options registration for:
+
+- replay control
+- execution control-plane
+- runtime queue control-plane
+- runtime instance control-plane
+- run admission
+
+Added DI unit tests for all new registrations.
+
+---
+
+## Tests
+
+Added and updated unit tests for:
+
+- replay control-plane
+- execution control-plane
+- runtime queue control-plane
+- runtime instance registry
+- runtime instance control-plane
+- run admission controller
+- DI registrations
+
+Updated fake implementations to support new interface methods.
+
+Fixed tests after adding `GetStateAsync`.
+
+Fixed tests after changing background controller methods from handle-based to run-id based.
+
+Preserved and validated integration behavior for:
+
+- queue pause ledger events
+- queue resume ledger events
+- execution-correlated queue ledger visibility
+- run-id correlated queue ledger visibility
+
+---
+
+## Changed
+
+Renamed the feature direction from replay-only abstraction to full runtime control-plane foundation.
+
+Recommended branch rename:
+
+- from `feature/replay-controller-abstraction`
+- to `feature/runtime-control-plane`
+
+Changed local queue control operations to be external-adapter friendly.
+
+Changed queue pause/resume correlation strategy:
+
+- before: required handle
+- after: resolves best target from controller state
+
+Changed runtime queue naming from `RunControlPlane` to `RuntimeQueueControlPlane` to avoid confusion with future shared/global queue.
+
+Improved naming consistency with `ControlPlane` suffix on public models to avoid collisions with existing runtime engine models.
+
+Added clear separation between:
+
+- local queue control
+- future shared queue
+- runtime instance registry
+- admission decisioning
+- execution control
+- replay audit
+
+---
+
+## Fixed
+
+Fixed type ambiguity between existing execution control models and new control-plane request models by using explicit control-plane naming.
+
+Fixed interface fake/test failures after adding `GetStateAsync`.
+
+Fixed runtime queue control-plane calls after background controller signatures changed.
+
+Fixed queue pause/resume ledger integration after removing handle input.
+
+Fixed execution-correlated queue pause/resume integration test failure by resolving queue ledger target from `_runningRuns` / `_queuedRuns`.
+
+Fixed runtime queue control-plane tests to match final `IAiRuntimePipelineBackgroundController` signatures.
+
+Fixed DI tests for newly added services.
+
+---
+
+## Architecture Notes
+
+This change establishes the first real runtime control-plane layer.
+
+The architecture now separates:
+
+- External adapters
+- ControlPlane facades
+- Runtime internals
+
+External adapters include:
+
+- HTTP API
+- MCP
+- CLI
+- Dashboard
+- Kubernetes control pod
+
+ControlPlane facades include:
+
+- Replay
+- ExecutionControl
+- RuntimeQueue
+- RuntimeInstances
+- Admission
+
+Runtime internals include:
+
+- DAG engine
+- local queues
+- workers
+- worker groups
+- execution store
+- replay service
+- control service
+
+This means future external systems will not call runtime internals directly.
+
+---
+
+## Kubernetes Preparation
+
+This work prepares Kubernetes support by introducing:
+
+- runtime instance identity
+- runtime instance registration
+- runtime instance heartbeat
+- local queue visibility
+- run capacity visibility
+- admission decisions
+- scale-out decision placeholder
+- local queue control
+- instance draining
+- stopped/unregistered instances
+- observability hooks
+- structured event model
+
+The next Kubernetes-related pieces can now be built on top:
+
+- SharedRuntimeController
+- SharedRunQueue
+- Redis-backed RuntimeInstanceRegistry
+- Redis-backed admission/claim logic
+- Scale-out requested events
+- Kubernetes deployment scaler adapter
+- MCP/API control-plane endpoints
+- Live observability export to Kibana/Grafana/OpenSearch
+
+---
+
+## Current Control Plane Capabilities
+
+The runtime can now expose or support:
+
+- replay execution
+- audit execution
+- pause execution
+- resume execution
+- cancel execution
+- submit human input
+- get execution control state
+- enqueue local runtime run
+- cancel local runtime run
+- cancel queued local run
+- pause local queue
+- resume local queue
+- get local run status
+- get local queue status
+- register runtime instance
+- heartbeat runtime instance
+- get runtime instance
+- list runtime instances
+- mark runtime instance draining
+- unregister runtime instance
+- admit run
+- assign run to runtime instance
+- queue globally later
+- request scale-out later
+- reject run
+
+---
+
+## Next Step
+
+The next step is the Shared Runtime Controller skeleton.
+
+Expected V1 behavior:
+
+- receive a run request
+- ask `IAiRunAdmissionController`
+- if `AssignToInstance`, dispatch later to selected runtime queue
+- if `QueueGlobally`, store pending run later
+- if `RequestScaleOut`, emit scale-out request later
+- if `Reject`, reject the run
+
+V1 can remain in-memory and adapter-neutral.
+
+Future V2 should add:
+
+- Redis-backed shared queue
+- atomic Lua admission
+- multi-instance safe pending run claim
+- runtime instance heartbeat TTL
+- scale-out decision events
+- Kubernetes scaler adapter
+- dashboard/MCP/API integration
 
 ---
 

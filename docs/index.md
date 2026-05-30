@@ -24,6 +24,7 @@ Focused AI runtime documentation is organized under:
 | [`ai/observability-tracing.md`](ai/observability-tracing.md) | Runtime tracing, trace timelines, correlation, trace storage modes, Mongo trace persistence, MemoryAndMongo mode, and tracing improvements. |
 | [`ai/runtime-metrics.md`](ai/runtime-metrics.md) | Runtime metric domains, metric storage modes, worker/retention/storage/resolver/hot-state/policy metrics, and metrics improvements. |
 | [`ai/replay-and-audit.md`](ai/replay-and-audit.md) | Deterministic Replay Engine V1, snapshot restore, fingerprint validation, replay metadata, ledger/timeline diagnostics, and replay TODO/improvements. |
+| [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md) | Runtime control-plane foundation covering replay control, execution control, runtime queue control, runtime instance registry/control, admission decisions, and Kubernetes-oriented orchestration foundations. |
 | [`comparison-existing-tools.md`](comparison-existing-tools.md) | Ecosystem positioning against agent frameworks, workflow engines, orchestration tools, observability platforms, and distributed infrastructure. |
 | [`roadmap.md`](roadmap.md) | Project roadmap organized by phases. |
 
@@ -54,7 +55,8 @@ Start with:
 6. [`ai/observability-tracing.md`](ai/observability-tracing.md)
 7. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
 8. [`ai/replay-and-audit.md`](ai/replay-and-audit.md)
-9. [`runtime-internals.md`](runtime-internals.md)
+9. [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md)
+10. [`runtime-internals.md`](runtime-internals.md)
 
 This path gives both the strategic positioning and the complete technical depth.
 
@@ -71,8 +73,9 @@ Start with:
 7. [`ai/observability-tracing.md`](ai/observability-tracing.md)
 8. [`ai/runtime-metrics.md`](ai/runtime-metrics.md)
 9. [`ai/replay-and-audit.md`](ai/replay-and-audit.md)
-10. [`runtime-internals.md`](runtime-internals.md)
-11. [`roadmap.md`](roadmap.md)
+10. [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md)
+11. [`runtime-internals.md`](runtime-internals.md)
+12. [`roadmap.md`](roadmap.md)
 
 This path gives the current architecture, configuration model, context resolution layer, extension model, technical reference, and next planned improvements.
 
@@ -206,6 +209,23 @@ This document explains:
 - distributed chaos metrics diagnostics
 - metrics TODO and improvement roadmap
 
+### [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md)
+
+Runtime control-plane and orchestration foundations.
+
+This document explains:
+
+- replay control-plane facade
+- execution control-plane facade
+- local runtime queue control-plane facade
+- runtime instance registry
+- runtime instance control-plane facade
+- run admission and slot decisioning
+- RunId versus ExecutionId separation at the control-plane level
+- queue pause/resume ledger correlation behavior
+- Kubernetes-oriented runtime instance visibility
+- future shared runtime controller direction
+
 ### [`comparison-existing-tools.md`](comparison-existing-tools.md)
 
 A high-level ecosystem positioning document comparing the runtime with existing categories such as:
@@ -245,6 +265,7 @@ The project roadmap organized into phases:
 | [`ai/distributed-execution.md`](ai/distributed-execution.md) | Distributed workers, Redis coordination, claims, leases, and deterministic convergence. |
 | [`ai/execution-control-state.md`](ai/execution-control-state.md) | ExecutionId-level pause, resume, cancel, waiting-for-input, and control-state behavior. |
 | [`ai/runtime-queue-control.md`](ai/runtime-queue-control.md) | RunId-level background controller queue control, hot enqueue, and RunId versus ExecutionId separation. |
+| [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md) | Runtime control-plane foundation for replay, execution control, runtime queue control, runtime instance registry/control, admission, and future shared orchestration. |
 | [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime auditability, runtime decision recording, and replay lifecycle event correlation. |
 | [`ai/observability.md`](ai/observability.md) | High-level observability index and summary linking ledger, tracing, metrics, and logs. |
 
@@ -274,6 +295,18 @@ The project roadmap organized into phases:
 
 ---
 
+## Runtime Control Plane and Orchestration
+
+| Document | Purpose |
+|---|---|
+| [`ai/runtime-control-plane.md`](ai/runtime-control-plane.md) | Runtime control-plane foundation, replay/execution/queue/instance facades, run admission, and shared controller preparation. |
+| [`ai/runtime-queue-control.md`](ai/runtime-queue-control.md) | RunId-level local runtime queue control, hot enqueue, queue pause/resume, and queued/running cancellation behavior. |
+| [`ai/execution-control-state.md`](ai/execution-control-state.md) | ExecutionId-level durable pause, resume, cancel, waiting-for-input, and human-input control state. |
+| [`ai/execution-correlated-ledger.md`](ai/execution-correlated-ledger.md) | Execution-correlated runtime decision ledger and audit visibility used by control-plane operations. |
+| [`ai/observability.md`](ai/observability.md) | Observability index connecting logs, metrics, traces, ledger, replay diagnostics, and control-plane visibility. |
+
+---
+
 ## Runtime Extension and Configuration
 
 | Document | Purpose |
@@ -288,7 +321,7 @@ The project roadmap organized into phases:
 
 ## Documentation Status
 
-Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, distributed concurrency, retention/compaction, deterministic replay and audit foundations, execution-correlated decision ledger foundations, observability/tracing foundations, and runtime metrics foundations.
+Many focused documents started as documentation split placeholders, but several core runtime areas are now fully documented, including execution control state, runtime queue control, runtime control-plane foundations, distributed concurrency, retention/compaction, deterministic replay and audit foundations, execution-correlated decision ledger foundations, observability/tracing foundations, and runtime metrics foundations.
 
 The complete technical reference remains preserved in:
 
@@ -316,3 +349,4 @@ When adding new documentation:
 6. Clearly distinguish between implemented features, available foundations, and planned work.
 7. Keep replay documentation connected to ledger, tracing, and metrics because Replay V1 now exposes replay metadata, replay lifecycle ledger events, and trace timeline diagnostics.
 8. Keep observability overview, tracing, runtime metrics, and replay/audit linked together because they describe different layers of the same runtime visibility model.
+9. Keep runtime control-plane documentation linked with runtime queue control, execution control state, instance visibility, admission, and future Kubernetes/shared-controller documentation.
