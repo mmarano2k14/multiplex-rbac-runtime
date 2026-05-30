@@ -1411,7 +1411,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             .ConfigureAwait(false);
 
                         trace.SetTag("recoveredCount", result);
-                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
+                        trace.SetTag("workerId", _services.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
                         trace.SetTag("recovered", result > 0);
 
                         if (result <= 0)
