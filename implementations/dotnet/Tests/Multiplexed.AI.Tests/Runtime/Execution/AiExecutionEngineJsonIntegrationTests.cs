@@ -4,6 +4,7 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.DI.Cleanup;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
@@ -86,7 +87,7 @@ namespace Multiplexed.AI.Tests.Runtime.Execution
                 services.AddSingleton<IContextStore, FakeInMemoryContextStore>();
                 services.AddSingleton<IExecutionContextAccessor, FakeInMemoryContextAccessor>();
                 services.AddSingleton<IExecutionContextFactory, FakeExecutionContextFactory>();
-                services.AddSingleton<Multiplexed.AI.Runtime.Logging.IAiRuntimeLogger, NoopLogger>();
+                services.AddSingleton<IAiRuntimeLogger, NoopLogger>();
                 services.AddSingleton<IAiDagExecutionStore, NoOpAiDagExecutionStore>();
 
                 var provider = services.BuildServiceProvider();

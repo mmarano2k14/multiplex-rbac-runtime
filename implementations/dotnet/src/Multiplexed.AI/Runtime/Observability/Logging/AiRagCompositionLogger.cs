@@ -1,7 +1,7 @@
 ﻿using System;
 using Multiplexed.Abstractions.Runtime;
 
-namespace Multiplexed.AI.Runtime.Logging
+namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Emits structured realtime events for RAG composition execution.

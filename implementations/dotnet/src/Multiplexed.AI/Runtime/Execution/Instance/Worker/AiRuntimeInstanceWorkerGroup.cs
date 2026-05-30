@@ -3,7 +3,7 @@ using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Tracing;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 
 namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 {

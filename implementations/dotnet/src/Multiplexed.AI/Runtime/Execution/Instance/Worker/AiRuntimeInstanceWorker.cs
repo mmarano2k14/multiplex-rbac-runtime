@@ -5,7 +5,7 @@ using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Tracing;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 
 namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
 {

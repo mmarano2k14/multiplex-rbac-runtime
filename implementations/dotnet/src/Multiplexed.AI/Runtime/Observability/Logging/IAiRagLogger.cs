@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.AI.Runtime.Logging
+﻿namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Defines the root logging gateway for RAG runtime events.

@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.AI.Runtime.Logging
+namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Defines structured runtime logging for the high-level pipeline service entry point.

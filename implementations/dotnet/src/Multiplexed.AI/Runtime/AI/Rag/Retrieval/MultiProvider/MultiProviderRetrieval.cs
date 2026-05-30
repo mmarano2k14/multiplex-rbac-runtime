@@ -8,7 +8,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Retrieval;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Retrieval.MultiProvider
 {

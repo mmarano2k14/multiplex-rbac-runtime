@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Steps;
 
-namespace Multiplexed.AI.Runtime.Logging
+namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Defines structured runtime logging for the AI execution engine.

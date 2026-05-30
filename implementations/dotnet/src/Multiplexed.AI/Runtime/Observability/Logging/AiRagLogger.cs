@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Multiplexed.AI.Runtime.Logging
+namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Default implementation of <see cref="IAiRagLogger"/>.

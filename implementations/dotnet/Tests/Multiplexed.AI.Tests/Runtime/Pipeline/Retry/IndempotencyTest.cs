@@ -6,7 +6,7 @@ using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.State;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Runtime.Pipeline.Steps.Execution;
 using Xunit;
 

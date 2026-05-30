@@ -19,7 +19,7 @@ using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.Configuration;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.Rbac.Core.ExecutionContext;
 

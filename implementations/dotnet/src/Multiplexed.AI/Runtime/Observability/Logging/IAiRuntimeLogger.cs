@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.AI.Runtime.Logging
+﻿namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Defines the main entry point for AI runtime logging.

@@ -10,7 +10,6 @@ using Multiplexed.AI.Runtime.Execution.Convergence;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Finalization;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
-using Multiplexed.AI.Runtime.Logging;
 using Multiplexed.AI.Runtime.Pipeline;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Local

@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 
-namespace Multiplexed.AI.Runtime.Logging
+namespace Multiplexed.AI.Runtime.Observability.Logging
 {
     /// <summary>
     /// Emits structured runtime events for RAG retrieval execution.

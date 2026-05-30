@@ -4,7 +4,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Composition;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Discovery.Attributes;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Enums;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;

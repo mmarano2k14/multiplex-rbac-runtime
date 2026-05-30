@@ -6,7 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Cleanup;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.AI.DI;
 using Multiplexed.AI.Runtime.Execution.Cleanup;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Stores;
 using Multiplexed.AI.Tests.Fakes;
 using Multiplexed.AI.Tests.Models;
