@@ -6,11 +6,13 @@ using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
 using Multiplexed.AI.Redis.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
 using Multiplexed.AI.Runtime.Observability.Logging;
 using StackExchange.Redis;
 
@@ -216,6 +218,24 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
             Assert.Equal(
                 typeof(RedisAiSharedRunStore),
                 descriptors[0].ImplementationType);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_InMemory_SharedQueue_By_Default()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedQueue));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+            Assert.Equal(
+                typeof(InMemoryAiSharedQueue),
+                descriptor.ImplementationType);
         }
     }
 }

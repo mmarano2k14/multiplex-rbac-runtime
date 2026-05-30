@@ -3,14 +3,16 @@ using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Redis.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
 using StackExchange.Redis;
 
-namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
+namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
 {
     public sealed class RedisAiSharedRuntimeControllerTests : IAsyncLifetime
     {
@@ -176,6 +178,48 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             Assert.Contains(list.Runs, run => run.SharedRunId == "shared-run-2");
         }
 
+        [Fact]
+        public async Task SubmitRunAsync_Should_Enqueue_SharedQueue_Item_When_Admission_Queues_Globally()
+        {
+            var admission = new FakeRunAdmissionController(
+                new AiRunAdmissionDecision
+                {
+                    DecisionType = AiRunAdmissionDecisionType.QueueGlobally,
+                    Reason = "No instance capacity."
+                });
+
+            var sharedQueue = new InMemoryAiSharedQueue();
+
+            var controller = new AiSharedRuntimeController(
+                admission,
+                new InMemoryAiSharedRunStore(),
+                sharedQueue,
+                Options.Create(new AiSharedRuntimeControllerOptions()),
+                new NoopAiControlPlaneObserver());
+
+            var result = await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-1",
+                RunRequest = CreateRunRequest(),
+                TenantId = "tenant-1",
+                PipelineKey = "pipeline-1"
+            });
+
+            Assert.True(result.Success);
+            Assert.NotNull(result.Run);
+            Assert.Equal(AiSharedRunStatus.QueuedGlobally, result.Run.Status);
+
+            var queueItem = await sharedQueue.GetAsync("shared-run-1");
+
+            Assert.NotNull(queueItem);
+            Assert.Equal("shared-run-1", queueItem!.SharedRunId);
+            Assert.Equal(AiSharedQueueItemStatus.Pending, queueItem.Status);
+            Assert.Equal("tenant-1", queueItem.TenantId);
+            Assert.Equal("pipeline-1", queueItem.PipelineKey);
+            Assert.Equal("No instance capacity.", queueItem.Reason);
+        }
+
         private AiSharedRuntimeController CreateController(
             AiRunAdmissionDecision admissionDecision)
         {
@@ -195,6 +239,7 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             return new AiSharedRuntimeController(
                 new FakeRunAdmissionController(admissionDecision),
                 store,
+                new InMemoryAiSharedQueue(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
         }
