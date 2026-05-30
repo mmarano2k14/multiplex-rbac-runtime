@@ -1,5 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Core
 {

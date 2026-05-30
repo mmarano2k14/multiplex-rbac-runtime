@@ -1,8 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Runtime.Execution.Normalization;
 using Multiplexed.AI.Runtime.Execution.Retention.Models;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Stores.Cache.Redis.Dag;
 using Multiplexed.AI.Stores.Cache.Redis.Helpers;
 using StackExchange.Redis;

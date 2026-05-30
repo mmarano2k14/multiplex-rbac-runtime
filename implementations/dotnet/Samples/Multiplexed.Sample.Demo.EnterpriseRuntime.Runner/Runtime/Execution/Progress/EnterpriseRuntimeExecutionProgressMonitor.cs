@@ -1,5 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
-using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Stores;
 
 namespace Multiplexed.Sample.Demo.EnterpriseRuntime.Runner.Runtime.Execution.Progress

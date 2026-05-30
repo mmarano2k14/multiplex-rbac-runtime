@@ -1,7 +1,7 @@
-﻿using Multiplexed.Abstractions.AI.Metrics;
-using Multiplexed.Abstractions.AI.Observability.Context;
+﻿using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
-using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 
 namespace Multiplexed.Abstractions.AI.Observability
 {

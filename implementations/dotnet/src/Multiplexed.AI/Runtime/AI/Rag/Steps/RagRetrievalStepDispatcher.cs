@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
 using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.Abstractions.AI.Rag.Steps;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using System.Collections.Concurrent;
 using System.Reflection;
 

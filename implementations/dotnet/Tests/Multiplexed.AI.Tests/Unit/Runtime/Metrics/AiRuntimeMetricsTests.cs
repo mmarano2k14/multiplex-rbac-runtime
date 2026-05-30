@@ -1,6 +1,6 @@
-﻿using Multiplexed.Abstractions.AI.Metrics;
-using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Metrics.Execution;
+﻿using Multiplexed.Abstractions.AI.Observability.Metrics;
+using Multiplexed.AI.Runtime.Observability.Metrics;
+using Multiplexed.AI.Runtime.Observability.Metrics.Execution;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics

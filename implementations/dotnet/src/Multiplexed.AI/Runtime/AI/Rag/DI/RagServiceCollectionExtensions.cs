@@ -22,7 +22,7 @@ using Multiplexed.AI.Runtime.AI.Rag.Providers.Resolvers;
 using Multiplexed.AI.Runtime.AI.Rag.Retrieval;
 using Multiplexed.AI.Runtime.AI.Rag.Steps;
 using Multiplexed.AI.Runtime.Execution.Normalization;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;

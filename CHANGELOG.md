@@ -6,7 +6,67 @@ This project follows a deterministic runtime and observability model designed fo
 
 ---
 
-## [1.0.5.4] - 2026-05-29 Replay API, Deterministic Validation, Ledger and Timeline Diagnostics
+## [1.0.5.4] - 2026-05-30 Runtime Package Structure and Observability Reorganization
+
+### Replay Package Reorganization
+
+- Reorganized replay-related contracts, services, validators, reports, and metadata into a dedicated replay package structure.
+- Improved replay module discoverability and maintainability.
+- Aligned replay architecture with runtime package conventions.
+- Prepared replay subsystem for future controller and HTTP API integration.
+
+### Snapshot Package Reorganization
+
+- Reorganized snapshot-related contracts and implementations into a dedicated snapshot package structure.
+- Improved separation between snapshot persistence and replay functionality.
+- Aligned snapshot architecture with runtime package conventions.
+- Prepared snapshot subsystem for future storage provider extensions.
+
+### Observability Package Reorganization
+
+- Consolidated runtime observability components under a unified `Observability` namespace.
+- Moved tracing abstractions and implementations into `Observability/Tracing`.
+- Moved metrics abstractions and implementations into `Observability/Metrics`.
+- Moved logging abstractions and implementations into `Observability/Logging`.
+- Preserved existing public behavior while improving package organization.
+
+### Observability Domain Structure
+
+- Added a unified observability domain structure:
+  - `Observability/Context`
+  - `Observability/Helpers`
+  - `Observability/Ledger`
+  - `Observability/Logging`
+  - `Observability/Metrics`
+  - `Observability/Tracing`
+  - `Observability/AiRuntimeObservability.cs`
+
+- Improved separation of observability concerns:
+  - decision ledger
+  - tracing
+  - metrics
+  - logging
+  - runtime correlation
+  - observability helpers
+
+### Documentation Alignment
+
+- Updated documentation to reflect Replay Engine V1 completion.
+- Updated roadmap phases to distinguish completed replay engine foundations from future replay controller and HTTP API work.
+- Updated documentation index references.
+- Updated replay and audit documentation.
+- Added replay diagnostic, ledger, and timeline examples.
+- Added TODO / improvement notes for future replay operational tooling.
+
+### No Functional Changes
+
+- No runtime behavior changes were introduced.
+- No replay, snapshot, observability, tracing, metrics, or logging behavior was intentionally modified.
+- This release focuses on package structure, documentation alignment, and future maintainability.
+
+---
+
+## [1.0.5.4] - 2026-05-30 Replay API, Deterministic Validation, Ledger and Timeline Diagnostics
 
 - Added the first complete Replay API implementation for deterministic AI runtime executions.
 - Added replay-as-validation support for persisted executions using an `ExecutionId`.

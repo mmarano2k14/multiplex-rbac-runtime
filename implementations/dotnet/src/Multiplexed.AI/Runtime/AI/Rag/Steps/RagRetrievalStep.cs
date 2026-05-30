@@ -5,7 +5,7 @@ using Multiplexed.Abstractions.AI.Rag.Operations.Discovery;
 using Multiplexed.Abstractions.AI.Rag.Runtime;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Models;
 using Multiplexed.AI.Runtime.AI.Rag.Abstractions.Providers;
-using Multiplexed.AI.Runtime.Logging;
+using Multiplexed.AI.Runtime.Observability.Logging;
 using Multiplexed.AI.Runtime.Plugins;
 
 namespace Multiplexed.AI.Runtime.AI.Rag.Steps

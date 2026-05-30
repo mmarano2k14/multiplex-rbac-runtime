@@ -3,8 +3,8 @@ using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 using Multiplexed.Abstractions.AI.Pipeline;
-using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Concurrency;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -1411,7 +1411,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Steps
                             .ConfigureAwait(false);
 
                         trace.SetTag("recoveredCount", result);
-                        trace.SetTag("workerId", _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
+                        trace.SetTag("workerId", _services.ObservabilityService?.Correlation?.Current?.WorkerId ?? workerId);
                         trace.SetTag("recovered", result > 0);
 
                         if (result <= 0)

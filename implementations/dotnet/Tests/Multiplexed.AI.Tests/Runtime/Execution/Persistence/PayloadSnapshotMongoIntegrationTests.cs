@@ -7,11 +7,12 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Mongo;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.Abstractions.AI.Steps;
 using Multiplexed.AI.Runtime.Execution.Payloads;
 using Multiplexed.AI.Runtime.Execution.Payloads.Mongo.Stores;
 using Multiplexed.AI.Runtime.Execution.Payloads.Redis;
-using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
+using Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Normalization;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution.Persistence

@@ -1,15 +1,14 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.Execution.Context;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
 using Multiplexed.AI.Runtime.Execution.Engine.Helpers;
-using Multiplexed.AI.Runtime.Logging;
 
 namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
 {
@@ -180,7 +179,7 @@ namespace Multiplexed.AI.Runtime.Execution.Engine.Creation
                         StepKey = step.StepKey,
                         RetryCount = stepState.RetryState?.RetryCount ?? 0,
                         RecoveryCount = stepState.RecoveryCount,
-                        WorkerId = _services?.ObservabilityService?.Correlation?.Current?.WorkerId ?? String.Empty,
+                        WorkerId = _services.ObservabilityService?.Correlation?.Current?.WorkerId ?? String.Empty,
                         ClaimToken = null,
                         Status = "ResolvingRetryPolicy",
                         Operation = "retry.definition"

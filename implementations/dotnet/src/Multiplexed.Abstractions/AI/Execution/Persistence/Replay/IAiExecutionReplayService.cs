@@ -1,4 +1,7 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
+
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
 {
     /// <summary>
     /// Provides replay and audit capabilities for persisted AI executions.
