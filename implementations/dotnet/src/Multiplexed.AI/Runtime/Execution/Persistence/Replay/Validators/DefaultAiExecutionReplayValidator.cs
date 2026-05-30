@@ -1,8 +1,12 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Fingerprint;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Validates replay determinism by comparing reconstructed execution fingerprints,

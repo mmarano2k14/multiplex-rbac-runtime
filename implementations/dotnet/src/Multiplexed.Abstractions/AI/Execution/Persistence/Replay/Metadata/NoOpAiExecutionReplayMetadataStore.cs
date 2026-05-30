@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata
 {
     /// <summary>
     /// No-op replay metadata store used when replay metadata persistence is not configured.

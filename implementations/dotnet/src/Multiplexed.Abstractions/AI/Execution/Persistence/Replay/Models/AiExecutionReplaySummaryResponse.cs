@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
+
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models
 {
     /// <summary>
     /// Represents a lightweight replay result intended for API responses,

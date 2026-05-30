@@ -7,6 +7,7 @@ using Multiplexed.Abstractions.AI.Execution.Payloads.Resolvers;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
 using Multiplexed.Abstractions.AI.Rag.Models;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Configuration;

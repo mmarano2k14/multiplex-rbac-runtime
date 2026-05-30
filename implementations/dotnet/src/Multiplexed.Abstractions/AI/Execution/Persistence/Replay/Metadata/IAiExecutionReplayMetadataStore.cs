@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata
 {
     /// <summary>
     /// Stores deterministic replay metadata for completed AI executions.

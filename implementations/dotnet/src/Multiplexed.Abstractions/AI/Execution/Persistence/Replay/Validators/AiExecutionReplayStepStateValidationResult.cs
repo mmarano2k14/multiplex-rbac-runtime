@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Result of replay step state validation.

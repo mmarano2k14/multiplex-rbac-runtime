@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Represents the result of replay dependency graph validation.

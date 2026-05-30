@@ -1,7 +1,8 @@
-﻿using Multiplexed.Abstractions.AI.Observability.Ledger;
+﻿using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
+using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;
 
-namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports
 {
     /// <summary>
     /// Represents the result of replaying or auditing a persisted AI execution.

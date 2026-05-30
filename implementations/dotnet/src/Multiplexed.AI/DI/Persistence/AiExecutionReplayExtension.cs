@@ -1,9 +1,13 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Fingerprint;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Metadata;
+using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Validators;
 
 namespace Multiplexed.AI.DI.Persistence
 {

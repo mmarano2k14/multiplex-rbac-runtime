@@ -1,6 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
-
-namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Validates dependency graph consistency for replayed AI executions.

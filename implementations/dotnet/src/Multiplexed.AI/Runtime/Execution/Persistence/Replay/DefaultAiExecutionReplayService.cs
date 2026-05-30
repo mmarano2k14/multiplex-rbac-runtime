@@ -1,6 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Tracing;

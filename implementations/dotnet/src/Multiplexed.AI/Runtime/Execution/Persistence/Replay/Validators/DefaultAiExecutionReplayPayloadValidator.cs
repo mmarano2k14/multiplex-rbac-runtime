@@ -1,8 +1,9 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Default structural validator for replay payload references.

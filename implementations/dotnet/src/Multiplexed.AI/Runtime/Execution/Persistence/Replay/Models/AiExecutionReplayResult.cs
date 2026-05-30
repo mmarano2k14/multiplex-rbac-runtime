@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Models
 {
     public sealed class AiExecutionReplayResult
     {

@@ -1,4 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
 
 namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
 {

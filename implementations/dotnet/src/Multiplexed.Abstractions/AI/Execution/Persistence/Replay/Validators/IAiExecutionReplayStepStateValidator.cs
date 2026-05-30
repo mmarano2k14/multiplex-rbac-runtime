@@ -1,6 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
-
-namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Validates step state consistency for replayed executions.

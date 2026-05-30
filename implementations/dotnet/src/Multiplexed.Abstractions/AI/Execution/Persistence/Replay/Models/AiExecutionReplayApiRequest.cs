@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models
 {
     /// <summary>
     /// Represents an API-level replay request.

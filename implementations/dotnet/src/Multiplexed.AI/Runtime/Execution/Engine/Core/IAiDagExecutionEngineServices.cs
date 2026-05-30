@@ -6,7 +6,7 @@ using Multiplexed.Abstractions.AI.Execution.Context;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Payloads;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
-using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
 using Multiplexed.Abstractions.AI.Metrics;

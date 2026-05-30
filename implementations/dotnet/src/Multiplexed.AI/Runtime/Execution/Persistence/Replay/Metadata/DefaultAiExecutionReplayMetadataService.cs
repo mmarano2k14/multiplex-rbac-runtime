@@ -1,8 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay.Fingerprint;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Metadata
 {
     public sealed class DefaultAiExecutionReplayMetadataService : IAiExecutionReplayMetadataService
     {

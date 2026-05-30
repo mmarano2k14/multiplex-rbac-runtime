@@ -1,4 +1,4 @@
-﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models
 {
     /// <summary>
     /// Represents a request to replay, resume, or audit a persisted AI execution.

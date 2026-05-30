@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
-using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Metadata
 {
     /// <summary>
     /// In-memory replay metadata store used for tests, demos, and local runtime scenarios.

@@ -1,7 +1,7 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Replay.Metadata
 {
     /// <summary>
     /// Creates replay metadata from execution records and states.

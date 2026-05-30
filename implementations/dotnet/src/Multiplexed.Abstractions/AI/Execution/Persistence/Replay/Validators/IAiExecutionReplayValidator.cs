@@ -1,6 +1,7 @@
-﻿using Multiplexed.Abstractions.AI.Execution;
+﻿using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports;
 
-namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Validators
 {
     /// <summary>
     /// Validates whether a persisted AI execution can be replayed deterministically.
