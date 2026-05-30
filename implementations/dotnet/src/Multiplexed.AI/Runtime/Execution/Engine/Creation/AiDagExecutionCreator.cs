@@ -1,8 +1,8 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Steps;
-using Multiplexed.Abstractions.AI.Tracing;
 using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Abstractions.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry;

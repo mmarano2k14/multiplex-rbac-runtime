@@ -1,6 +1,6 @@
-﻿using Multiplexed.Abstractions.AI.Metrics;
+﻿using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Metrics.Storage;
+using Multiplexed.AI.Runtime.Observability.Metrics.Storage;
 using System;
 using Xunit;
 

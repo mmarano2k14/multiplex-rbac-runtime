@@ -1,6 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
-using Multiplexed.Abstractions.AI.Tracing;
+using Multiplexed.Abstractions.AI.Observability.Tracing;
 
 namespace Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Reports
 {

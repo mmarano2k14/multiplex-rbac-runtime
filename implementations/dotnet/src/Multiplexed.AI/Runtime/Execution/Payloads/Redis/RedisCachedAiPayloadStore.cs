@@ -2,7 +2,7 @@
 using Multiplexed.Abstractions.AI.Execution.Payloads.Metrics;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Redis;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Stores;
-using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Runtime.Metrics;
 using StackExchange.Redis;
 using System.Text;

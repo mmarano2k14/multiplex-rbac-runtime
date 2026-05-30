@@ -3,10 +3,6 @@ using Multiplexed.AI.Abstractions.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Policies;
 using Multiplexed.AI.Runtime.AI.Retry;
 using Multiplexed.AI.Runtime.AI.Retry.Policies;
-using Multiplexed.AI.Runtime.Logging;
-using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Observability;
-using Multiplexed.AI.Runtime.Tracing;
 using static Multiplexed.AI.Tests.Integration.Helpers.MetricsFactory;
 
 namespace Multiplexed.AI.Tests.Integration.Fixtures

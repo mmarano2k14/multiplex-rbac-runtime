@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
-using Multiplexed.Abstractions.AI.Metrics;
+using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.Abstractions.Core.ExecutionContext;
 using Multiplexed.AI.Runtime.Execution.Persistence.Replay;
 using Multiplexed.AI.Stores;

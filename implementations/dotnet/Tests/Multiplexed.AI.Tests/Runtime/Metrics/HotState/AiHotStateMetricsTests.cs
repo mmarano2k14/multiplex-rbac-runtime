@@ -1,6 +1,6 @@
-﻿using Multiplexed.Abstractions.AI.Metrics;
+﻿using Multiplexed.Abstractions.AI.Observability.Metrics;
 using Multiplexed.AI.Runtime.Metrics;
-using Multiplexed.AI.Runtime.Metrics.HotState;
+using Multiplexed.AI.Runtime.Observability.Metrics.HotState;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Runtime.Metrics.HotState

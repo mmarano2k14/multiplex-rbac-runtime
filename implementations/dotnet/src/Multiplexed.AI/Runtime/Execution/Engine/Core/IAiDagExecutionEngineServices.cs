@@ -9,7 +9,6 @@ using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Metadata;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.Abstractions.AI.Execution.Scheduling;
 using Multiplexed.Abstractions.AI.Execution.State;
-using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;

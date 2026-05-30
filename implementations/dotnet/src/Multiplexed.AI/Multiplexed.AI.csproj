@@ -30,7 +30,7 @@
       <Content Remove="Config\retry-budget-maxretries-2.json" />
     </ItemGroup>
     <ItemGroup>
-      <None Include="Runtime\Metrics\Retention\AiRetentionDecisionMetrics.cs" />
+      <None Include="Runtime\Observability\Metrics\Retention\AiRetentionDecisionMetrics.cs" />
     </ItemGroup>
 
 </Project>

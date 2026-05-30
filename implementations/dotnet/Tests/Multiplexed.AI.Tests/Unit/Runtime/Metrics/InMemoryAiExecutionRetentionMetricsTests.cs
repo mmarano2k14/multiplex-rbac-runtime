@@ -1,4 +1,4 @@
-﻿using Multiplexed.AI.Runtime.Execution.Metrics;
+﻿using Multiplexed.AI.Runtime.Observability.Metrics;
 using Xunit;
 
 namespace Multiplexed.AI.Tests.Unit.Runtime.Metrics
