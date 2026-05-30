@@ -1,0 +1,252 @@
+﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.ControlPlane.Admission;
+using Multiplexed.Abstractions.AI.ControlPlane.Observability;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
+using Multiplexed.AI.Redis.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.Observability;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using StackExchange.Redis;
+
+namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
+{
+    public sealed class RedisAiSharedRuntimeControllerTests : IAsyncLifetime
+    {
+        private readonly string _keyPrefix =
+            $"test:ai:shared-controller:{Guid.NewGuid():N}";
+
+        private IConnectionMultiplexer? _connection;
+
+        public async Task InitializeAsync()
+        {
+            _connection = await ConnectionMultiplexer.ConnectAsync("localhost:6379");
+        }
+
+        public async Task DisposeAsync()
+        {
+            if (_connection is null)
+            {
+                return;
+            }
+
+            var database = _connection.GetDatabase();
+
+            var server = _connection.GetServer(
+                _connection.GetEndPoints().First());
+
+            var keys = server.Keys(
+                    database: database.Database,
+                    pattern: $"{_keyPrefix}*")
+                .ToArray();
+
+            if (keys.Length > 0)
+            {
+                await database.KeyDeleteAsync(keys);
+            }
+
+            await _connection.CloseAsync();
+            await _connection.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task SubmitRunAsync_Should_Persist_Shared_Run_In_Redis()
+        {
+            var controller = CreateController(
+                new AiRunAdmissionDecision
+                {
+                    DecisionType = AiRunAdmissionDecisionType.AssignToInstance,
+                    AssignedRuntimeInstanceId = "runtime-1",
+                    AssignedInstance = CreateRuntimeInstance("runtime-1"),
+                    Reason = "Runtime instance selected.",
+                    VisibleInstanceCount = 1,
+                    AvailableInstanceCount = 1,
+                    CurrentInstanceCount = 1
+                });
+
+            var submit = await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-1",
+                RunRequest = CreateRunRequest(),
+                CorrelationId = "correlation-1",
+                RequestedBy = "tester",
+                Source = "unit-test"
+            });
+
+            Assert.True(submit.Success);
+            Assert.NotNull(submit.Run);
+            Assert.Equal("shared-run-1", submit.SharedRunId);
+            Assert.Equal(AiSharedRunStatus.AssignedToInstance, submit.Run.Status);
+            Assert.Equal("runtime-1", submit.AssignedRuntimeInstanceId);
+
+            var get = await controller.GetRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.GetRun,
+                SharedRunId = "shared-run-1"
+            });
+
+            Assert.True(get.Success);
+            Assert.NotNull(get.Run);
+            Assert.Equal("shared-run-1", get.Run.SharedRunId);
+            Assert.Equal(AiSharedRunStatus.AssignedToInstance, get.Run.Status);
+            Assert.Equal("runtime-1", get.Run.AssignedRuntimeInstanceId);
+            Assert.Equal("pipeline-1", get.Run.RunRequest.PipelineName);
+        }
+
+        [Fact]
+        public async Task CancelRunAsync_Should_Cancel_Shared_Run_In_Redis()
+        {
+            var controller = CreateController(
+                new AiRunAdmissionDecision
+                {
+                    DecisionType = AiRunAdmissionDecisionType.QueueGlobally,
+                    Reason = "No local capacity.",
+                    VisibleInstanceCount = 1,
+                    AvailableInstanceCount = 0,
+                    CurrentInstanceCount = 1
+                });
+
+            await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-1",
+                RunRequest = CreateRunRequest()
+            });
+
+            var cancel = await controller.CancelRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.CancelRun,
+                SharedRunId = "shared-run-1",
+                Reason = "operator cancel",
+                RequestedBy = "tester",
+                Source = "unit-test"
+            });
+
+            Assert.True(cancel.Success);
+            Assert.NotNull(cancel.Run);
+            Assert.Equal(AiSharedRunStatus.Cancelled, cancel.Run.Status);
+            Assert.Equal("operator cancel", cancel.Run.FailureReason);
+            Assert.Equal("tester", cancel.Run.RequestedBy);
+            Assert.Equal("unit-test", cancel.Run.Source);
+
+            var get = await controller.GetRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.GetRun,
+                SharedRunId = "shared-run-1"
+            });
+
+            Assert.True(get.Success);
+            Assert.NotNull(get.Run);
+            Assert.Equal(AiSharedRunStatus.Cancelled, get.Run.Status);
+        }
+
+        [Fact]
+        public async Task ListRunsAsync_Should_Read_Shared_Runs_From_Redis()
+        {
+            var controller = CreateController(
+                new AiRunAdmissionDecision
+                {
+                    DecisionType = AiRunAdmissionDecisionType.QueueGlobally
+                });
+
+            await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-1",
+                RunRequest = CreateRunRequest()
+            });
+
+            await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-2",
+                RunRequest = CreateRunRequest()
+            });
+
+            var list = await controller.ListRunsAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.ListRuns
+            });
+
+            Assert.True(list.Success);
+            Assert.Equal(2, list.Runs.Count);
+            Assert.Contains(list.Runs, run => run.SharedRunId == "shared-run-1");
+            Assert.Contains(list.Runs, run => run.SharedRunId == "shared-run-2");
+        }
+
+        private AiSharedRuntimeController CreateController(
+            AiRunAdmissionDecision admissionDecision)
+        {
+            if (_connection is null)
+            {
+                throw new InvalidOperationException("Redis connection was not initialized.");
+            }
+
+            var store = new RedisAiSharedRunStore(
+                _connection,
+                Options.Create(new RedisAiSharedRunStoreOptions
+                {
+                    KeyPrefix = _keyPrefix,
+                    ListScanLimit = 100
+                }));
+
+            return new AiSharedRuntimeController(
+                new FakeRunAdmissionController(admissionDecision),
+                store,
+                Options.Create(new AiSharedRuntimeControllerOptions()),
+                new NoopAiControlPlaneObserver());
+        }
+
+        private static AiRuntimePipelineRunRequest CreateRunRequest()
+        {
+            return new AiRuntimePipelineRunRequest
+            {
+                PipelineName = "pipeline-1"
+            };
+        }
+
+        private static AiRuntimeInstanceSnapshot CreateRuntimeInstance(
+            string runtimeInstanceId)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            return new AiRuntimeInstanceSnapshot
+            {
+                RuntimeInstanceId = runtimeInstanceId,
+                Status = AiRuntimeInstanceStatus.Ready,
+                WorkerCount = 4,
+                QueuedRunCount = 0,
+                RunningRunCount = 0,
+                ActiveRunCount = 0,
+                QueueCapacity = 8,
+                MaxConcurrentRuns = 2,
+                AvailableRunSlots = 2,
+                IsQueuePaused = false,
+                CanAcceptRun = true,
+                RegisteredAtUtc = now,
+                LastHeartbeatAtUtc = now,
+                SnapshotAtUtc = now
+            };
+        }
+
+        private sealed class FakeRunAdmissionController : IAiRunAdmissionController
+        {
+            private readonly AiRunAdmissionDecision _decision;
+
+            public FakeRunAdmissionController(
+                AiRunAdmissionDecision decision)
+            {
+                _decision = decision;
+            }
+
+            public Task<AiRunAdmissionDecision> AdmitAsync(
+                AiRunAdmissionRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(_decision);
+            }
+        }
+    }
+}

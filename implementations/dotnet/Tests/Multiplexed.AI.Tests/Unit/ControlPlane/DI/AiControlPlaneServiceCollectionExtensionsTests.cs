@@ -6,10 +6,13 @@ using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.AI.Redis.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.Observability.Logging;
+using StackExchange.Redis;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
 {
@@ -175,6 +178,44 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
 
             Assert.NotNull(descriptor);
             Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_InMemory_SharedRun_Store_By_Default()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedRunStore));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+            Assert.Equal(
+                typeof(InMemoryAiSharedRunStore),
+                descriptor.ImplementationType);
+        }
+
+        [Fact]
+        public void AddRedisAiSharedRunStore_Should_Replace_InMemory_SharedRun_Store()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+            services.AddRedisAiSharedRunStore();
+
+            var descriptors = services
+                .Where(service => service.ServiceType == typeof(IAiSharedRunStore))
+                .ToArray();
+
+            Assert.Single(descriptors);
+
+            Assert.Equal(
+                typeof(RedisAiSharedRunStore),
+                descriptors[0].ImplementationType);
         }
     }
 }

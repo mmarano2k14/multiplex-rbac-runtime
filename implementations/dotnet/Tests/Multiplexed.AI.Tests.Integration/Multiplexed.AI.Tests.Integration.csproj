@@ -61,7 +61,6 @@
 
   <ItemGroup>
     <Folder Include="ControlPlane\" />
-    <Folder Include="Runtime\ControlPlane\SharedController\" />
     <Folder Include="Runtime\Execution\Instance\" />
   </ItemGroup>
 
