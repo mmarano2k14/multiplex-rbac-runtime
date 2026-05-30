@@ -1,8 +1,7 @@
 ﻿using System.Threading;
 using System.Threading.Tasks;
-using Multiplexed.Abstractions.AI.Execution;
 
-namespace Multiplexed.Abstractions.AI.Execution.Persistence
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// Defines a high-level service responsible for persisting execution snapshots.

@@ -3,10 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.Runtime.Execution.Persistence.Mongo;
-using Multiplexed.AI.Runtime.Persistence;
+using Multiplexed.AI.Runtime.Execution.Persistence.Snapshot;
+using Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Mongo;
 
 namespace Multiplexed.AI.DI.Persistence.Mongo
 {

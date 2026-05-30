@@ -2,9 +2,9 @@
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay;
 using Multiplexed.Abstractions.AI.Execution.Persistence.Replay.Models;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.Abstractions.AI.Metrics;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Metrics;

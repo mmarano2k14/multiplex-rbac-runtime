@@ -1,7 +1,7 @@
 ﻿using System.Threading;
 using System.Threading.Tasks;
 
-namespace Multiplexed.Abstractions.AI.Execution.Persistence
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// No-op implementation of <see cref="IAiExecutionSnapshotStore{TContextSnapshot}"/>.

@@ -3,10 +3,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.AI.Configuration;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Mongo
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Mongo
 {
     /// <summary>
     /// MongoDB implementation of <see cref="IAiExecutionSnapshotStore{TContextSnapshot}"/>.

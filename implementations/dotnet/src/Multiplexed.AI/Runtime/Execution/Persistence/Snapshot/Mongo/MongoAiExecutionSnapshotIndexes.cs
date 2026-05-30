@@ -2,9 +2,9 @@
 using System.Threading;
 using System.Threading.Tasks;
 using MongoDB.Driver;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Mongo
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Mongo
 {
     /// <summary>
     /// Provides MongoDB index initialization for AI execution snapshot persistence.

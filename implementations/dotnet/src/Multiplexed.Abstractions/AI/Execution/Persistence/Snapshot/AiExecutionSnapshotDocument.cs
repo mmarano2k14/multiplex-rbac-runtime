@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace Multiplexed.Abstractions.AI.Execution.Persistence
+namespace Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// Represents a durable snapshot of an AI execution.

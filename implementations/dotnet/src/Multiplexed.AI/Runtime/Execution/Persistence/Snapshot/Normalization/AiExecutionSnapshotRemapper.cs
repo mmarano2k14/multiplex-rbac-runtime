@@ -1,10 +1,10 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Payloads.Models;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.Abstractions.AI.Steps;
 using System.Text.Json;
 
-namespace Multiplexed.AI.Runtime.Execution.Persistence.Normalization
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Normalization
 {
     /// <summary>
     /// Rebuilds snapshot values after persistence by remapping CLR-safe values

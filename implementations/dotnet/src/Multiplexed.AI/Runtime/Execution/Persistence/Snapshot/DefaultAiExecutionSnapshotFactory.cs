@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 
-namespace Multiplexed.AI.Runtime.Persistence
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// Default implementation of <see cref="IAiExecutionSnapshotFactory{TContextSnapshot}"/>.

@@ -1,9 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.AI.Configuration;
-using Multiplexed.AI.Runtime.Execution.Persistence.Mongo;
-using Multiplexed.AI.Runtime.Persistence;
+using Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Mongo;
 using System;
 using System.Threading;
 using System.Threading.Tasks;

@@ -1,6 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.Execution.Persistence;
-
-namespace Multiplexed.Abstractions.AI.Execution.Persistence
+﻿namespace Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// Creates durable execution snapshot documents from runtime execution models.

@@ -1,11 +1,11 @@
 ﻿using Multiplexed.Abstractions.AI.Execution;
-using Multiplexed.Abstractions.AI.Execution.Persistence;
+using Multiplexed.Abstractions.AI.Execution.Persistence.Snapshot;
 using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
-using Multiplexed.AI.Runtime.Execution.Persistence.Normalization;
+using Multiplexed.AI.Runtime.Execution.Persistence.Snapshot.Normalization;
 using Multiplexed.AI.Runtime.Observability.Helpers;
 
-namespace Multiplexed.AI.Runtime.Persistence
+namespace Multiplexed.AI.Runtime.Execution.Persistence.Snapshot
 {
     /// <summary>
     /// Default implementation of <see cref="IAiExecutionSnapshotService{TContextSnapshot}"/>.
