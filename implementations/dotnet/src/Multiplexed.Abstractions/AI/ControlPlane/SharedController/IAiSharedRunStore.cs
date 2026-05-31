@@ -81,5 +81,28 @@
             string? requestedBy = null,
             string? source = null,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Marks a shared run as dispatched to a runtime instance.
+        /// </summary>
+        /// <param name="sharedRunId">The shared controller run identifier.</param>
+        /// <param name="runtimeInstanceId">The runtime instance id that received the run.</param>
+        /// <param name="localRunId">The local runtime queue run id returned by the target runtime instance.</param>
+        /// <param name="executionId">The optional durable execution id, when already available.</param>
+        /// <param name="reason">The optional dispatch reason.</param>
+        /// <param name="cancellationToken">A token used to cancel the operation.</param>
+        /// <returns>
+        /// The updated shared run record, or <c>null</c> when the run is unknown or cannot be updated.
+        /// </returns>
+        /// <remarks>
+        /// Distributed implementations should perform this update atomically.
+        /// </remarks>
+        Task<AiSharedRunRecord?> MarkDispatchedAsync(
+            string sharedRunId,
+            string runtimeInstanceId,
+            string? localRunId = null,
+            string? executionId = null,
+            string? reason = null,
+            CancellationToken cancellationToken = default);
     }
 }

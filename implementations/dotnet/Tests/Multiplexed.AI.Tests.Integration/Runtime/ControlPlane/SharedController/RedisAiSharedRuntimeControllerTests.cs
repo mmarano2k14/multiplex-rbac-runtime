@@ -80,8 +80,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
             Assert.True(submit.Success);
             Assert.NotNull(submit.Run);
             Assert.Equal("shared-run-1", submit.SharedRunId);
-            Assert.Equal(AiSharedRunStatus.AssignedToInstance, submit.Run.Status);
+            Assert.Equal(AiSharedRunStatus.Dispatched, submit.Run.Status);
             Assert.Equal("runtime-1", submit.AssignedRuntimeInstanceId);
+            Assert.Equal("local-run-1", submit.LocalRunId);
+            Assert.Equal("execution-1", submit.ExecutionId);
 
             var get = await controller.GetRunAsync(new AiSharedRuntimeControllerRequest
             {
@@ -92,8 +94,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
             Assert.True(get.Success);
             Assert.NotNull(get.Run);
             Assert.Equal("shared-run-1", get.Run.SharedRunId);
-            Assert.Equal(AiSharedRunStatus.AssignedToInstance, get.Run.Status);
+            Assert.Equal(AiSharedRunStatus.Dispatched, get.Run.Status);
             Assert.Equal("runtime-1", get.Run.AssignedRuntimeInstanceId);
+            Assert.Equal("local-run-1", get.Run.LocalRunId);
+            Assert.Equal("execution-1", get.Run.ExecutionId);
             Assert.Equal("pipeline-1", get.Run.RunRequest.PipelineName);
         }
 
@@ -194,6 +198,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 admission,
                 new InMemoryAiSharedRunStore(),
                 sharedQueue,
+                new FakeSharedRunDispatcher(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
 
@@ -221,7 +226,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
         }
 
         private AiSharedRuntimeController CreateController(
-            AiRunAdmissionDecision admissionDecision)
+            AiRunAdmissionDecision admissionDecision,
+            IAiSharedRunDispatcher? dispatcher = null)
         {
             if (_connection is null)
             {
@@ -240,6 +246,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 new FakeRunAdmissionController(admissionDecision),
                 store,
                 new InMemoryAiSharedQueue(),
+                dispatcher ?? new FakeSharedRunDispatcher(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
         }
@@ -291,6 +298,56 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 CancellationToken cancellationToken = default)
             {
                 return Task.FromResult(_decision);
+            }
+        }
+
+        private sealed class FakeSharedRunDispatcher : IAiSharedRunDispatcher
+        {
+            private readonly AiSharedRunDispatchResult _result;
+
+            public FakeSharedRunDispatcher(
+                AiSharedRunDispatchResult? result = null)
+            {
+                var now = DateTimeOffset.UtcNow;
+
+                _result = result ?? new AiSharedRunDispatchResult
+                {
+                    Success = true,
+                    SharedRunId = "shared-run-1",
+                    RuntimeInstanceId = "runtime-1",
+                    LocalRunId = "local-run-1",
+                    ExecutionId = "execution-1",
+                    Message = "Dispatched.",
+                    StartedAtUtc = now,
+                    CompletedAtUtc = now
+                };
+            }
+
+            public AiSharedRunDispatchRequest? LastRequest { get; private set; }
+
+            public Task<AiSharedRunDispatchResult> DispatchAsync(
+                AiSharedRunDispatchRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                LastRequest = request;
+
+                var now = DateTimeOffset.UtcNow;
+
+                return Task.FromResult(new AiSharedRunDispatchResult
+                {
+                    Success = _result.Success,
+                    SharedRunId = request.SharedRun.SharedRunId,
+                    RuntimeInstanceId = request.RuntimeInstanceId,
+                    LocalRunId = _result.LocalRunId,
+                    ExecutionId = _result.ExecutionId,
+                    ClaimToken = request.ClaimToken,
+                    Message = _result.Message,
+                    FailureReason = _result.FailureReason,
+                    StartedAtUtc = _result.StartedAtUtc == default ? now : _result.StartedAtUtc,
+                    CompletedAtUtc = _result.CompletedAtUtc == default ? now : _result.CompletedAtUtc,
+                    DurationMs = _result.DurationMs,
+                    Diagnostics = _result.Diagnostics
+                });
             }
         }
     }

@@ -108,6 +108,60 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
             }
         }
 
+        /// <inheritdoc />
+        public Task<AiSharedRunRecord?> MarkDispatchedAsync(
+            string sharedRunId,
+            string runtimeInstanceId,
+            string? localRunId = null,
+            string? executionId = null,
+            string? reason = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sharedRunId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            while (true)
+            {
+                if (!_runs.TryGetValue(sharedRunId, out var existing))
+                {
+                    return Task.FromResult<AiSharedRunRecord?>(null);
+                }
+
+                if (IsTerminal(existing.Status))
+                {
+                    return Task.FromResult<AiSharedRunRecord?>(existing);
+                }
+
+                var updated = new AiSharedRunRecord
+                {
+                    SharedRunId = existing.SharedRunId,
+                    Status = AiSharedRunStatus.Dispatched,
+                    RunRequest = existing.RunRequest,
+                    LocalRunId = localRunId ?? existing.LocalRunId,
+                    ExecutionId = executionId ?? existing.ExecutionId,
+                    AssignedRuntimeInstanceId = runtimeInstanceId,
+                    AdmissionDecision = existing.AdmissionDecision,
+                    TenantId = existing.TenantId,
+                    PipelineKey = existing.PipelineKey,
+                    CorrelationId = existing.CorrelationId,
+                    RequestedBy = existing.RequestedBy,
+                    Source = existing.Source,
+                    Reason = reason ?? existing.Reason,
+                    FailureReason = existing.FailureReason,
+                    SubmittedAtUtc = existing.SubmittedAtUtc,
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                    Metadata = existing.Metadata
+                };
+
+                if (_runs.TryUpdate(sharedRunId, updated, existing))
+                {
+                    return Task.FromResult<AiSharedRunRecord?>(updated);
+                }
+            }
+        }
+
         /// <summary>
         /// Determines whether a shared run status is terminal.
         /// </summary>

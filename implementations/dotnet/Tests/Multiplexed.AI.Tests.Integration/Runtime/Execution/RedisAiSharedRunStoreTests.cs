@@ -6,7 +6,7 @@ using Multiplexed.AI.Redis.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
 using StackExchange.Redis;
 
-namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
+namespace Multiplexed.AI.Tests.Integration.Runtime.Execution
 {
     public sealed class RedisAiSharedRunStoreTests : IAsyncLifetime
     {
@@ -323,6 +323,41 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             Assert.Equal(AiSharedRunStatus.Cancelled, loaded!.Status);
             Assert.False(string.IsNullOrWhiteSpace(loaded.FailureReason));
             Assert.StartsWith("cancel-", loaded.FailureReason);
+        }
+
+        [Fact]
+        public async Task MarkDispatchedAsync_Should_Update_NonTerminal_Run()
+        {
+            var store = CreateStore();
+
+            await store.CreateAsync(
+                CreateRecord("shared-run-1", AiSharedRunStatus.AssignedToInstance));
+
+            var updated = await store.MarkDispatchedAsync(
+                "shared-run-1",
+                runtimeInstanceId: "runtime-1",
+                localRunId: "local-run-1",
+                executionId: "execution-1",
+                reason: "dispatch succeeded");
+
+            Assert.NotNull(updated);
+            Assert.Equal(AiSharedRunStatus.Dispatched, updated!.Status);
+            Assert.Equal("runtime-1", updated.AssignedRuntimeInstanceId);
+            Assert.Equal("local-run-1", updated.LocalRunId);
+            Assert.Equal("execution-1", updated.ExecutionId);
+            Assert.Equal("dispatch succeeded", updated.Reason);
+        }
+
+        [Fact]
+        public async Task MarkDispatchedAsync_Should_Return_Null_When_Run_Is_Unknown()
+        {
+            var store = CreateStore();
+
+            var updated = await store.MarkDispatchedAsync(
+                "missing-run",
+                runtimeInstanceId: "runtime-1");
+
+            Assert.Null(updated);
         }
 
         private RedisAiSharedRunStore CreateStore()

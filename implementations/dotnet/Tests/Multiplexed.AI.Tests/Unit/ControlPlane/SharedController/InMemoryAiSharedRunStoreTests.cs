@@ -234,6 +234,41 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedController
             Assert.Equal("existing failure", result.FailureReason);
         }
 
+        [Fact]
+        public async Task MarkDispatchedAsync_Should_Update_NonTerminal_Run()
+        {
+            var store = new InMemoryAiSharedRunStore();
+
+            await store.CreateAsync(
+                CreateRecord("shared-run-1", AiSharedRunStatus.AssignedToInstance));
+
+            var updated = await store.MarkDispatchedAsync(
+                "shared-run-1",
+                runtimeInstanceId: "runtime-1",
+                localRunId: "local-run-1",
+                executionId: "execution-1",
+                reason: "dispatch succeeded");
+
+            Assert.NotNull(updated);
+            Assert.Equal(AiSharedRunStatus.Dispatched, updated!.Status);
+            Assert.Equal("runtime-1", updated.AssignedRuntimeInstanceId);
+            Assert.Equal("local-run-1", updated.LocalRunId);
+            Assert.Equal("execution-1", updated.ExecutionId);
+            Assert.Equal("dispatch succeeded", updated.Reason);
+        }
+
+        [Fact]
+        public async Task MarkDispatchedAsync_Should_Return_Null_When_Run_Is_Unknown()
+        {
+            var store = new InMemoryAiSharedRunStore();
+
+            var updated = await store.MarkDispatchedAsync(
+                "missing-run",
+                runtimeInstanceId: "runtime-1");
+
+            Assert.Null(updated);
+        }
+
         private static AiSharedRunRecord CreateRecord(
             string sharedRunId,
             AiSharedRunStatus status,

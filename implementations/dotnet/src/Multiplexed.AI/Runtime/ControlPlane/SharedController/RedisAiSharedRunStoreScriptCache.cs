@@ -22,6 +22,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
 
         private byte[]? _createSha;
         private byte[]? _cancelSha;
+        private byte[]? _markDispatchedSha;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RedisAiSharedRunStoreScriptCache"/> class.
@@ -72,6 +73,26 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
                 database,
                 ScriptKind.Cancel,
                 RedisAiSharedRunStoreScripts.Cancel,
+                keys,
+                values);
+        }
+
+        /// <summary>
+        /// Executes the atomic shared run mark-dispatched script.
+        /// </summary>
+        /// <param name="database">The Redis database.</param>
+        /// <param name="keys">The Redis keys.</param>
+        /// <param name="values">The Redis values.</param>
+        /// <returns>The Redis script result.</returns>
+        public Task<RedisResult> ExecuteMarkDispatchedAsync(
+            IDatabase database,
+            RedisKey[] keys,
+            RedisValue[] values)
+        {
+            return ExecuteAsync(
+                database,
+                ScriptKind.MarkDispatched,
+                RedisAiSharedRunStoreScripts.MarkDispatched,
                 keys,
                 values);
         }
@@ -233,6 +254,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
             {
                 ScriptKind.Create => _createSha,
                 ScriptKind.Cancel => _cancelSha,
+                ScriptKind.MarkDispatched => _markDispatchedSha,
                 _ => null
             };
         }
@@ -255,6 +277,10 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
                 case ScriptKind.Cancel:
                     _cancelSha = sha;
                     break;
+
+                case ScriptKind.MarkDispatched:
+                    _markDispatchedSha = sha;
+                    break;
             }
         }
 
@@ -271,7 +297,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
             /// <summary>
             /// Atomic shared run cancel script.
             /// </summary>
-            Cancel = 1
+            Cancel = 1,
+
+            /// <summary>
+            /// Atomic shared run mark-dispatched script.
+            /// </summary>
+            MarkDispatched = 2
         }
     }
 }

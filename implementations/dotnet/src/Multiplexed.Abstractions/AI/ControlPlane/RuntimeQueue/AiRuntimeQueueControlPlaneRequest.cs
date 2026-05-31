@@ -73,5 +73,17 @@ namespace Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue
         /// Indicates whether diagnostics should be included when available.
         /// </summary>
         public bool IncludeDiagnostics { get; init; } = true;
+
+        /// <summary>
+        /// Optional metadata associated with the runtime queue operation.
+        /// </summary>
+        /// <remarks>
+        /// Metadata can be used by external adapters, dashboards, Kubernetes labels,
+        /// routing policies, diagnostics, or future distributed dispatch logic.
+        /// 
+        /// The runtime queue control plane does not have to interpret these values directly.
+        /// </remarks>
+        public IReadOnlyDictionary<string, string> Metadata { get; init; } =
+            new Dictionary<string, string>();
     }
 }

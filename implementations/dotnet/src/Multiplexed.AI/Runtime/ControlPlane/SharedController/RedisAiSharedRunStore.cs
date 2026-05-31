@@ -19,6 +19,7 @@ namespace Multiplexed.AI.Redis.ControlPlane.SharedController
     /// - one Redis sorted set index ordered by submission time
     /// - Lua for atomic create
     /// - Lua for atomic cancel-if-non-terminal
+    /// - Lua for atomic mark-dispatched updates
     ///
     /// Redis keys:
     /// - ai:shared-runs:run:{sharedRunId}
@@ -244,6 +245,60 @@ namespace Multiplexed.AI.Redis.ControlPlane.SharedController
 
             throw new InvalidOperationException(
                 $"Unexpected Redis cancel result for shared run '{sharedRunId}': '{status}'.");
+        }
+
+        /// <inheritdoc />
+        public async Task<AiSharedRunRecord?> MarkDispatchedAsync(
+            string sharedRunId,
+            string runtimeInstanceId,
+            string? localRunId = null,
+            string? executionId = null,
+            string? reason = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sharedRunId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var runKey = _options.BuildRunKey(sharedRunId);
+            var updatedAtUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+
+            var result = await _scripts
+                .ExecuteMarkDispatchedAsync(
+                    _database,
+                    new RedisKey[]
+                    {
+                        runKey
+                    },
+                    new RedisValue[]
+                    {
+                        runtimeInstanceId,
+                        localRunId ?? string.Empty,
+                        executionId ?? string.Empty,
+                        reason ?? string.Empty,
+                        updatedAtUtc
+                    })
+                .ConfigureAwait(false);
+
+            var status = result.ToString();
+
+            if (string.Equals(status, "missing", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (string.Equals(status, "dispatched", StringComparison.Ordinal) ||
+                string.Equals(status, "terminal", StringComparison.Ordinal))
+            {
+                return await GetAsync(
+                        sharedRunId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected Redis mark-dispatched result for shared run '{sharedRunId}': '{status}'.");
         }
 
         /// <summary>

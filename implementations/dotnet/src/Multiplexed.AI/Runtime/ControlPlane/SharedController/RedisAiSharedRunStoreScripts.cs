@@ -63,5 +63,37 @@
 
             return 'cancelled'
             """;
+
+        /// <summary>
+        /// Atomically marks a shared run as dispatched when it is not terminal.
+        /// </summary>
+        public const string MarkDispatched = """
+            local runKey = KEYS[1]
+
+            local runtimeInstanceId = ARGV[1]
+            local localRunId = ARGV[2]
+            local executionId = ARGV[3]
+            local reason = ARGV[4]
+            local updatedAtUtc = ARGV[5]
+
+            if redis.call('EXISTS', runKey) == 0 then
+                return 'missing'
+            end
+
+            local status = redis.call('HGET', runKey, 'status')
+
+            if status == 'Completed' or status == 'Failed' or status == 'Cancelled' then
+                return 'terminal'
+            end
+
+            redis.call('HSET', runKey, 'status', 'Dispatched')
+            redis.call('HSET', runKey, 'assignedRuntimeInstanceId', runtimeInstanceId)
+            redis.call('HSET', runKey, 'localRunId', localRunId)
+            redis.call('HSET', runKey, 'executionId', executionId)
+            redis.call('HSET', runKey, 'reason', reason)
+            redis.call('HSET', runKey, 'updatedAtUtc', updatedAtUtc)
+
+            return 'dispatched'
+            """;
     }
 }
