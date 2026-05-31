@@ -166,14 +166,15 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.Mongo
             string executionId,
             CancellationToken cancellationToken)
         {
-            var filter = Builders<MongoAiDecisionLedgerSequenceDocument>.Filter.Eq(
-                document => document.ExecutionId,
-                executionId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            var filter = Builders<MongoAiDecisionLedgerSequenceDocument>.Filter
+                .Eq(document => document.Id, executionId);
 
             var update = Builders<MongoAiDecisionLedgerSequenceDocument>.Update
+                .Inc(document => document.CurrentSequence, 1)
                 .SetOnInsert(document => document.Id, executionId)
-                .SetOnInsert(document => document.ExecutionId, executionId)
-                .Inc(document => document.CurrentSequence, 1);
+                .SetOnInsert(document => document.ExecutionId, executionId);
 
             var options = new FindOneAndUpdateOptions<MongoAiDecisionLedgerSequenceDocument>
             {
@@ -181,15 +182,79 @@ namespace Multiplexed.AI.Runtime.Observability.Ledger.Mongo
                 ReturnDocument = ReturnDocument.After
             };
 
-            var sequence = await _sequences
-                .FindOneAndUpdateAsync(
-                    filter,
-                    update,
-                    options,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                var sequence = await _sequences
+                    .FindOneAndUpdateAsync(
+                        filter,
+                        update,
+                        options,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
-            return sequence.CurrentSequence;
+                return sequence.CurrentSequence;
+            }
+            catch (MongoException exception) when (IsDuplicateKey(exception))
+            {
+                // Concurrent upsert race:
+                // another worker inserted the sequence document between our find and insert.
+                // Retry the same atomic increment now that the document exists.
+                var retryOptions = new FindOneAndUpdateOptions<MongoAiDecisionLedgerSequenceDocument>
+                {
+                    IsUpsert = false,
+                    ReturnDocument = ReturnDocument.After
+                };
+
+                var sequence = await _sequences
+                    .FindOneAndUpdateAsync(
+                        filter,
+                        update,
+                        retryOptions,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (sequence is null)
+                {
+                    // Extremely defensive fallback:
+                    // if the document disappeared between duplicate-key and retry,
+                    // restart the safe path.
+                    return await GetNextSequenceAsync(
+                            executionId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                return sequence.CurrentSequence;
+            }
+        }
+
+        private static bool IsDuplicateKey(
+            MongoException exception)
+        {
+            if (exception is MongoCommandException commandException)
+            {
+                return commandException.Code == 11000 ||
+                       string.Equals(
+                           commandException.CodeName,
+                           "DuplicateKey",
+                           StringComparison.OrdinalIgnoreCase) ||
+                       commandException.Message.Contains(
+                           "E11000",
+                           StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (exception is MongoWriteException writeException)
+            {
+                return writeException.WriteError?.Category == ServerErrorCategory.DuplicateKey ||
+                       writeException.WriteError?.Code == 11000 ||
+                       writeException.Message.Contains(
+                           "E11000",
+                           StringComparison.OrdinalIgnoreCase);
+            }
+
+            return exception.Message.Contains(
+                "E11000",
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task CreateIndexesAsync(
