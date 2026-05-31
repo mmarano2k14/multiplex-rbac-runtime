@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.Registry;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.RuntimeInstances

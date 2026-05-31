@@ -1,9 +1,9 @@
 ﻿using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Store;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
-using Multiplexed.AI.Redis.ControlPlane.SharedController;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController.Store;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.Execution

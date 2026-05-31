@@ -1,7 +1,8 @@
 ﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Background;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Pump;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.SharedQueue
 {

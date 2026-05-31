@@ -1,5 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
-using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Dispatch;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
 {

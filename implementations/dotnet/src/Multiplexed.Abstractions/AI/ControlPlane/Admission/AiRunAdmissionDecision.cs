@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.Registry;
 
 namespace Multiplexed.Abstractions.AI.ControlPlane.Admission
 {

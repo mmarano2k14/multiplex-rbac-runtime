@@ -1,4 +1,5 @@
 ﻿using Multiplexed.Abstractions.AI.ControlPlane.Observability;
+using Multiplexed.Abstractions.AI.ControlPlane.Observability.Events;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.Observability
 {

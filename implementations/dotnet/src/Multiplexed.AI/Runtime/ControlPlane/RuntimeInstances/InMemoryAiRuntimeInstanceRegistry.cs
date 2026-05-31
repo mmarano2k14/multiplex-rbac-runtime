@@ -1,4 +1,4 @@
-﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+﻿using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.Registry;
 using System.Collections.Concurrent;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances

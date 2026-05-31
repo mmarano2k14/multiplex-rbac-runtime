@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Dispatch;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Pump;
 using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedQueue

@@ -1,10 +1,15 @@
 ﻿using Microsoft.Extensions.Options;
-using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Dispatch;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Store;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Dispatch;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Queue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Redis;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
-using Multiplexed.AI.Redis.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController.Store;
 using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
+using Multiplexed.AI.Runtime.ControlPlane.ShareQueue.Redis;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedQueue

@@ -1,4 +1,6 @@
 ﻿using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Claiming;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Queue;
 using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedQueue

@@ -1,6 +1,9 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue;
-using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Claiming;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Queue;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Redis;
+using Multiplexed.AI.Runtime.ControlPlane.ShareQueue.Redis;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedQueue

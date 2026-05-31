@@ -1,4 +1,6 @@
-﻿namespace Multiplexed.Abstractions.AI.ControlPlane.Observability
+﻿using Multiplexed.Abstractions.AI.ControlPlane.Observability.Events;
+
+namespace Multiplexed.Abstractions.AI.ControlPlane.Observability
 {
     /// <summary>
     /// Observes control-plane operations and exports structured events to

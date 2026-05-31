@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
-using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.Registry;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.Admission
 {

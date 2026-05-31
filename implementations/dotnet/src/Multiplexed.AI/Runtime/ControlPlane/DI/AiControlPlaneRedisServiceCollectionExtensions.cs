@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
-using Multiplexed.AI.Redis.ControlPlane.SharedController;
+using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Store;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController.Store;
 using StackExchange.Redis;
 
 namespace Multiplexed.AI.Runtime.ControlPlane.DI

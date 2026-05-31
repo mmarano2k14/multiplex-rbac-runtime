@@ -1,7 +1,8 @@
-﻿using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
+﻿using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Store;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController.Store;
 
 namespace Multiplexed.AI.Tests.Unit.ControlPlane.SharedController
 {
