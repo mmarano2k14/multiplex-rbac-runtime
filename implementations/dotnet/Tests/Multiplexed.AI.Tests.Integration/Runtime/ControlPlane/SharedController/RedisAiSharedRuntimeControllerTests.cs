@@ -199,6 +199,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 new InMemoryAiSharedRunStore(),
                 sharedQueue,
                 new FakeSharedRunDispatcher(),
+                new NoopAiRuntimeScaleOutRequestPublisher(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
 
@@ -225,9 +226,70 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
             Assert.Equal("No instance capacity.", queueItem.Reason);
         }
 
+        [Fact]
+        public async Task SubmitRunAsync_Should_Persist_And_Publish_ScaleOut_Request_In_Redis()
+        {
+            var publisher = new CapturingScaleOutPublisher();
+
+            var controller = CreateController(
+                new AiRunAdmissionDecision
+                {
+                    DecisionType = AiRunAdmissionDecisionType.RequestScaleOut,
+                    Reason = "Scale-out required.",
+                    VisibleInstanceCount = 1,
+                    AvailableInstanceCount = 0,
+                    CurrentInstanceCount = 1,
+                    MaxInstanceCount = 3
+                },
+                scaleOutPublisher: publisher);
+
+            var submit = await controller.SubmitRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                RequestedSharedRunId = "shared-run-scale-1",
+                RunRequest = CreateRunRequest(),
+                TenantId = "tenant-1",
+                PipelineKey = "pipeline-1",
+                CorrelationId = "correlation-scale-1",
+                RequestedBy = "tester",
+                Source = "redis-integration-test"
+            });
+
+            Assert.True(submit.Success);
+            Assert.NotNull(submit.Run);
+            Assert.Equal("shared-run-scale-1", submit.SharedRunId);
+            Assert.Equal(AiSharedRunStatus.ScaleOutRequested, submit.Run.Status);
+
+            var get = await controller.GetRunAsync(new AiSharedRuntimeControllerRequest
+            {
+                Operation = AiSharedRuntimeControllerOperation.GetRun,
+                SharedRunId = "shared-run-scale-1"
+            });
+
+            Assert.True(get.Success);
+            Assert.NotNull(get.Run);
+            Assert.Equal("shared-run-scale-1", get.Run.SharedRunId);
+            Assert.Equal(AiSharedRunStatus.ScaleOutRequested, get.Run.Status);
+            Assert.Equal("pipeline-1", get.Run.RunRequest.PipelineName);
+
+            Assert.NotNull(publisher.LastRequest);
+            Assert.Equal("shared-run-scale-1", publisher.LastRequest!.SharedRunId);
+            Assert.Equal("tenant-1", publisher.LastRequest.TenantId);
+            Assert.Equal("pipeline-1", publisher.LastRequest.PipelineKey);
+            Assert.Equal(1, publisher.LastRequest.VisibleInstanceCount);
+            Assert.Equal(0, publisher.LastRequest.AvailableInstanceCount);
+            Assert.Equal(1, publisher.LastRequest.CurrentInstanceCount);
+            Assert.Equal(3, publisher.LastRequest.MaxInstanceCount);
+            Assert.Equal("correlation-scale-1", publisher.LastRequest.CorrelationId);
+            Assert.Equal("tester", publisher.LastRequest.RequestedBy);
+            Assert.Equal("redis-integration-test", publisher.LastRequest.Source);
+            Assert.Equal("Scale-out required.", publisher.LastRequest.Reason);
+        }
+
         private AiSharedRuntimeController CreateController(
             AiRunAdmissionDecision admissionDecision,
-            IAiSharedRunDispatcher? dispatcher = null)
+            IAiSharedRunDispatcher? dispatcher = null,
+            IAiRuntimeScaleOutRequestPublisher? scaleOutPublisher = null)
         {
             if (_connection is null)
             {
@@ -247,6 +309,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 store,
                 new InMemoryAiSharedQueue(),
                 dispatcher ?? new FakeSharedRunDispatcher(),
+                scaleOutPublisher ?? new NoopAiRuntimeScaleOutRequestPublisher(),
                 Options.Create(new AiSharedRuntimeControllerOptions()),
                 new NoopAiControlPlaneObserver());
         }
@@ -347,6 +410,28 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                     CompletedAtUtc = _result.CompletedAtUtc == default ? now : _result.CompletedAtUtc,
                     DurationMs = _result.DurationMs,
                     Diagnostics = _result.Diagnostics
+                });
+            }
+        }
+
+        private sealed class CapturingScaleOutPublisher : IAiRuntimeScaleOutRequestPublisher
+        {
+            public AiRuntimeScaleOutRequest? LastRequest { get; private set; }
+
+            public Task<AiRuntimeScaleOutRequestResult> PublishAsync(
+                AiRuntimeScaleOutRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                LastRequest = request;
+
+                return Task.FromResult(new AiRuntimeScaleOutRequestResult
+                {
+                    Success = true,
+                    SharedRunId = request.SharedRunId,
+                    ScaleOutRequestId = $"redis-test-scale-out-{request.SharedRunId}",
+                    RequestedTargetInstanceCount = request.CurrentInstanceCount + 1,
+                    Message = "Scale-out request captured.",
+                    PublishedAtUtc = DateTimeOffset.UtcNow
                 });
             }
         }

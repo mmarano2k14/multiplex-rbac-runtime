@@ -13,7 +13,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
     /// <remarks>
     /// The shared runtime controller sits above run admission, runtime instances,
     /// local runtime queue control, the shared queue, the shared run dispatcher,
-    /// and the future Kubernetes scale-out adapter.
+    /// the scale-out request publisher, and the future Kubernetes scale-out adapter.
     ///
     /// V1 records the admission decision and shared run status so the control-plane
     /// lifecycle is visible and testable before adding remote Kubernetes behavior.
@@ -30,6 +30,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         private readonly IAiSharedRunStore _store;
         private readonly IAiSharedQueue _sharedQueue;
         private readonly IAiSharedRunDispatcher _dispatcher;
+        private readonly IAiRuntimeScaleOutRequestPublisher _scaleOutPublisher;
         private readonly AiSharedRuntimeControllerOptions _options;
         private readonly IAiControlPlaneObserver _observer;
 
@@ -40,18 +41,21 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <param name="store">The shared run store.</param>
         /// <param name="sharedQueue">The shared/global queue used when admission queues runs globally.</param>
         /// <param name="dispatcher">The shared run dispatcher used when admission assigns a run to an instance.</param>
+        /// <param name="scaleOutPublisher">The scale-out request publisher used when admission requests more capacity.</param>
         /// <param name="options">The shared runtime controller options.</param>
         /// <param name="observer">The control-plane observer used to record operation events.</param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="admissionController"/>, <paramref name="store"/>,
         /// <paramref name="sharedQueue"/>, <paramref name="dispatcher"/>,
-        /// <paramref name="options"/>, or <paramref name="observer"/> is null.
+        /// <paramref name="scaleOutPublisher"/>, <paramref name="options"/>,
+        /// or <paramref name="observer"/> is null.
         /// </exception>
         public AiSharedRuntimeController(
             IAiRunAdmissionController admissionController,
             IAiSharedRunStore store,
             IAiSharedQueue sharedQueue,
             IAiSharedRunDispatcher dispatcher,
+            IAiRuntimeScaleOutRequestPublisher scaleOutPublisher,
             IOptions<AiSharedRuntimeControllerOptions> options,
             IAiControlPlaneObserver observer)
         {
@@ -59,6 +63,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _sharedQueue = sharedQueue ?? throw new ArgumentNullException(nameof(sharedQueue));
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+            _scaleOutPublisher = scaleOutPublisher ?? throw new ArgumentNullException(nameof(scaleOutPublisher));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
             _observer = observer ?? throw new ArgumentNullException(nameof(observer));
         }
@@ -130,10 +135,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// Executes one shared runtime controller operation with validation,
         /// observability, duration measurement, and structured failure handling.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="operation">The shared runtime controller operation to execute.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The shared runtime controller result.</returns>
         private async Task<AiSharedRuntimeControllerResult> ExecuteControllerOperationAsync(
             AiSharedRuntimeControllerRequest request,
             AiSharedRuntimeControllerOperation operation,
@@ -225,10 +226,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Dispatches the shared controller operation to the matching internal handler.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="operation">The shared runtime controller operation to execute.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The internal shared controller operation result.</returns>
         private async Task<SharedRuntimeControllerOperationResult> ExecuteInnerAsync(
             AiSharedRuntimeControllerRequest request,
             AiSharedRuntimeControllerOperation operation,
@@ -256,9 +253,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Submits a run to the shared runtime controller and records the admission decision.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The internal shared controller operation result.</returns>
         private async Task<SharedRuntimeControllerOperationResult> SubmitRunInnerAsync(
             AiSharedRuntimeControllerRequest request,
             CancellationToken cancellationToken)
@@ -336,6 +330,14 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+            else if (admissionDecision.DecisionType == AiRunAdmissionDecisionType.RequestScaleOut)
+            {
+                await PublishScaleOutRequestAsync(
+                        created,
+                        admissionDecision,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             return new SharedRuntimeControllerOperationResult
             {
@@ -346,10 +348,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Dispatches a shared run that was assigned to a runtime instance by admission.
         /// </summary>
-        /// <param name="created">The created shared run record.</param>
-        /// <param name="admissionDecision">The admission decision.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The current shared run record after dispatch processing.</returns>
         private async Task<AiSharedRunRecord> DispatchAssignedRunAsync(
             AiSharedRunRecord created,
             AiRunAdmissionDecision admissionDecision,
@@ -389,10 +387,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Enqueues a shared run into the global shared queue.
         /// </summary>
-        /// <param name="created">The created shared run record.</param>
-        /// <param name="admissionDecision">The admission decision.</param>
-        /// <param name="now">The operation timestamp.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         private async Task EnqueueGloballyAsync(
             AiSharedRunRecord created,
             AiRunAdmissionDecision admissionDecision,
@@ -418,11 +412,38 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         }
 
         /// <summary>
+        /// Publishes a scale-out request for a shared run when admission requests more runtime capacity.
+        /// </summary>
+        private async Task PublishScaleOutRequestAsync(
+            AiSharedRunRecord created,
+            AiRunAdmissionDecision admissionDecision,
+            CancellationToken cancellationToken)
+        {
+            await _scaleOutPublisher
+                .PublishAsync(
+                    new AiRuntimeScaleOutRequest
+                    {
+                        SharedRun = created,
+                        SharedRunId = created.SharedRunId,
+                        TenantId = created.TenantId,
+                        PipelineKey = created.PipelineKey,
+                        VisibleInstanceCount = admissionDecision.VisibleInstanceCount,
+                        AvailableInstanceCount = admissionDecision.AvailableInstanceCount,
+                        CurrentInstanceCount = admissionDecision.CurrentInstanceCount,
+                        MaxInstanceCount = admissionDecision.MaxInstanceCount,
+                        CorrelationId = created.CorrelationId,
+                        RequestedBy = created.RequestedBy,
+                        Source = created.Source,
+                        Reason = admissionDecision.Reason ?? "Admission requested runtime scale-out.",
+                        Metadata = created.Metadata
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Gets a shared run record.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The internal shared controller operation result.</returns>
         private async Task<SharedRuntimeControllerOperationResult> GetRunInnerAsync(
             AiSharedRuntimeControllerRequest request,
             CancellationToken cancellationToken)
@@ -440,9 +461,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Lists shared run records known by the controller.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The internal shared controller operation result.</returns>
         private async Task<SharedRuntimeControllerOperationResult> ListRunsInnerAsync(
             AiSharedRuntimeControllerRequest request,
             CancellationToken cancellationToken)
@@ -464,9 +482,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Cancels a shared run known by the controller.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
-        /// <returns>The internal shared controller operation result.</returns>
         private async Task<SharedRuntimeControllerOperationResult> CancelRunInnerAsync(
             AiSharedRuntimeControllerRequest request,
             CancellationToken cancellationToken)
@@ -489,8 +504,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Maps an admission decision to a shared run status.
         /// </summary>
-        /// <param name="decision">The admission decision.</param>
-        /// <returns>The shared run status.</returns>
         private static AiSharedRunStatus MapAdmissionDecisionToStatus(
             AiRunAdmissionDecision decision)
         {
@@ -507,8 +520,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Creates a runtime correlation context for shared controller observability.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <returns>The runtime execution correlation context.</returns>
         private static AiRuntimeExecutionCorrelationContext CreateCorrelation(
             AiSharedRuntimeControllerRequest request)
         {
@@ -529,10 +540,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Records a control-plane operation started event.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="operation">The operation being started.</param>
-        /// <param name="correlation">The runtime correlation context.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         private async Task RecordStartedAsync(
             AiSharedRuntimeControllerRequest request,
             AiSharedRuntimeControllerOperation operation,
@@ -564,12 +571,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Records a control-plane operation completed event.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="operation">The completed operation.</param>
-        /// <param name="correlation">The runtime correlation context.</param>
-        /// <param name="operationResult">The internal shared controller operation result.</param>
-        /// <param name="durationMs">The operation duration in milliseconds.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         private async Task RecordCompletedAsync(
             AiSharedRuntimeControllerRequest request,
             AiSharedRuntimeControllerOperation operation,
@@ -606,12 +607,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Records a control-plane operation failed event.
         /// </summary>
-        /// <param name="request">The shared runtime controller request, when available.</param>
-        /// <param name="operation">The failed operation.</param>
-        /// <param name="correlation">The runtime correlation context.</param>
-        /// <param name="exception">The exception that caused the failure.</param>
-        /// <param name="durationMs">The operation duration in milliseconds.</param>
-        /// <param name="cancellationToken">A token used to cancel the operation.</param>
         private async Task RecordFailedAsync(
             AiSharedRuntimeControllerRequest? request,
             AiSharedRuntimeControllerOperation operation,
@@ -645,8 +640,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Validates a shared runtime controller request for the specified operation.
         /// </summary>
-        /// <param name="request">The shared runtime controller request.</param>
-        /// <param name="operation">The operation being validated.</param>
         private static void ValidateRequest(
             AiSharedRuntimeControllerRequest request,
             AiSharedRuntimeControllerOperation operation)
@@ -673,8 +666,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Determines whether the operation requires a shared run identifier.
         /// </summary>
-        /// <param name="operation">The shared runtime controller operation.</param>
-        /// <returns><c>true</c> when the operation requires a shared run id; otherwise, <c>false</c>.</returns>
         private static bool RequiresSharedRunId(
             AiSharedRuntimeControllerOperation operation)
         {
@@ -686,7 +677,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Ensures the requested shared runtime controller operation is enabled.
         /// </summary>
-        /// <param name="operation">The shared runtime controller operation.</param>
         private void EnsureEnabled(
             AiSharedRuntimeControllerOperation operation)
         {
@@ -709,11 +699,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Calculates the control-plane operation duration in milliseconds.
         /// </summary>
-        /// <param name="startedAtUtc">The operation start timestamp.</param>
-        /// <param name="completedAtUtc">The operation completion timestamp.</param>
-        /// <returns>
-        /// The operation duration in milliseconds, or <c>0</c> when duration measurement is disabled.
-        /// </returns>
         private long CalculateDurationMs(
             DateTimeOffset startedAtUtc,
             DateTimeOffset completedAtUtc)
@@ -729,8 +714,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController
         /// <summary>
         /// Copies shared run metadata into an immutable dictionary shape.
         /// </summary>
-        /// <param name="metadata">The source metadata.</param>
-        /// <returns>The copied metadata.</returns>
         private static IReadOnlyDictionary<string, string> CopyMetadata(
             IReadOnlyDictionary<string, string> metadata)
         {

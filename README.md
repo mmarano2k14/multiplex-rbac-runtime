@@ -2,11 +2,11 @@
 
 A deterministic AI execution runtime for production-grade AI workloads.
 
-This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay validation, correlated metrics and tracing, execution-correlated decision ledger, and executable enterprise demo scenarios.
+This repository provides a reference implementation of a distributed, state-driven runtime for executing AI workflows with deterministic DAG orchestration, context resolution, Redis Lua coordination, retry/recovery, retention/compaction, distributed concurrency control, execution control state, replay validation, correlated metrics and tracing, execution-correlated decision ledger, shared runtime control-plane orchestration, Redis-backed shared queue coordination, queue pumping/background consumption, scale-out request publication, and executable enterprise demo scenarios.
 
 The current runtime foundations are intentionally designed as the base for a broader AI execution and MLOps-oriented platform.
 
-[![Version](https://img.shields.io/badge/Version-1.0.5.4-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.0.5.5-blue)](./CHANGELOG.md)
 [![Changelog](https://img.shields.io/badge/Changelog-view-lightgrey)](./CHANGELOG.md)
 ![AI Runtime](https://img.shields.io/badge/AI-Deterministic%20Execution-purple)
 ![Runtime](https://img.shields.io/badge/Runtime-distributed-brightgreen)
@@ -23,7 +23,8 @@ The latest major updates focused on turning the runtime from a DAG executor into
 | Area | Summary |
 |---|---|
 | Distributed multi-runtime-instance execution | Added foundations for multiple runtime instances and workers to coordinate through shared Redis-backed execution state. |
-| Runtime control plane foundation | Added adapter-neutral control-plane foundations for replay, execution control, local runtime queue control, runtime instance registry/control, and run admission decisions. |
+| Runtime control plane foundation | Added adapter-neutral control-plane foundations for replay, execution control, local runtime queue control, runtime instance registry/control, run admission decisions, Shared Runtime Controller V1, shared queue dispatch, queue pump/background service, and scale-out request publication. |
+| Shared Runtime Controller V1 | Added shared run persistence, Redis-backed shared run store, Redis-backed shared queue, assigned-run dispatch, global shared queue dispatch, queue pump, hosted background queue consumption, and scale-out request publication. |
 | Distributed concurrency and throttling demo | Added an executable `throttling-100` enterprise demo scenario with provider-level concurrency control, realtime throttling visibility, Redis lease-based admission control, randomized provider distribution, and bounded provider capacity under worker pressure. |
 | Execution control state | Added durable `ExecutionId`-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Added `RunId`-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue support. |
@@ -63,6 +64,7 @@ It provides a state-driven execution layer where:
 - metrics, traces, and ledger events share runtime correlation
 - executions can be replay-validated from persisted snapshots
 - execution can be paused, resumed, cancelled, or blocked for human input
+- submitted runs can be admitted, assigned, globally queued, dispatched, scale-out requested, rejected, listed, retrieved, or cancelled through the shared runtime controller
 
 The project should be read as an AI execution infrastructure foundation. The runtime core is already substantial, while the longer-term direction is to evolve toward a broader AI operations and MLOps-oriented platform.
 
@@ -145,9 +147,10 @@ This project explores what an AI execution runtime should look like when reliabi
 | Policy-driven execution | Implemented | Retry, retention, and concurrency use configurable policy definitions. |
 | Execution control state | Implemented | ExecutionId-level pause, resume, cancel, waiting-for-input, and human input submission. |
 | Runtime queue control | Implemented | RunId-level queue pause/resume, queued cancellation, running cancellation bridge, and hot enqueue. |
-| Runtime control plane foundation | Implemented | Adapter-neutral facades expose replay, execution control, local queue control, runtime instance control, and admission foundations for API/MCP/CLI/dashboard/Kubernetes adapters. |
+| Runtime control plane foundation | Implemented | Adapter-neutral facades expose replay, execution control, local queue control, runtime instance control, admission, shared runtime controller, shared queue dispatch, queue pump/background service, and scale-out publication for API/MCP/CLI/dashboard/Kubernetes adapters. |
 | Runtime instance registry and control | Implemented | Runtime instances can register, heartbeat, expose queue capacity, be listed, marked draining, or unregistered. |
-| Run admission / slot decisions | Implemented | Admission can assign runs to an available runtime instance, request scale-out, queue globally later, or reject according to policy. |
+| Run admission / slot decisions | Implemented | Admission can assign runs to an available runtime instance, request scale-out, queue globally, or reject according to policy. |
+| Shared Runtime Controller V1 | Implemented | Shared controller handles assigned dispatch, global queue enqueue, Redis-backed shared queue dispatch, queue pump/background consumption, scale-out request publication, and shared run visibility. |
 | RunId vs ExecutionId separation | Implemented | Controller lifecycle identity is separated from durable DAG execution identity. |
 | Snapshot and Replay API foundations | Implemented | Terminal snapshots, replay metadata, deterministic fingerprint validation, audit-only replay, restore replay, ledger loading, and timeline loading are available. |
 | Execution-correlated decision ledger | Implemented | Durable correlated ledger events exist for execution lifecycle, run lifecycle, queue control, claims, steps, retry, recovery, policy evaluation, concurrency, execution control, human input, snapshots, storage failures, replay lifecycle, retention, compaction, and finalization. |
@@ -164,7 +167,7 @@ This project explores what an AI execution runtime should look like when reliabi
 Client / API / Controller
         |
         v
-Runtime Orchestration Layer
+Runtime Orchestration / Shared Control Plane Layer
         |
         v
 Pipeline Definition + DAG Resolution
@@ -195,6 +198,8 @@ Redis Hot State + Redis Lua Coordination
         +--> Worker recovery
         +--> Control state
         +--> Distributed leases
+        +--> Shared run records
+        +--> Shared queue claims
         |
         v
 Stateless Workers / Runtime Instances
@@ -227,6 +232,7 @@ The runtime is intentionally split into layers:
 - workers execute claimed steps
 - persistence stores large payloads and snapshots
 - replay validates deterministic reconstruction from persisted snapshots
+- shared controller coordinates run admission, shared run persistence, global queue dispatch, queue pumping, and scale-out publication
 - correlated observability records runtime behavior across ledger, metrics, traces, workers, and executions
 
 ---
@@ -246,7 +252,7 @@ The project is designed around production questions that enterprise AI systems m
 | How do you pause/resume/cancel safely? | Execution control state blocks new claims and coordinates deterministic finalization. |
 | How do you control human-in-the-loop? | WaitingForInput and SubmitHumanInput are supported through durable control state. |
 | How do you keep memory/state bounded? | Retention, compaction, eviction, and payload externalization control hot state size. |
-| How do you coordinate multiple runtime instances? | Shared Redis state, Lua coordination, leases, and deterministic convergence enable coordination. |
+| How do you coordinate multiple runtime instances? | Shared Redis state, Lua coordination, leases, shared run records, Redis-backed shared queue claims, queue pump/background consumption, and deterministic convergence enable coordination. |
 | How do you prove deterministic convergence? | Integration tests and enterprise demo scenarios validate completion, replay fingerprints, distributed execution, throttling, recovery behavior, atomic retention, compaction consistency, ledger visibility, and trace timeline visibility. |
 | How does this evolve toward AI operations and MLOps? | Runtime foundations are designed to support future AI execution control planes, governance, observability, replay, and operational workflows. |
 
@@ -266,6 +272,15 @@ The control plane currently exposes foundations for:
 - runtime instance registration and heartbeat
 - runtime instance visibility and draining
 - run admission / slot decisions
+- Shared Runtime Controller V1
+- shared run persistence
+- Redis-backed shared run store
+- Redis-backed shared queue
+- direct assigned-run dispatch
+- global shared queue dispatch
+- shared queue pump
+- hosted shared queue background consumption
+- scale-out request publication
 - future API, MCP, CLI, dashboard, and Kubernetes adapters
 
 The control plane is also split into two identity levels.
@@ -331,9 +346,58 @@ Implemented admission capabilities include:
 - queue globally later when shared queue fallback is enabled
 - reject when no capacity or fallback exists
 
-Admission does not enqueue runs yet.
+Admission does not enqueue runs directly.
 
-It only decides what should happen next.
+It only decides what should happen next. The shared runtime controller now applies that decision by dispatching assigned runs, enqueueing globally queued runs, publishing scale-out requests, or recording rejected runs.
+
+### Shared Runtime Controller V1
+
+Implemented shared controller capabilities include:
+
+- submit shared run
+- get shared run
+- list shared runs
+- cancel shared run
+- assign run to runtime instance
+- dispatch assigned run locally
+- queue run globally
+- claim globally queued run
+- dispatch globally queued run
+- requeue failed dispatch
+- mark shared run dispatched
+- mark shared queue item dispatched
+- publish scale-out request
+- pump shared queue manually
+- consume shared queue through hosted background service
+- coordinate shared queue dispatch through Redis
+- prevent double dispatch through Redis atomic claim
+
+The current shared controller flow is:
+
+```text
+SubmitRun
+  -> IAiRunAdmissionController
+
+  -> AssignToInstance
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiSharedRunDispatcher.DispatchAsync(...)
+      -> IAiSharedRunStore.MarkDispatchedAsync(...)
+      -> SharedRun.Status = Dispatched
+
+  -> QueueGlobally
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiSharedQueue.EnqueueAsync(...)
+      -> SharedRun.Status = QueuedGlobally
+
+  -> RequestScaleOut
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiRuntimeScaleOutRequestPublisher.PublishAsync(...)
+      -> SharedRun.Status = ScaleOutRequested
+
+  -> Reject
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> SharedRun.Status = Rejected
+```
 
 For details, see [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md).
 
@@ -403,6 +467,10 @@ The runtime includes foundations for production visibility and replayability:
 - claim, concurrency, retry, and recovery audit visibility
 - queue and execution control audit visibility
 - atomic retention and compaction auditability
+- shared runtime controller foundations
+- Redis-backed shared queue coordination
+- queue pump and background consumption
+- scale-out request publication
 - snapshot persistence audit events
 - replay lifecycle ledger events
 - replay metadata
@@ -449,6 +517,10 @@ The strongest areas today are:
 - execution control state
 - runtime queue control
 - runtime control-plane foundations
+- Shared Runtime Controller V1
+- Redis-backed shared run store and shared queue
+- shared queue dispatcher, pump, and background service
+- scale-out request publication
 - runtime instance registry and control
 - run admission / slot decisioning
 - queue and execution control observability
@@ -460,7 +532,10 @@ The strongest areas today are:
 Areas still evolving include:
 
 - public API/SDK polish
-- HTTP replay APIs and controller abstractions
+- remote runtime instance dispatch
+- Redis-backed runtime instance registry
+- automatic Kubernetes scaling adapter
+- HTTP replay/control-plane APIs and controller abstractions
 - OpenTelemetry/exporter polish for tracing and metrics
 - operational dashboarding
 - Kubernetes deployment assets
@@ -500,6 +575,10 @@ It currently includes:
 - queue and execution control audit events
 - retry, recovery, and concurrency ledger validation
 - atomic retention and compaction auditability
+- shared runtime controller foundations
+- Redis-backed shared queue coordination
+- queue pump and background consumption
+- scale-out request publication
 
 The current executable console scenarios are:
 
@@ -536,7 +615,7 @@ The roadmap is organized into phases.
 | Phase 1 | Enterprise demo | Completed (V1) - controller demo, distributed workers, runtime controls, chaos scenarios, retention/replay, and throttling scenario validated |
 | Phase 2 | Real enterprise sample | Planned |
 | Phase 3 | Correlated observability, tracing, and metrics | Foundations available / active polish |
-| Phase 4 | Kubernetes deployment demo | Planned |
+| Phase 4 | Kubernetes deployment demo | Planned - shared controller V1 and Redis shared queue foundation completed |
 | Phase 5 | Public API / SDK polish | Planned |
 | Phase 6 | Deterministic Replay Engine and Audit Foundations | Completed (V1) |
 | Phase 7 | Replay Controller, HTTP APIs, Dashboard, and Operational Tooling | Planned |
@@ -561,7 +640,7 @@ The full documentation map is available here:
 - [`docs/comparison-existing-tools.md`](docs/comparison-existing-tools.md) — Ecosystem positioning and comparison with existing tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — Project roadmap.
 - [`docs/road-to-mlops.md`](docs/road-to-mlops.md) — Long-term evolution from deterministic AI runtime foundations toward a broader AI execution and MLOps-oriented platform.
-- [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md) — Runtime control-plane foundation for replay, execution control, runtime queue control, runtime instance visibility/control, and run admission.
+- [`docs/ai/runtime-control-plane.md`](docs/ai/runtime-control-plane.md) — Runtime control-plane foundation for replay, execution control, runtime queue control, runtime instance visibility/control, run admission, Shared Runtime Controller V1, Redis shared queue coordination, queue pump/background service, and scale-out request publication.
 - [`demo/enterprise-runtime/README.md`](demo/enterprise-runtime/README.md) — Local enterprise runtime demo using Docker Compose, Redis, MongoDB, external demo steps, controller execution, distributed workers, and scenario documentation.
 - [`demo/enterprise-runtime/scenarios/06-distributed-throttling.md`](demo/enterprise-runtime/scenarios/06-distributed-throttling.md) — Executable distributed throttling scenario documentation.
 - [`demo/enterprise-runtime/scenarios/08-deterministic-convergence.md`](demo/enterprise-runtime/scenarios/08-deterministic-convergence.md) — Deterministic convergence scenario documentation.

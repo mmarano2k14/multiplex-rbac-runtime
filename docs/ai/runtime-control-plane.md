@@ -631,8 +631,8 @@ The runtime can now expose or support:
 - unregister runtime instance
 - admit run
 - assign run to runtime instance
-- queue globally later
-- request scale-out later
+- queue globally
+- request scale-out
 - reject run
 
 ---
@@ -687,11 +687,9 @@ The next Kubernetes-related pieces can now be built on top:
 
 The current foundation does not yet provide:
 
-- shared/global run queue implementation
 - Redis-backed runtime instance registry
-- Redis-backed shared queue claims
 - Kubernetes pod scaling adapter
-- actual scale-out execution
+- actual Kubernetes scale-out execution
 - cross-pod run dispatch
 - distributed shared controller election
 - MCP endpoint implementation
@@ -731,6 +729,485 @@ Future V2 should add:
 - dashboard / MCP / API integration
 
 ---
+
+
+---
+
+## Shared Runtime Controller V1
+
+The Shared Runtime Controller is now implemented as the orchestration layer above admission, shared run persistence, shared queue coordination, local runtime dispatch, queue pumping, background queue consumption, and scale-out request publication.
+
+It receives submitted runs and asks `IAiRunAdmissionController` what should happen next.
+
+The controller currently handles all admission outcomes:
+
+- `AssignToInstance`
+- `QueueGlobally`
+- `RequestScaleOut`
+- `Reject`
+
+For every submitted run, the controller creates a durable shared run record.
+
+This makes admission decisions visible, queryable, auditable, and ready for external adapters such as:
+
+- HTTP API
+- MCP server
+- CLI
+- Dashboard
+- Kubernetes control-plane pod
+
+The shared controller does not execute DAG steps.
+
+It does not directly claim shared queue work.
+
+It does not create Kubernetes pods.
+
+It coordinates runtime-control decisions through focused abstractions.
+
+---
+
+## Shared Run Store
+
+The shared run store persists shared run records independently from local runtime queue state.
+
+The shared run store abstraction is:
+
+- `IAiSharedRunStore`
+
+Current implementations:
+
+- `InMemoryAiSharedRunStore`
+- `RedisAiSharedRunStore`
+
+The shared run store supports:
+
+- create shared run
+- get shared run
+- list shared runs
+- cancel shared run
+- mark shared run as dispatched
+
+Redis shared run storage uses:
+
+- one Redis hash per shared run
+- one Redis sorted set index for listing
+- Lua atomic create
+- Lua atomic cancel
+- Lua atomic mark-dispatched
+- Lua script SHA caching
+- automatic NOSCRIPT reload
+
+This allows shared run state to remain consistent under concurrent workers and multiple runtime instances.
+
+---
+
+## Shared Queue
+
+The shared queue is the global queue used when admission decides that no current runtime instance can accept a run immediately, but the run should not be rejected.
+
+The shared queue abstraction is:
+
+- `IAiSharedQueue`
+
+Current implementations:
+
+- `InMemoryAiSharedQueue`
+- `RedisAiSharedQueue`
+
+The shared queue supports:
+
+- enqueue pending shared run
+- claim next pending shared run
+- mark claimed item as dispatched
+- requeue claimed item
+- cancel queued item
+- get queue item
+- list queue items
+
+Redis shared queue storage uses:
+
+- one Redis hash per queue item
+- pending sorted set
+- all-items sorted set
+- Lua atomic enqueue
+- Lua atomic claim-next
+- Lua atomic mark-dispatched
+- Lua atomic requeue
+- Lua atomic cancel
+- Lua script SHA caching
+- automatic NOSCRIPT reload
+
+The Redis implementation prevents double dispatch by ensuring only one dispatcher can claim a pending queue item atomically.
+
+---
+
+## Shared Runtime Controller Flow
+
+```text
+SubmitRun
+  -> IAiRunAdmissionController
+
+  -> AssignToInstance
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiSharedRunDispatcher.DispatchAsync(...)
+      -> IAiSharedRunStore.MarkDispatchedAsync(...)
+      -> SharedRun.Status = Dispatched
+
+  -> QueueGlobally
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiSharedQueue.EnqueueAsync(...)
+      -> SharedRun.Status = QueuedGlobally
+
+  -> RequestScaleOut
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> IAiRuntimeScaleOutRequestPublisher.PublishAsync(...)
+      -> SharedRun.Status = ScaleOutRequested
+
+  -> Reject
+      -> IAiSharedRunStore.CreateAsync(...)
+      -> SharedRun.Status = Rejected
+```
+
+This completes the first shared orchestration layer above local runtime queues.
+
+---
+
+## Direct Assigned Run Dispatch
+
+When admission returns `AssignToInstance`, the shared controller dispatches the run directly to the selected runtime instance.
+
+The dispatch abstraction is:
+
+- `IAiSharedRunDispatcher`
+
+Current implementation:
+
+- `LocalAiSharedRunDispatcher`
+
+The local dispatcher bridges the shared controller to the local runtime queue through:
+
+- `IAiRuntimeQueueControlPlane`
+
+The assigned run dispatch flow is:
+
+```text
+AssignToInstance
+  -> create shared run record
+  -> dispatch through IAiSharedRunDispatcher
+  -> enqueue into local runtime queue control plane
+  -> receive LocalRunId
+  -> receive ExecutionId when available
+  -> mark shared run as Dispatched
+```
+
+This keeps the local queue model intact while making assigned dispatch visible at the shared controller level.
+
+---
+
+## Global Shared Queue Dispatch
+
+When admission returns `QueueGlobally`, the shared controller creates a shared run record and enqueues a pending item into the shared queue.
+
+Queued work is later consumed by the shared queue dispatcher.
+
+The shared queue dispatcher abstraction is:
+
+- `IAiSharedQueueDispatcher`
+
+Runtime implementation:
+
+- `AiSharedQueueDispatcher`
+
+The queue dispatch flow is:
+
+```text
+IAiSharedQueueDispatcher
+  -> IAiSharedQueue.ClaimNextAsync(...)
+  -> IAiSharedRunStore.GetAsync(...)
+  -> IAiSharedRunDispatcher.DispatchAsync(...)
+  -> IAiSharedQueue.MarkDispatchedAsync(...)
+  -> IAiSharedRunStore.MarkDispatchedAsync(...)
+```
+
+If the shared run record is missing, the queue item is requeued.
+
+If dispatch fails, the queue item is requeued.
+
+If dispatch succeeds, both the queue item and the shared run record are marked as dispatched.
+
+---
+
+## Shared Queue Pump
+
+The shared queue pump runs controlled dispatch cycles over the shared queue.
+
+The pump abstraction is:
+
+- `IAiSharedQueuePump`
+
+Runtime implementation:
+
+- `AiSharedQueuePump`
+
+The pump repeatedly calls `IAiSharedQueueDispatcher.DispatchNextAsync(...)` until:
+
+- maximum dispatch count is reached
+- no pending item is available
+- a dispatch failure occurs and options require stopping
+- cancellation is requested
+
+Pump options include:
+
+- enabled flag
+- maximum dispatches per cycle
+- default claim TTL
+- stop when no item is available
+- stop on dispatch failure
+- worker id
+- source label
+
+The pump does not contain queue claim logic directly.
+
+It coordinates dispatch cycles and delegates actual claim/dispatch behavior to the shared queue dispatcher.
+
+---
+
+## Shared Queue Background Service
+
+The shared queue background service continuously runs shared queue pump cycles.
+
+Hosted service:
+
+- `AiSharedQueueBackgroundService`
+
+Options:
+
+- `AiSharedQueueBackgroundServiceOptions`
+
+DI registration extension:
+
+- `AddAiSharedQueueBackgroundService(...)`
+
+The background service is intentionally thin.
+
+It delegates business logic to:
+
+- `IAiSharedQueuePump`
+
+It handles:
+
+- start / stop lifecycle
+- runtime instance id resolution
+- worker id resolution
+- pump cycle execution
+- idle delay
+- active delay
+- error delay
+- logging
+- cancellation-aware shutdown
+
+Background service flow:
+
+```text
+AiSharedQueueBackgroundService
+  -> IAiSharedQueuePump.PumpOnceAsync(...)
+
+IAiSharedQueuePump
+  -> IAiSharedQueueDispatcher.DispatchNextAsync(...)
+```
+
+This allows runtime instances to automatically consume globally queued work.
+
+---
+
+## Runtime Scale-Out Request Publisher
+
+When admission returns `RequestScaleOut`, the shared controller now publishes a scale-out request.
+
+Scale-out abstraction:
+
+- `IAiRuntimeScaleOutRequestPublisher`
+
+Request/result models:
+
+- `AiRuntimeScaleOutRequest`
+- `AiRuntimeScaleOutRequestResult`
+
+Default implementation:
+
+- `NoopAiRuntimeScaleOutRequestPublisher`
+
+The no-op publisher acknowledges scale-out requests without creating infrastructure.
+
+This allows local mode, tests, and demos to run safely while keeping the architecture ready for future scale-out adapters.
+
+Future implementations can include:
+
+- Redis scale-out publisher
+- message bus publisher
+- Kubernetes scaler adapter
+- external control-plane publisher
+
+Current scale-out flow:
+
+```text
+RequestScaleOut
+  -> IAiSharedRunStore.CreateAsync(...)
+  -> IAiRuntimeScaleOutRequestPublisher.PublishAsync(...)
+  -> SharedRun.Status = ScaleOutRequested
+```
+
+---
+
+## Shared Controller Capabilities
+
+The runtime can now expose or support:
+
+- submit shared run
+- get shared run
+- list shared runs
+- cancel shared run
+- assign run to runtime instance
+- dispatch assigned run locally
+- queue run globally
+- claim globally queued run
+- dispatch globally queued run
+- requeue failed dispatch
+- mark shared run dispatched
+- mark shared queue item dispatched
+- publish scale-out request
+- pump shared queue manually
+- consume shared queue through hosted background service
+- coordinate shared queue dispatch through Redis
+- prevent double dispatch through Redis atomic claim
+
+---
+
+## Updated Dependency Injection
+
+The control-plane service registration now also includes:
+
+- `IAiSharedRunStore`
+- `IAiSharedQueue`
+- `IAiSharedRunDispatcher`
+- `IAiSharedQueueDispatcher`
+- `IAiSharedQueuePump`
+- `IAiRuntimeScaleOutRequestPublisher`
+- `IAiSharedRuntimeController`
+
+Default implementations:
+
+- `InMemoryAiSharedRunStore`
+- `InMemoryAiSharedQueue`
+- `LocalAiSharedRunDispatcher`
+- `AiSharedQueueDispatcher`
+- `AiSharedQueuePump`
+- `NoopAiRuntimeScaleOutRequestPublisher`
+- `AiSharedRuntimeController`
+
+The hosted background service is opt-in through:
+
+- `AddAiSharedQueueBackgroundService(...)`
+
+---
+
+## Updated Validated Behavior
+
+The implementation is now validated by unit and integration tests covering:
+
+- shared runtime controller behavior
+- Redis shared runtime controller behavior
+- shared run store behavior
+- Redis shared run store behavior
+- shared queue behavior
+- Redis shared queue behavior
+- direct assigned dispatch
+- local shared run dispatcher
+- shared queue dispatcher
+- Redis shared queue dispatcher
+- Redis atomic claim safety
+- Redis concurrent dispatch safety
+- missing shared run requeue
+- dispatch failure requeue
+- shared queue pump behavior
+- shared queue background service lifecycle
+- scale-out request publisher behavior
+- DI registrations
+
+---
+
+## Updated Kubernetes Preparation
+
+This work extends Kubernetes preparation by introducing:
+
+- shared runtime controller
+- shared run persistence
+- Redis-backed shared run store
+- Redis-backed shared queue
+- atomic shared queue claim
+- dispatch ownership
+- queue pump
+- background queue consumption
+- scale-out request publisher abstraction
+- runtime instance compatible dispatch path
+- metadata propagation
+- source / requestedBy / reason / correlation propagation
+
+The next Kubernetes-related pieces can now be built on top:
+
+- Redis-backed runtime instance registry
+- runtime instance heartbeat TTL / expiration
+- runtime instance health visibility
+- remote runtime dispatcher
+- HTTP or gRPC runtime dispatch adapter
+- Redis scale-out request publisher
+- Kubernetes scale-out adapter
+- Kubernetes pod / deployment scaler
+- dashboard / API / MCP control-plane endpoints
+- real-time logs and observability export
+
+---
+
+## Updated What This Does Not Do Yet
+
+The current foundation still does not yet provide:
+
+- Kubernetes pod creation
+- remote runtime instance dispatch
+- Redis-backed runtime instance registry
+- automatic scaling
+- dashboard UI
+- MCP endpoint implementation
+- HTTP API controller implementation
+- distributed shared controller election
+
+These remain intentionally left for the next phases.
+
+---
+
+## Updated Next Step
+
+The Shared Runtime Controller V1 is now complete.
+
+The next step is the distributed runtime instance layer.
+
+Expected next work:
+
+- Redis-backed runtime instance registry
+- heartbeat TTL / expiration
+- runtime instance health visibility
+- remote runtime dispatcher
+- HTTP or gRPC dispatch adapter
+- scale-out event publisher
+- Kubernetes scaler adapter
+
+After that:
+
+- MCP server commands
+- control-plane API endpoints
+- Kibana / Grafana / OpenSearch observability export
+- Kubernetes production demo
+
 
 ## Related Documents
 

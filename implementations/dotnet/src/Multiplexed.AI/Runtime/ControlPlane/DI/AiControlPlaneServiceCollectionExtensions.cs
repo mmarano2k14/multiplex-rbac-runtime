@@ -143,6 +143,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiSharedRunDispatcher, LocalAiSharedRunDispatcher>();
             services.TryAddSingleton<IAiSharedQueueDispatcher, AiSharedQueueDispatcher>();
             services.TryAddSingleton<IAiSharedQueuePump, AiSharedQueuePump>();
+            services.TryAddSingleton<IAiRuntimeScaleOutRequestPublisher, NoopAiRuntimeScaleOutRequestPublisher>();
             services.TryAddSingleton<IAiSharedRuntimeController, AiSharedRuntimeController>();
 
             return services;
