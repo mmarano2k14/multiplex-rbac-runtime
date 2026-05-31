@@ -129,6 +129,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiSharedRunStore, InMemoryAiSharedRunStore>();
             services.TryAddSingleton<IAiSharedQueue, InMemoryAiSharedQueue>();
             services.TryAddSingleton<IAiSharedRunDispatcher, LocalAiSharedRunDispatcher>();
+            services.TryAddSingleton<IAiSharedQueueDispatcher, AiSharedQueueDispatcher>();
             services.TryAddSingleton<IAiSharedRuntimeController, AiSharedRuntimeController>();
 
             return services;

@@ -237,5 +237,23 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
                 typeof(InMemoryAiSharedQueue),
                 descriptor.ImplementationType);
         }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_SharedQueue_Dispatcher_By_Default()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedQueueDispatcher));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+            Assert.Equal(
+                typeof(AiSharedQueueDispatcher),
+                descriptor.ImplementationType);
+        }
     }
 }
