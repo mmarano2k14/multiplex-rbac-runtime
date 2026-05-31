@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
 using Multiplexed.Abstractions.AI.Execution.Instance.Worker;
@@ -63,6 +64,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly IAiRuntimeObservability _observability;
         private readonly IAiExecutionControlService _executionControlService;
         private readonly IAiRuntimeInstanceIdentity _runtimeInstanceIdentity;
+        private readonly IAiRuntimeRunExecutionIndex _runExecutionIndex;
 
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
         private readonly Channel<AiRuntimeQueuedPipelineRun> _queue;
@@ -96,6 +98,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// <param name="runtimeInstanceIdentity">The runtime instance identity of the controller host.</param>
         /// <param name="logger">The runtime logger.</param>
         /// <param name="observability">The runtime observability facade.</param>
+        /// <param name="runExecutionIndex">The runtime run execution index.</param>
         /// <param name="options">The controller options.</param>
         public AiRuntimePipelineBackgroundController(
             AiDagExecutionEngine engine,
@@ -109,6 +112,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             IAiRuntimeInstanceIdentity runtimeInstanceIdentity,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
+            IAiRuntimeRunExecutionIndex runExecutionIndex,
             IOptions<AiRuntimePipelineBackgroundControllerOptions> options)
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
@@ -122,6 +126,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _runtimeInstanceIdentity = runtimeInstanceIdentity ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
+            _runExecutionIndex = runExecutionIndex ?? throw new ArgumentNullException(nameof(runExecutionIndex));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
             var queueCapacity = Math.Max(1, _options.QueueCapacity);
@@ -634,6 +639,14 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             {
                 handle.MarkCancelled();
 
+                await _runExecutionIndex
+                    .MarkFailedAsync(
+                        handle.RunId,
+                        handle.ExecutionId,
+                        "Pipeline run was cancelled by controller cancellation token.",
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+
                 queuedRun.CompletionSource.TrySetCanceled(
                     cancellationToken);
 
@@ -659,6 +672,14 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             catch (Exception ex)
             {
                 handle.MarkFailed();
+
+                await _runExecutionIndex
+                    .MarkFailedAsync(
+                        handle.RunId,
+                        handle.ExecutionId,
+                        ex.Message,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
 
                 queuedRun.CompletionSource.TrySetException(ex);
 
@@ -825,6 +846,13 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             handle.MarkRunning(
                 created.ExecutionId);
 
+            await _runExecutionIndex
+                .MarkStartedAsync(
+                    handle.RunId,
+                    created.ExecutionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             await RecordRunLedgerAsync(
                     handle.RunId,
                     request.PipelineName,
@@ -853,14 +881,37 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             if (final.Status == AiExecutionStatus.Completed)
             {
                 handle.MarkCompleted();
+
+                await _runExecutionIndex
+                    .MarkCompletedAsync(
+                        handle.RunId,
+                        created.ExecutionId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             else if (final.Status == AiExecutionStatus.Cancelled)
             {
                 handle.MarkCancelled();
+
+                await _runExecutionIndex
+                    .MarkFailedAsync(
+                        handle.RunId,
+                        created.ExecutionId,
+                        "Pipeline run was cancelled.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             else
             {
                 handle.MarkFailed();
+
+                await _runExecutionIndex
+                    .MarkFailedAsync(
+                        handle.RunId,
+                        created.ExecutionId,
+                        $"Pipeline run reached terminal status '{final.Status}'.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             await RecordRunTerminalLedgerAsync(

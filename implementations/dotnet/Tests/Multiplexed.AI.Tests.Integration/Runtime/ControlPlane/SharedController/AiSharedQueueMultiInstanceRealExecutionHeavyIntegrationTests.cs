@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
+using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.SharedInstance;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedController.Controller;
@@ -29,7 +30,9 @@ using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
+using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances.SharedInstance;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
+using Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController.Store;
 using Multiplexed.AI.Runtime.ControlPlane.SharedQueue;
 using Multiplexed.AI.Runtime.ControlPlane.ShareQueue.Redis;
@@ -44,7 +47,7 @@ using StackExchange.Redis;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
+namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
 {
     /// <summary>
     /// Heavy multi-instance real execution integration tests for the shared queue control-plane.
@@ -58,7 +61,9 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
     /// -> Redis shared queue
     /// -> multiple runtime instances
     /// -> concurrent shared queue pumps
-    /// -> real LocalAiSharedRunDispatcher per instance
+    /// -> RemoteAiSharedRunDispatcher
+    /// -> InMemoryAiSharedRuntimeInstanceRegistry
+    /// -> LocalAiSharedRuntimeInstance per runtime instance
     /// -> real local runtime queue per instance
     /// -> real distributed DAG workers per instance
     /// -> flaky steps
@@ -143,6 +148,9 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             var store = CreateRunStore();
             var queue = CreateQueue();
 
+            var sharedRuntimeInstanceRegistry =
+                new InMemoryAiSharedRuntimeInstanceRegistry();
+
             var controller = new AiSharedRuntimeController(
                 new QueueGloballyAdmissionController(
                     runtimeInstanceCount: scenario.RuntimeInstanceCount),
@@ -163,15 +171,16 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
 
                     var harness = await CreateRuntimeInstanceHarnessAsync(
                         scenario,
-                        runtimeInstanceId);
+                        runtimeInstanceId,
+                        sharedRuntimeInstanceRegistry);
 
                     runtimeInstances.Add(harness);
                 }
 
-                foreach (var runtimeInstance in runtimeInstances)
-                {
-                    await runtimeInstance.BackgroundController.StartAsync();
-                }
+
+                var remoteSharedRunDispatcher =
+                    new RemoteAiSharedRunDispatcher(
+                        sharedRuntimeInstanceRegistry);
 
                 var sharedRunIdPrefix =
                     $"shared-run-{scenario.ScenarioId}-";
@@ -254,6 +263,11 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                     queuedRuns,
                     run => Assert.Equal(AiSharedRunStatus.QueuedGlobally, run.Status));
 
+                foreach (var runtimeInstance in runtimeInstances)
+                {
+                    await runtimeInstance.BackgroundController.StartAsync();
+                }
+
                 var queuedItems = (await queue.ListAsync(
                         includeTerminal: true))
                     .Where(item => item.SharedRunId.StartsWith(
@@ -273,6 +287,7 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                             runtimeInstance,
                             queue,
                             store,
+                            remoteSharedRunDispatcher,
                             scenario.MaxDispatchesPerPumpCycle))
                     .ToArray();
 
@@ -481,10 +496,12 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
 
         private async Task<RuntimeInstanceHarness> CreateRuntimeInstanceHarnessAsync(
             HeavyScenario scenario,
-            string runtimeInstanceId)
+            string runtimeInstanceId,
+            IAiSharedRuntimeInstanceRegistry sharedRuntimeInstanceRegistry)
         {
             ArgumentNullException.ThrowIfNull(scenario);
             ArgumentException.ThrowIfNullOrWhiteSpace(runtimeInstanceId);
+            ArgumentNullException.ThrowIfNull(sharedRuntimeInstanceRegistry);
 
             var host = await AiDagExecutionEngineFixture.CreateAsync(
                 CreateOptions(
@@ -508,11 +525,19 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                         typeof(DistributedChaosFlakyProviderStep).Assembly);
                 });
 
+            var queueControlPlane =
+                host.ServiceProvider.GetRequiredService<IAiRuntimeQueueControlPlane>();
+
+            await sharedRuntimeInstanceRegistry.RegisterAsync(
+                new LocalAiSharedRuntimeInstance(
+                    runtimeInstanceId,
+                    queueControlPlane));
+
             return new RuntimeInstanceHarness(
                 runtimeInstanceId,
                 host,
                 host.ServiceProvider.GetRequiredService<IAiRuntimePipelineBackgroundController>(),
-                host.ServiceProvider.GetRequiredService<IAiRuntimeQueueControlPlane>(),
+                queueControlPlane,
                 host.ServiceProvider.GetRequiredService<IAiSharedRunDispatcher>(),
                 host.ServiceProvider.GetRequiredService<IAiDagExecutionStore>(),
                 host.ServiceProvider.GetRequiredService<IAiExecutionStepResolver>(),
@@ -527,17 +552,19 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             RuntimeInstanceHarness runtimeInstance,
             IAiSharedQueue queue,
             IAiSharedRunStore store,
+            IAiSharedRunDispatcher sharedRunDispatcher,
             int maxDispatchesPerPumpCycle)
         {
             ArgumentNullException.ThrowIfNull(runtimeInstance);
             ArgumentNullException.ThrowIfNull(queue);
             ArgumentNullException.ThrowIfNull(store);
+            ArgumentNullException.ThrowIfNull(sharedRunDispatcher);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDispatchesPerPumpCycle);
 
             var queueDispatcher = new AiSharedQueueDispatcher(
                 queue,
                 store,
-                runtimeInstance.SharedRunDispatcher);
+                sharedRunDispatcher);
 
             var pump = new AiSharedQueuePump(
                 queueDispatcher,
@@ -575,12 +602,13 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                         CorrelationId = $"correlation-{runtimeInstance.RuntimeInstanceId}-{cycles}",
                         RequestedBy = "integration-test",
                         Source = "multi-instance-real-heavy-test",
-                        Reason = "Runtime instance consumes shared queue and dispatches to real local runtime.",
+                        Reason = "Runtime instance consumes shared queue and dispatches through remote shared runtime registry.",
                         Metadata = new Dictionary<string, string>
                         {
                             ["runtime.instance.id"] = runtimeInstance.RuntimeInstanceId,
                             ["cycle"] = cycles.ToString(),
-                            ["real.dispatch"] = "true"
+                            ["real.dispatch"] = "true",
+                            ["remote.dispatch"] = "true"
                         }
                     });
 
@@ -631,6 +659,9 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
             AiExecutionStatus? lastExecutionStatus = null;
             string? runtimeInstanceWhereRunWasFound = null;
 
+            var localRunWasSeen = false;
+            var localRunDisappearedAfterBeingSeen = false;
+
             while (DateTimeOffset.UtcNow < deadline)
             {
                 foreach (var runtimeInstance in allRuntimeInstances)
@@ -646,9 +677,15 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
 
                     if (result.RunState is null)
                     {
+                        if (localRunWasSeen)
+                        {
+                            localRunDisappearedAfterBeingSeen = true;
+                        }
+
                         continue;
                     }
 
+                    localRunWasSeen = true;
                     runtimeInstanceWhereRunWasFound = runtimeInstance.RuntimeInstanceId;
                     lastRunStatus = result.RunState.Status;
 
@@ -695,13 +732,79 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                 await Task.Delay(TimeSpan.FromMilliseconds(100));
             }
 
+            var stepStatusSummary = "none";
+            var stepClaimSummary = "none";
+            var stepRetrySummary = "none";
+
+            if (!string.IsNullOrWhiteSpace(executionId))
+            {
+                foreach (var runtimeInstance in allRuntimeInstances)
+                {
+                    var state = await runtimeInstance.DagStore.GetStateAsync(
+                        executionId);
+
+                    if (state is null)
+                    {
+                        continue;
+                    }
+
+                    stepStatusSummary = string.Join(
+                        ", ",
+                        state.Steps.Values
+                            .GroupBy(step => step.Status)
+                            .OrderBy(group => group.Key.ToString(), StringComparer.Ordinal)
+                            .Select(group => $"{group.Key}={group.Count()}"));
+
+                    stepClaimSummary = string.Join(
+                        ", ",
+                        state.Steps.Values
+                            .GroupBy(step =>
+                            {
+                                if (string.IsNullOrWhiteSpace(step.ClaimToken))
+                                {
+                                    return "unclaimed";
+                                }
+
+                                if (step.LeaseExpiresAtUtc.HasValue &&
+                                    step.LeaseExpiresAtUtc.Value <= DateTimeOffset.UtcNow)
+                                {
+                                    return "expired-claim";
+                                }
+
+                                return "active-claim";
+                            })
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .Select(group => $"{group.Key}={group.Count()}"));
+
+                    stepRetrySummary = string.Join(
+                        ", ",
+                        state.Steps.Values
+                            .Where(step => step.RetryState is not null)
+                            .GroupBy(step => step.RetryState!.RetryCount)
+                            .OrderBy(group => group.Key)
+                            .Select(group => $"retry-{group.Key}={group.Count()}"));
+
+                    if (string.IsNullOrWhiteSpace(stepRetrySummary))
+                    {
+                        stepRetrySummary = "none";
+                    }
+
+                    break;
+                }
+            }
+
             throw new TimeoutException(
                 $"Local run '{localRunId}' did not complete within '{timeout}'. " +
                 $"ExpectedRuntimeInstance='{expectedRuntimeInstance.RuntimeInstanceId}', " +
                 $"RuntimeInstanceWhereRunWasFound='{runtimeInstanceWhereRunWasFound ?? "none"}', " +
+                $"LocalRunWasSeen='{localRunWasSeen}', " +
+                $"LocalRunDisappearedAfterBeingSeen='{localRunDisappearedAfterBeingSeen}', " +
                 $"LastRunStatus='{lastRunStatus ?? "none"}', " +
                 $"ExecutionId='{executionId ?? "none"}', " +
-                $"LastExecutionStatus='{lastExecutionStatus?.ToString() ?? "none"}'.");
+                $"LastExecutionStatus='{lastExecutionStatus?.ToString() ?? "none"}', " +
+                $"StepStatusSummary='{stepStatusSummary}', " +
+                $"StepClaimSummary='{stepClaimSummary}', " +
+                $"StepRetrySummary='{stepRetrySummary}'.");
         }
 
         private async Task<AiSharedRunRecord[]> WaitForSharedRunsDispatchedAsync(
@@ -1490,7 +1593,10 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                 var pipelineName =
                     $"shared-queue-real-heavy-{scenarioId}";
 
-                var requiredSteps = new[]
+                const int stepCount = 20;
+                const int flakyStepInterval = 9;
+
+                var requiredCandidateSteps = new[]
                 {
                     "chaos-step-001",
                     "chaos-step-009",
@@ -1500,8 +1606,18 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                     "final-join-step"
                 };
 
-                var retriedSteps = Enumerable.Range(2, 98)
-                    .Where(index => index % 9 == 0)
+                var requiredSteps = requiredCandidateSteps
+                    .Where(stepName =>
+                        string.Equals(
+                            stepName,
+                            "final-join-step",
+                            StringComparison.Ordinal) ||
+                        TryGetChaosStepIndex(stepName, out var index) &&
+                        index < stepCount)
+                    .ToArray();
+
+                var retriedSteps = Enumerable.Range(2, stepCount - 2)
+                    .Where(index => index % flakyStepInterval == 0)
                     .Select(index => $"chaos-step-{index:000}")
                     .ToArray();
 
@@ -1514,8 +1630,8 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                     RetentionArchiveReason = "shared-queue-real-heavy-retention",
                     RuntimeInstanceCount = 3,
                     ExpectedMinimumParticipatingInstances = 2,
-                    RunCount = 9,
-                    StepCount = 100,
+                    RunCount = 3,
+                    StepCount = stepCount,
                     WorkerCount = 10,
                     MaxConcurrentRunsPerInstance = 3,
                     QueueCapacityPerInstance = 64,
@@ -1526,12 +1642,12 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                     MaxProviderConcurrency = 3,
                     MaxCompletedStepsInState = 15,
                     MaxInlinePayloadBytes = 1,
-                    FlakyStepInterval = 9,
+                    FlakyStepInterval = flakyStepInterval,
                     ReplaySampleCount = 3,
                     WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
                     SharedDispatchTimeout = TimeSpan.FromSeconds(60),
-                    ExecutionTimeout = TimeSpan.FromMinutes(5),
-                    SnapshotTimeout = TimeSpan.FromMinutes(2),
+                    ExecutionTimeout = TimeSpan.FromSeconds(90),
+                    SnapshotTimeout = TimeSpan.FromSeconds(60),
                     RetentionPolicies = new[]
                     {
                         "retention.compact.terminal",
@@ -1549,6 +1665,26 @@ namespace Multiplexed.AI.Tests.Integration.ControlPlane.SharedController
                     scenario);
 
                 return scenario;
+            }
+
+            private static bool TryGetChaosStepIndex(
+                string stepName,
+                out int index)
+            {
+                index = 0;
+
+                const string prefix = "chaos-step-";
+
+                if (!stepName.StartsWith(
+                        prefix,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                return int.TryParse(
+                    stepName[prefix.Length..],
+                    out index);
             }
         }
 

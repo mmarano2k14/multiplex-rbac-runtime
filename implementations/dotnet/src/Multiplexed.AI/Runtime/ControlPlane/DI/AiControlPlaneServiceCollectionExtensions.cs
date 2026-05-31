@@ -139,6 +139,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
 
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
             services.TryAddSingleton<IAiExecutionControlPlane, AiExecutionControlPlane>();
+            services.TryAddSingleton<IAiRuntimeRunExecutionIndex, InMemoryAiRuntimeRunExecutionIndex>();
             services.TryAddSingleton<IAiRuntimeQueueControlPlane, AiRuntimeQueueControlPlane>();
 
             services.TryAddSingleton<IAiRuntimeInstanceRegistry, InMemoryAiRuntimeInstanceRegistry>();

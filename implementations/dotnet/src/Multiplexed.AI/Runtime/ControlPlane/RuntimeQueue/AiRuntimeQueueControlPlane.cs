@@ -11,30 +11,48 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
 {
     /// <summary>
     /// Runtime implementation of the local runtime queue control-plane facade.
-    ///
+    /// </summary>
+    /// <remarks>
     /// This class wraps the existing local runtime pipeline background controller.
     ///
-    /// Important:
-    /// This class does not replace local queues, workers, runtime instances,
-    /// or DAG execution logic. It only exposes adapter-neutral control-plane
-    /// operations over the local runtime queue owned by one runtime instance.
-    /// </summary>
+    /// IMPORTANT:
+    /// - This class does not replace local queues, workers, runtime instances,
+    ///   or DAG execution logic.
+    /// - It only exposes adapter-neutral control-plane operations over the local
+    ///   runtime queue owned by one runtime instance.
+    /// - It also maintains a local runtime run execution index so a local RunId
+    ///   can remain observable even after the transient queue item has been consumed.
+    /// </remarks>
     public sealed class AiRuntimeQueueControlPlane : IAiRuntimeQueueControlPlane
     {
         private readonly IAiRuntimePipelineBackgroundController _controller;
+        private readonly IAiRuntimeRunExecutionIndex _runExecutionIndex;
         private readonly AiRuntimeQueueControlPlaneOptions _options;
         private readonly IAiControlPlaneObserver _observer;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AiRuntimeQueueControlPlane"/> class.
+        /// </summary>
+        /// <param name="controller">The local runtime pipeline background controller.</param>
+        /// <param name="runExecutionIndex">
+        /// The local runtime run execution index used to keep the relationship between
+        /// a local runtime queue RunId and its DAG ExecutionId.
+        /// </param>
+        /// <param name="options">The runtime queue control-plane options.</param>
+        /// <param name="observer">The control-plane observer.</param>
         public AiRuntimeQueueControlPlane(
             IAiRuntimePipelineBackgroundController controller,
+            IAiRuntimeRunExecutionIndex runExecutionIndex,
             IOptions<AiRuntimeQueueControlPlaneOptions> options,
             IAiControlPlaneObserver observer)
         {
             _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+            _runExecutionIndex = runExecutionIndex ?? throw new ArgumentNullException(nameof(runExecutionIndex));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
             _observer = observer ?? throw new ArgumentNullException(nameof(observer));
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> ExecuteAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -56,6 +74,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> EnqueueRunAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -66,6 +85,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> CancelRunAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -76,6 +96,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> CancelQueuedRunAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -86,6 +107,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> PauseQueueAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -96,6 +118,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> ResumeQueueAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -106,6 +129,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> GetRunStatusAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -116,6 +140,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <inheritdoc />
         public Task<AiRuntimeQueueControlPlaneResult> GetQueueStatusAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken = default)
@@ -126,6 +151,14 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken);
         }
 
+        /// <summary>
+        /// Executes a runtime queue control-plane operation with validation,
+        /// observability, failure handling, and result normalization.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <param name="operation">The expected operation.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The normalized control-plane result.</returns>
         private async Task<AiRuntimeQueueControlPlaneResult> ExecuteQueueOperationAsync(
             AiRuntimeQueueControlPlaneRequest request,
             AiRuntimeQueueControlPlaneOperation operation,
@@ -215,6 +248,13 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             }
         }
 
+        /// <summary>
+        /// Executes the inner runtime queue operation.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <param name="operation">The operation to execute.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The raw runtime queue operation result.</returns>
         private async Task<RuntimeQueueOperationResult> ExecuteInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             AiRuntimeQueueControlPlaneOperation operation,
@@ -248,6 +288,19 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Enqueues a run into the local runtime queue and records it in the local
+        /// runtime run execution index.
+        /// </summary>
+        /// <param name="request">The enqueue request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The enqueue operation result.</returns>
+        /// <remarks>
+        /// The local runtime queue can be transient. Once the background controller
+        /// consumes a queued run, the queue itself may no longer expose the run state.
+        /// The runtime run execution index keeps a stable RunId entry so the control
+        /// plane can still resolve the run later.
+        /// </remarks>
         private async Task<RuntimeQueueOperationResult> EnqueueInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -264,6 +317,30 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 .GetQueueStateAsync(cancellationToken)
                 .ConfigureAwait(false);
 
+            await _runExecutionIndex.RegisterQueuedAsync(
+                    new AiRuntimeRunExecutionIndexEntry
+                    {
+                        RunId = handle.RunId,
+                        ExecutionId = handle.ExecutionId ?? runState?.ExecutionId,
+                        RuntimeInstanceId =
+                            runState?.RuntimeInstanceId ??
+                            queueState?.RuntimeInstanceId ??
+                            request.RuntimeInstanceId,
+                        Status = runState?.Status ?? "queued",
+                        CreatedAtUtc = DateTimeOffset.UtcNow,
+                        Metadata = MergeMetadata(
+                            request.Metadata,
+                            new Dictionary<string, string>
+                            {
+                                ["source"] = request.Source ?? string.Empty,
+                                ["requestedBy"] = request.RequestedBy ?? string.Empty,
+                                ["reason"] = request.Reason ?? string.Empty,
+                                ["correlationId"] = request.CorrelationId ?? string.Empty
+                            })
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             return new RuntimeQueueOperationResult
             {
                 RunHandle = handle,
@@ -272,6 +349,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Cancels a runtime run and updates the runtime run execution index when a run state is available.
+        /// </summary>
+        /// <param name="request">The cancel request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The cancel operation result.</returns>
         private async Task<RuntimeQueueOperationResult> CancelRunInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -288,6 +371,16 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 .GetRunStateAsync(request.RunId!, cancellationToken)
                 .ConfigureAwait(false);
 
+            if (runState is not null)
+            {
+                await _runExecutionIndex.MarkFailedAsync(
+                        request.RunId!,
+                        runState.ExecutionId,
+                        request.Reason ?? "Runtime run was cancelled.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             var queueState = await _controller
                 .GetQueueStateAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -299,6 +392,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Cancels a queued runtime run and updates the runtime run execution index when a run state is available.
+        /// </summary>
+        /// <param name="request">The cancel queued run request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The cancel queued operation result.</returns>
         private async Task<RuntimeQueueOperationResult> CancelQueuedRunInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -315,6 +414,16 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 .GetRunStateAsync(request.RunId!, cancellationToken)
                 .ConfigureAwait(false);
 
+            if (runState is not null)
+            {
+                await _runExecutionIndex.MarkFailedAsync(
+                        request.RunId!,
+                        runState.ExecutionId,
+                        request.Reason ?? "Queued runtime run was cancelled.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             var queueState = await _controller
                 .GetQueueStateAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -326,6 +435,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Pauses the local runtime queue.
+        /// </summary>
+        /// <param name="request">The pause request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The pause operation result.</returns>
         private async Task<RuntimeQueueOperationResult> PauseQueueInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -347,6 +462,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Resumes the local runtime queue.
+        /// </summary>
+        /// <param name="request">The resume request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The resume operation result.</returns>
         private async Task<RuntimeQueueOperationResult> ResumeQueueInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -367,6 +488,18 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Gets the status of a local runtime run.
+        /// </summary>
+        /// <param name="request">The get run status request.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The runtime run status operation result.</returns>
+        /// <remarks>
+        /// The method first asks the local background controller for the current
+        /// run state. If the controller no longer exposes the run because it has
+        /// been consumed from the transient local queue, the method falls back to
+        /// the runtime run execution index.
+        /// </remarks>
         private async Task<RuntimeQueueOperationResult> GetRunStatusInnerAsync(
             AiRuntimeQueueControlPlaneRequest request,
             CancellationToken cancellationToken)
@@ -375,12 +508,37 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 .GetRunStateAsync(request.RunId!, cancellationToken)
                 .ConfigureAwait(false);
 
+            if (runState is not null)
+            {
+                return new RuntimeQueueOperationResult
+                {
+                    RunState = runState
+                };
+            }
+
+            var indexedRun = await _runExecutionIndex
+                .GetAsync(
+                    request.RunId!,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (indexedRun is null)
+            {
+                return new RuntimeQueueOperationResult();
+            }
+
             return new RuntimeQueueOperationResult
             {
-                RunState = runState
+                RunState = CreateRunStateFromIndex(
+                    indexedRun)
             };
         }
 
+        /// <summary>
+        /// Gets the local runtime queue status.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The runtime queue status operation result.</returns>
         private async Task<RuntimeQueueOperationResult> GetQueueStatusInnerAsync(
             CancellationToken cancellationToken)
         {
@@ -394,6 +552,11 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Creates a runtime execution correlation context for the control-plane operation.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <returns>The correlation context.</returns>
         private static AiRuntimeExecutionCorrelationContext CreateCorrelation(
             AiRuntimeQueueControlPlaneRequest request)
         {
@@ -408,6 +571,13 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             };
         }
 
+        /// <summary>
+        /// Records that a runtime queue control-plane operation started.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <param name="operation">The operation.</param>
+        /// <param name="correlation">The correlation context.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordStartedAsync(
             AiRuntimeQueueControlPlaneRequest request,
             AiRuntimeQueueControlPlaneOperation operation,
@@ -437,6 +607,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Records that a runtime queue control-plane operation completed.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <param name="operation">The operation.</param>
+        /// <param name="correlation">The correlation context.</param>
+        /// <param name="operationResult">The raw operation result.</param>
+        /// <param name="durationMs">The operation duration in milliseconds.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordCompletedAsync(
             AiRuntimeQueueControlPlaneRequest request,
             AiRuntimeQueueControlPlaneOperation operation,
@@ -470,6 +649,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Records that a runtime queue control-plane operation failed.
+        /// </summary>
+        /// <param name="request">The control-plane request, when available.</param>
+        /// <param name="operation">The operation.</param>
+        /// <param name="correlation">The correlation context.</param>
+        /// <param name="exception">The exception that caused the failure.</param>
+        /// <param name="durationMs">The operation duration in milliseconds.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task RecordFailedAsync(
             AiRuntimeQueueControlPlaneRequest? request,
             AiRuntimeQueueControlPlaneOperation operation,
@@ -500,6 +688,11 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Validates the request for the requested runtime queue operation.
+        /// </summary>
+        /// <param name="request">The control-plane request.</param>
+        /// <param name="operation">The requested operation.</param>
         private static void ValidateRequest(
             AiRuntimeQueueControlPlaneRequest request,
             AiRuntimeQueueControlPlaneOperation operation)
@@ -523,6 +716,11 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             }
         }
 
+        /// <summary>
+        /// Determines whether the operation requires a runtime run identifier.
+        /// </summary>
+        /// <param name="operation">The operation.</param>
+        /// <returns><see langword="true"/> if the operation requires a run id; otherwise, <see langword="false"/>.</returns>
         private static bool RequiresRunId(
             AiRuntimeQueueControlPlaneOperation operation)
         {
@@ -532,6 +730,10 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
                 AiRuntimeQueueControlPlaneOperation.GetRunStatus;
         }
 
+        /// <summary>
+        /// Ensures that the requested operation is enabled by options.
+        /// </summary>
+        /// <param name="operation">The operation.</param>
         private void EnsureEnabled(
             AiRuntimeQueueControlPlaneOperation operation)
         {
@@ -554,6 +756,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             }
         }
 
+        /// <summary>
+        /// Calculates an operation duration in milliseconds.
+        /// </summary>
+        /// <param name="startedAtUtc">The operation start time.</param>
+        /// <param name="completedAtUtc">The operation completion time.</param>
+        /// <returns>The operation duration in milliseconds, or 0 when duration measurement is disabled.</returns>
         private long CalculateDurationMs(
             DateTimeOffset startedAtUtc,
             DateTimeOffset completedAtUtc)
@@ -566,12 +774,79 @@ namespace Multiplexed.AI.Runtime.ControlPlane.RuntimeQueue
             return (long)(completedAtUtc - startedAtUtc).TotalMilliseconds;
         }
 
+        /// <summary>
+        /// Merges two metadata dictionaries. Values from the second dictionary override values from the first.
+        /// </summary>
+        /// <param name="first">The first metadata dictionary.</param>
+        /// <param name="second">The second metadata dictionary.</param>
+        /// <returns>The merged metadata dictionary.</returns>
+        private static IReadOnlyDictionary<string, string> MergeMetadata(
+            IReadOnlyDictionary<string, string>? first,
+            IReadOnlyDictionary<string, string>? second)
+        {
+            var metadata = new Dictionary<string, string>(
+                StringComparer.Ordinal);
+
+            if (first is not null)
+            {
+                foreach (var item in first)
+                {
+                    metadata[item.Key] = item.Value;
+                }
+            }
+
+            if (second is not null)
+            {
+                foreach (var item in second)
+                {
+                    metadata[item.Key] = item.Value;
+                }
+            }
+
+            return metadata;
+        }
+
+        /// <summary>
+        /// Creates a visible runtime run state from an indexed local runtime run entry.
+        /// </summary>
+        /// <param name="entry">The indexed runtime run entry.</param>
+        /// <returns>A runtime pipeline run state built from the index entry.</returns>
+        private static AiRuntimePipelineRunState CreateRunStateFromIndex(
+            AiRuntimeRunExecutionIndexEntry entry)
+        {
+            return new AiRuntimePipelineRunState
+            {
+                RunId = entry.RunId,
+                ExecutionId = entry.ExecutionId,
+                RuntimeInstanceId = entry.RuntimeInstanceId,
+                Status = string.IsNullOrWhiteSpace(entry.Status)
+                    ? "unknown"
+                    : entry.Status,
+                FailureReason = entry.FailureReason,
+                StartedAtUtc = entry.StartedAtUtc,
+                CompletedAtUtc = entry.CompletedAtUtc
+            };
+        }
+
+        /// <summary>
+        /// Represents the raw result of an inner runtime queue operation before it is converted
+        /// into a public <see cref="AiRuntimeQueueControlPlaneResult"/>.
+        /// </summary>
         private sealed class RuntimeQueueOperationResult
         {
+            /// <summary>
+            /// Gets the runtime worker run handle returned by enqueue operations.
+            /// </summary>
             public AiRuntimeWorkerRunHandle? RunHandle { get; init; }
 
+            /// <summary>
+            /// Gets the visible runtime pipeline run state when available.
+            /// </summary>
             public AiRuntimePipelineRunState? RunState { get; init; }
 
+            /// <summary>
+            /// Gets the visible runtime pipeline queue state when available.
+            /// </summary>
             public AiRuntimePipelineQueueState? QueueState { get; init; }
         }
     }

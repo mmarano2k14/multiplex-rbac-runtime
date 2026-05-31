@@ -228,8 +228,11 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.RuntimeQueue
             var controller = new FakeRuntimePipelineBackgroundController();
             var observer = new CapturingControlPlaneObserver();
 
+            var runExecutionIndex = new InMemoryAiRuntimeRunExecutionIndex();
+
             var controlPlane = new AiRuntimeQueueControlPlane(
                 controller,
+                runExecutionIndex,
                 Options.Create(new AiRuntimeQueueControlPlaneOptions()),
                 observer);
 
@@ -264,6 +267,7 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.RuntimeQueue
         {
             return new AiRuntimeQueueControlPlane(
                 controller,
+                new InMemoryAiRuntimeRunExecutionIndex(),
                 Options.Create(options ?? new AiRuntimeQueueControlPlaneOptions()),
                 new NoopAiControlPlaneObserver());
         }
