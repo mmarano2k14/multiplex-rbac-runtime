@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Execution;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
@@ -39,6 +40,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
         /// <param name="configureAdmission">Optional run admission options configuration.</param>
         /// <param name="configureSharedController">Optional shared runtime controller options configuration.</param>
         /// <param name="configureSharedQueue">Optional shared queue options configuration.</param>
+        /// <param name="configureSharedQueuePump">Optional shared queue pump options configuration.</param>
         /// <returns>The same service collection for chaining.</returns>
         public static IServiceCollection AddAiControlPlane(
             this IServiceCollection services,
@@ -48,7 +50,8 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             Action<AiRuntimeInstanceControlPlaneOptions>? configureRuntimeInstance = null,
             Action<AiRunAdmissionOptions>? configureAdmission = null,
             Action<AiSharedRuntimeControllerOptions>? configureSharedController = null,
-            Action<AiSharedQueueOptions>? configureSharedQueue = null)
+            Action<AiSharedQueueOptions>? configureSharedQueue = null,
+            Action<AiSharedQueuePumpOptions>? configureSharedQueuePump = null)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -115,6 +118,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
                 services.Configure(configureSharedQueue);
             }
 
+            if (configureSharedQueuePump is null)
+            {
+                services.AddOptions<AiSharedQueuePumpOptions>();
+            }
+            else
+            {
+                services.Configure(configureSharedQueuePump);
+            }
+
             services.TryAddSingleton<IAiControlPlaneObserver, NoopAiControlPlaneObserver>();
 
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
@@ -130,7 +142,35 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiSharedQueue, InMemoryAiSharedQueue>();
             services.TryAddSingleton<IAiSharedRunDispatcher, LocalAiSharedRunDispatcher>();
             services.TryAddSingleton<IAiSharedQueueDispatcher, AiSharedQueueDispatcher>();
+            services.TryAddSingleton<IAiSharedQueuePump, AiSharedQueuePump>();
             services.TryAddSingleton<IAiSharedRuntimeController, AiSharedRuntimeController>();
+
+            return services;
+        }
+
+        /// <summary>
+        /// Registers the shared queue hosted background service.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="configure">Optional background service options configuration.</param>
+        /// <returns>The same service collection for chaining.</returns>
+        public static IServiceCollection AddAiSharedQueueBackgroundService(
+            this IServiceCollection services,
+            Action<AiSharedQueueBackgroundServiceOptions>? configure = null)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+
+            if (configure is null)
+            {
+                services.AddOptions<AiSharedQueueBackgroundServiceOptions>();
+            }
+            else
+            {
+                services.Configure(configure);
+            }
+
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IHostedService, AiSharedQueueBackgroundService>());
 
             return services;
         }

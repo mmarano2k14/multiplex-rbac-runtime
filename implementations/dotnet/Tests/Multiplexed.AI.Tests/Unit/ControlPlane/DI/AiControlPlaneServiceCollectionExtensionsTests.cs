@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
@@ -254,6 +255,47 @@ namespace Multiplexed.AI.Tests.Unit.ControlPlane.DI
             Assert.Equal(
                 typeof(AiSharedQueueDispatcher),
                 descriptor.ImplementationType);
+        }
+
+        [Fact]
+        public void AddAiControlPlane_Should_Register_SharedQueue_Pump_By_Default()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IAiSharedQueuePump));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+            Assert.Equal(
+                typeof(AiSharedQueuePump),
+                descriptor.ImplementationType);
+        }
+
+        [Fact]
+        public void AddAiSharedQueueBackgroundService_Should_Register_Hosted_Service()
+        {
+            var services = new ServiceCollection();
+
+            services.AddLogging();
+            services.AddAiControlPlane();
+
+            services.AddAiSharedQueueBackgroundService(options =>
+            {
+                options.Enabled = true;
+                options.RuntimeInstanceId = "runtime-1";
+                options.WorkerId = "worker-1";
+            });
+
+            var descriptor = services.SingleOrDefault(service =>
+                service.ServiceType == typeof(IHostedService) &&
+                service.ImplementationType == typeof(AiSharedQueueBackgroundService));
+
+            Assert.NotNull(descriptor);
+            Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
         }
     }
 }
