@@ -140,6 +140,110 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 HeavyScenario.AllFeaturesHeavy());
         }
 
+        [RedisFact]
+        public async Task SharedQueue_Should_Run_Real_MultiInstance_Executions_Stress_With_All_Features_Enabled_100_Steps()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 9,
+                    stepCount: 100));
+        }
+
+        [RedisFact]
+        public async Task SharedQueue_Should_Run_Real_MultiInstance_Executions_Stress_With_All_Features_Enabled_500_Steps()
+        {
+            await RunHeavyScenarioAsync(
+               HeavyScenario.AllFeaturesStress(
+                   runCount: 2,
+                   expectedMinimumParticipatingInstances: 2,
+                   runtimeInstanceCount: 2,
+                   workerCount: 30,
+                   executionTimeout: TimeSpan.FromMinutes(3),
+                   stepCount: 250,
+                   enableRetention: true));
+
+            /*
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 2,
+                    expectedMinimumParticipatingInstances: 2,
+                    runtimeInstanceCount:2,
+                    workerCount:50,
+                    executionTimeout: TimeSpan.FromMinutes(3),
+                    stepCount: 500));
+            */
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_Executions_Stress_50_NominalSteps_10_runs_3_instances_10_workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 10,
+                    expectedMinimumParticipatingInstances: 3,
+                    runtimeInstanceCount: 3,
+                    workerCount: 10,
+                    executionTimeout: TimeSpan.FromMinutes(3),
+                    stepCount: 50,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_Executions_Stress_250_NominalSteps_2_runs_2_instances_10_workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 2,
+                    expectedMinimumParticipatingInstances: 2,
+                    runtimeInstanceCount: 2,
+                    workerCount: 10,
+                    executionTimeout: TimeSpan.FromMinutes(3),
+                    stepCount: 250,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_Executions_Stress_250_NominalSteps_2_runs_2_instances_30_workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 2,
+                    expectedMinimumParticipatingInstances: 2,
+                    runtimeInstanceCount: 2,
+                    workerCount: 30,
+                    executionTimeout: TimeSpan.FromMinutes(3),
+                    stepCount: 250,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_Executions_Stress_1000_NominalSteps_2_runs_2_instances_10_workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 2,
+                    expectedMinimumParticipatingInstances: 2,
+                    runtimeInstanceCount: 2,
+                    workerCount: 10,
+                    executionTimeout: TimeSpan.FromMinutes(8),
+                    stepCount: 500,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_Executions_Stress_1000_NominalSteps_20_runs_3_instances_10_workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 20,
+                    expectedMinimumParticipatingInstances: 3,
+                    runtimeInstanceCount: 3,
+                    workerCount: 10,
+                    executionTimeout: TimeSpan.FromMinutes(5),
+                    stepCount: 50,
+                    enableRetention: true));
+        }
+
         private async Task RunHeavyScenarioAsync(
             HeavyScenario scenario)
         {
@@ -1290,12 +1394,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                     },
                     ["retention"] = new Dictionary<string, object?>
                     {
-                        ["enabled"] = true,
+                        ["enabled"] = scenario.EnableRetention,
                         ["policies"] = scenario.RetentionPolicies.ToArray(),
                         ["archiveReason"] = scenario.RetentionArchiveReason,
                         ["trigger"] = new Dictionary<string, object?>
                         {
-                            ["enabled"] = true,
+                            ["enabled"] = scenario.EnableRetention,
                             ["maxStepsInState"] = scenario.MaxCompletedStepsInState,
                             ["maxCompletedStepsInState"] = scenario.MaxCompletedStepsInState,
                             ["maxInlinePayloadBytes"] = scenario.MaxInlinePayloadBytes
@@ -1522,6 +1626,7 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
 
         private sealed class HeavyScenario
         {
+            public bool EnableRetention { get; init; }
             public required string Name { get; init; }
 
             public required string ScenarioId { get; init; }
@@ -1588,13 +1693,147 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
 
             public static HeavyScenario AllFeaturesHeavy()
             {
+                return CreateAllFeaturesScenario(
+                    name: "shared-queue-real-heavy-all-features",
+                    pipelinePrefix: "shared-queue-real-heavy",
+                    candidateIdPrefix: "candidate-shared-queue-real-heavy",
+                    retentionArchiveReason: "shared-queue-real-heavy-retention",
+                    runCount: 3,
+                    stepCount: 20,
+                    runtimeInstanceCount: 3,
+                    expectedMinimumParticipatingInstances: 2,
+                    workerCount: 10,
+                    maxConcurrentRunsPerInstance: 3,
+                    queueCapacityPerInstance: 64,
+                    maxDispatchesPerPumpCycle: 2,
+                    maxStepsPerCycle: 1,
+                    maxWorkerCycles: 5_000,
+                    maxDegreeOfParallelism: 12,
+                    maxProviderConcurrency: 3,
+                    maxCompletedStepsInState: 15,
+                    maxInlinePayloadBytes: 1,
+                    flakyStepInterval: 9,
+                    replaySampleCount: 3,
+                    enableRetention:true,
+                    workerIdleDelay: TimeSpan.FromMilliseconds(1),
+                    sharedDispatchTimeout: TimeSpan.FromSeconds(60),
+                    executionTimeout: TimeSpan.FromSeconds(90),
+                    snapshotTimeout: TimeSpan.FromSeconds(60));
+            }
+
+            public static HeavyScenario AllFeaturesStress(
+                int runCount = 9,
+                int stepCount = 100,
+                int runtimeInstanceCount = 3,
+                int expectedMinimumParticipatingInstances = 2,
+                int workerCount = 10,
+                int maxConcurrentRunsPerInstance = 3,
+                int queueCapacityPerInstance = 64,
+                int maxDispatchesPerPumpCycle = 2,
+                int maxStepsPerCycle = 1,
+                int maxWorkerCycles = 10_000,
+                int maxDegreeOfParallelism = 12,
+                int maxProviderConcurrency = 3,
+                int maxCompletedStepsInState = 15,
+                int maxInlinePayloadBytes = 1,
+                int flakyStepInterval = 9,
+                int replaySampleCount = 3,
+                bool enableRetention = true,
+                TimeSpan? workerIdleDelay = null,
+                TimeSpan? sharedDispatchTimeout = null,
+                TimeSpan? executionTimeout = null,
+                TimeSpan? snapshotTimeout = null)
+            {
+                return CreateAllFeaturesScenario(
+                    name: "shared-queue-real-stress-all-features",
+                    pipelinePrefix: "shared-queue-real-stress",
+                    candidateIdPrefix: "candidate-shared-queue-real-stress",
+                    retentionArchiveReason: "shared-queue-real-stress-retention",
+                    runCount: runCount,
+                    stepCount: stepCount,
+                    runtimeInstanceCount: runtimeInstanceCount,
+                    expectedMinimumParticipatingInstances: expectedMinimumParticipatingInstances,
+                    workerCount: workerCount,
+                    maxConcurrentRunsPerInstance: maxConcurrentRunsPerInstance,
+                    queueCapacityPerInstance: queueCapacityPerInstance,
+                    maxDispatchesPerPumpCycle: maxDispatchesPerPumpCycle,
+                    maxStepsPerCycle: maxStepsPerCycle,
+                    maxWorkerCycles: maxWorkerCycles,
+                    maxDegreeOfParallelism: maxDegreeOfParallelism,
+                    maxProviderConcurrency: maxProviderConcurrency,
+                    maxCompletedStepsInState: maxCompletedStepsInState,
+                    maxInlinePayloadBytes: maxInlinePayloadBytes,
+                    flakyStepInterval: flakyStepInterval,
+                    replaySampleCount: replaySampleCount,
+                    enableRetention: enableRetention,
+                    workerIdleDelay: workerIdleDelay ?? TimeSpan.FromMilliseconds(1),
+                    sharedDispatchTimeout: sharedDispatchTimeout ?? TimeSpan.FromSeconds(90),
+                    executionTimeout: executionTimeout ?? TimeSpan.FromMinutes(5),
+                    snapshotTimeout: snapshotTimeout ?? TimeSpan.FromMinutes(2));
+            }
+
+            private static HeavyScenario CreateAllFeaturesScenario(
+                string name,
+                string pipelinePrefix,
+                string candidateIdPrefix,
+                string retentionArchiveReason,
+                int runCount,
+                int stepCount,
+                int runtimeInstanceCount,
+                int expectedMinimumParticipatingInstances,
+                int workerCount,
+                int maxConcurrentRunsPerInstance,
+                int queueCapacityPerInstance,
+                int maxDispatchesPerPumpCycle,
+                int maxStepsPerCycle,
+                int maxWorkerCycles,
+                int maxDegreeOfParallelism,
+                int maxProviderConcurrency,
+                int maxCompletedStepsInState,
+                int maxInlinePayloadBytes,
+                int flakyStepInterval,
+                int replaySampleCount,
+                bool enableRetention,
+                TimeSpan workerIdleDelay,
+                TimeSpan sharedDispatchTimeout,
+                TimeSpan executionTimeout,
+                TimeSpan snapshotTimeout)
+            {
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runCount);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stepCount);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeInstanceCount);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedMinimumParticipatingInstances);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(workerCount);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxConcurrentRunsPerInstance);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(queueCapacityPerInstance);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDispatchesPerPumpCycle);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxStepsPerCycle);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxWorkerCycles);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxDegreeOfParallelism);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxProviderConcurrency);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCompletedStepsInState);
+                ArgumentOutOfRangeException.ThrowIfNegative(maxInlinePayloadBytes);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(flakyStepInterval);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(replaySampleCount);
+
+                if (stepCount < 3)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stepCount),
+                        "The scenario requires at least 3 steps: first step, at least one middle step, and final join step.");
+                }
+
+                if (expectedMinimumParticipatingInstances > runtimeInstanceCount)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(expectedMinimumParticipatingInstances),
+                        "Expected participating instances cannot be greater than runtime instance count.");
+                }
+
                 var scenarioId = Guid.NewGuid().ToString("N");
 
                 var pipelineName =
-                    $"shared-queue-real-heavy-{scenarioId}";
-
-                const int stepCount = 20;
-                const int flakyStepInterval = 9;
+                    $"{pipelinePrefix}-{scenarioId}";
 
                 var requiredCandidateSteps = new[]
                 {
@@ -1621,40 +1860,49 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                     .Select(index => $"chaos-step-{index:000}")
                     .ToArray();
 
-                var scenario = new HeavyScenario
+
+                string[] retentionPolicies = Array.Empty<string>();
+
+                if (enableRetention)
                 {
-                    Name = "shared-queue-real-heavy-all-features",
-                    ScenarioId = scenarioId,
-                    PipelineName = pipelineName,
-                    CandidateIdPrefix = "candidate-shared-queue-real-heavy",
-                    RetentionArchiveReason = "shared-queue-real-heavy-retention",
-                    RuntimeInstanceCount = 3,
-                    ExpectedMinimumParticipatingInstances = 2,
-                    RunCount = 3,
-                    StepCount = stepCount,
-                    WorkerCount = 10,
-                    MaxConcurrentRunsPerInstance = 3,
-                    QueueCapacityPerInstance = 64,
-                    MaxDispatchesPerPumpCycle = 2,
-                    MaxStepsPerCycle = 1,
-                    MaxWorkerCycles = 5000,
-                    MaxDegreeOfParallelism = 12,
-                    MaxProviderConcurrency = 3,
-                    MaxCompletedStepsInState = 15,
-                    MaxInlinePayloadBytes = 1,
-                    FlakyStepInterval = flakyStepInterval,
-                    ReplaySampleCount = 3,
-                    WorkerIdleDelay = TimeSpan.FromMilliseconds(1),
-                    SharedDispatchTimeout = TimeSpan.FromSeconds(60),
-                    ExecutionTimeout = TimeSpan.FromSeconds(90),
-                    SnapshotTimeout = TimeSpan.FromSeconds(60),
-                    RetentionPolicies = new[]
-                    {
+                    retentionPolicies =
+                    [
                         "retention.compact.terminal",
                         "retention.evict.terminal"
-                    },
+                    ];
+                }
+
+                var scenario = new HeavyScenario
+                {
+                    Name = name,
+                    ScenarioId = scenarioId,
+                    PipelineName = pipelineName,
+                    CandidateIdPrefix = candidateIdPrefix,
+                    RetentionArchiveReason = retentionArchiveReason,
+                    RuntimeInstanceCount = runtimeInstanceCount,
+                    ExpectedMinimumParticipatingInstances = expectedMinimumParticipatingInstances,
+                    RunCount = runCount,
+                    StepCount = stepCount,
+                    WorkerCount = workerCount,
+                    MaxConcurrentRunsPerInstance = maxConcurrentRunsPerInstance,
+                    QueueCapacityPerInstance = queueCapacityPerInstance,
+                    MaxDispatchesPerPumpCycle = maxDispatchesPerPumpCycle,
+                    MaxStepsPerCycle = maxStepsPerCycle,
+                    MaxWorkerCycles = maxWorkerCycles,
+                    MaxDegreeOfParallelism = maxDegreeOfParallelism,
+                    MaxProviderConcurrency = maxProviderConcurrency,
+                    MaxCompletedStepsInState = maxCompletedStepsInState,
+                    MaxInlinePayloadBytes = maxInlinePayloadBytes,
+                    FlakyStepInterval = flakyStepInterval,
+                    ReplaySampleCount = replaySampleCount,
+                    WorkerIdleDelay = workerIdleDelay,
+                    SharedDispatchTimeout = sharedDispatchTimeout,
+                    ExecutionTimeout = executionTimeout,
+                    SnapshotTimeout = snapshotTimeout,
+                    RetentionPolicies = retentionPolicies,
                     RequiredResolvedSteps = requiredSteps,
                     ExpectedRetriedSteps = retriedSteps,
+                    EnableRetention = enableRetention,
                     FingerprintStepNames = requiredSteps
                         .Concat(retriedSteps)
                         .Distinct(StringComparer.Ordinal)

@@ -25,6 +25,12 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
     {
         private readonly IAiSharedRuntimeInstanceRegistry _runtimeInstanceRegistry;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RemoteAiSharedRunDispatcher"/> class.
+        /// </summary>
+        /// <param name="runtimeInstanceRegistry">
+        /// Registry used to resolve a runtime instance id to a dispatchable shared runtime instance.
+        /// </param>
         public RemoteAiSharedRunDispatcher(
             IAiSharedRuntimeInstanceRegistry runtimeInstanceRegistry)
         {
@@ -44,15 +50,9 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
 
             var startedAtUtc = DateTimeOffset.UtcNow;
 
-            Console.WriteLine(
-                $"[REMOTE-DISPATCH][START] SharedRunId={request.SharedRun.SharedRunId}, RuntimeInstanceId={request.RuntimeInstanceId}, ClaimToken={request.ClaimToken}, CorrelationId={request.CorrelationId ?? request.SharedRun.CorrelationId}");
-
             if (request.SharedRun.RunRequest is null)
             {
                 var completedAtUtc = DateTimeOffset.UtcNow;
-
-                Console.WriteLine(
-                    $"[REMOTE-DISPATCH][FAIL] Missing RunRequest. SharedRunId={request.SharedRun.SharedRunId}, RuntimeInstanceId={request.RuntimeInstanceId}");
 
                 return new AiSharedRunDispatchResult
                 {
@@ -70,13 +70,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
                 };
             }
 
-            var registeredInstances = await _runtimeInstanceRegistry
-                .ListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            Console.WriteLine(
-                $"[REMOTE-DISPATCH][REGISTRY] Target={request.RuntimeInstanceId}, Registered=[{string.Join(", ", registeredInstances.Select(instance => instance.RuntimeInstanceId))}]");
-
             var runtimeInstance = await _runtimeInstanceRegistry
                 .GetAsync(
                     request.RuntimeInstanceId,
@@ -86,9 +79,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             if (runtimeInstance is null)
             {
                 var completedAtUtc = DateTimeOffset.UtcNow;
-
-                Console.WriteLine(
-                    $"[REMOTE-DISPATCH][FAIL] Runtime instance not registered. SharedRunId={request.SharedRun.SharedRunId}, RuntimeInstanceId={request.RuntimeInstanceId}");
 
                 return new AiSharedRunDispatchResult
                 {
@@ -106,9 +96,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
                         "runtime-instance-not-registered")
                 };
             }
-
-            Console.WriteLine(
-                $"[REMOTE-DISPATCH][RESOLVED] SharedRunId={request.SharedRun.SharedRunId}, Target={request.RuntimeInstanceId}, Resolved={runtimeInstance.RuntimeInstanceId}");
 
             var dispatchMetadata = MergeMetadata(
                 request.Metadata,
@@ -144,9 +131,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             {
                 var failedAtUtc = DateTimeOffset.UtcNow;
 
-                Console.WriteLine(
-                    $"[REMOTE-DISPATCH][EXCEPTION] SharedRunId={request.SharedRun.SharedRunId}, RuntimeInstanceId={request.RuntimeInstanceId}, ExceptionType={exception.GetType().Name}, Message={exception.Message}");
-
                 return new AiSharedRunDispatchResult
                 {
                     Success = false,
@@ -166,15 +150,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
 
             var completedAtUtcFinal = DateTimeOffset.UtcNow;
             var durationMs = (long)(completedAtUtcFinal - startedAtUtc).TotalMilliseconds;
-
-            Console.WriteLine(
-                $"[REMOTE-DISPATCH][RESULT] Success={instanceResult.Success}, SharedRunId={instanceResult.SharedRunId ?? request.SharedRun.SharedRunId}, RuntimeInstanceId={request.RuntimeInstanceId}, LocalRunId={instanceResult.LocalRunId}, ExecutionId={instanceResult.ExecutionId}, FailureReason={instanceResult.FailureReason}, DurationMs={durationMs}");
-
-            if (instanceResult.Metadata.Count > 0)
-            {
-                Console.WriteLine(
-                    $"[REMOTE-DISPATCH][RESULT-METADATA] {FormatMetadata(instanceResult.Metadata)}");
-            }
 
             var resultMetadata = MergeResultMetadata(
                 dispatchMetadata,
@@ -205,6 +180,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             };
         }
 
+        /// <summary>
+        /// Merges dispatch metadata and shared run metadata into a single dictionary.
+        /// </summary>
+        /// <param name="dispatchMetadata">Metadata provided by the dispatch request.</param>
+        /// <param name="sharedRunMetadata">Metadata stored on the shared run record.</param>
+        /// <param name="sharedRunId">The shared run identifier.</param>
+        /// <param name="runtimeInstanceId">The target runtime instance identifier.</param>
+        /// <param name="claimToken">The shared queue claim token.</param>
+        /// <returns>The merged metadata dictionary.</returns>
         private static IReadOnlyDictionary<string, string> MergeMetadata(
             IReadOnlyDictionary<string, string>? dispatchMetadata,
             IReadOnlyDictionary<string, string>? sharedRunMetadata,
@@ -243,6 +227,16 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             return metadata;
         }
 
+        /// <summary>
+        /// Merges remote dispatch metadata with metadata returned by the target runtime instance.
+        /// </summary>
+        /// <param name="dispatchMetadata">Metadata prepared before calling the target runtime instance.</param>
+        /// <param name="instanceMetadata">Metadata returned by the target runtime instance.</param>
+        /// <param name="localRunId">The local run id created by the target runtime instance.</param>
+        /// <param name="executionId">The execution id returned by the target runtime instance, when available.</param>
+        /// <param name="success">Whether the runtime instance dispatch succeeded.</param>
+        /// <param name="failureReason">The failure reason returned by the runtime instance, when available.</param>
+        /// <returns>The merged result metadata dictionary.</returns>
         private static IReadOnlyDictionary<string, string> MergeResultMetadata(
             IReadOnlyDictionary<string, string> dispatchMetadata,
             IReadOnlyDictionary<string, string>? instanceMetadata,
@@ -275,6 +269,13 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             return metadata;
         }
 
+        /// <summary>
+        /// Creates metadata for a failed remote dispatch operation.
+        /// </summary>
+        /// <param name="request">The original shared run dispatch request.</param>
+        /// <param name="failureCode">A stable failure code describing the failure category.</param>
+        /// <param name="exception">The exception that caused the failure, when available.</param>
+        /// <returns>The failure metadata dictionary.</returns>
         private static IReadOnlyDictionary<string, string> CreateFailureMetadata(
             AiSharedRunDispatchRequest request,
             string failureCode,
@@ -302,16 +303,6 @@ namespace Multiplexed.AI.Runtime.ControlPlane.SharedController.Dispatch
             }
 
             return result;
-        }
-
-        private static string FormatMetadata(
-            IReadOnlyDictionary<string, string> metadata)
-        {
-            return string.Join(
-                " | ",
-                metadata
-                    .OrderBy(item => item.Key, StringComparer.Ordinal)
-                    .Select(item => $"{item.Key}={item.Value}"));
         }
     }
 }
