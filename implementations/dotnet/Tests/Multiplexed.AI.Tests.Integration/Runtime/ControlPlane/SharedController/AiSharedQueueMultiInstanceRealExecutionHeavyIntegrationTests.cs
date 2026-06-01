@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
+using Multiplexed.Abstractions.AI.ControlPlane.ExecutionAssistance;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.SharedInstance;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
@@ -29,6 +30,7 @@ using Multiplexed.AI.DI.Engine;
 using Multiplexed.AI.Observability.Ledger;
 using Multiplexed.AI.Runtime;
 using Multiplexed.AI.Runtime.ControlPlane.DI;
+using Multiplexed.AI.Runtime.ControlPlane.ExecutionAssistance;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances.SharedInstance;
 using Multiplexed.AI.Runtime.ControlPlane.SharedController;
@@ -241,6 +243,532 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                     workerCount: 10,
                     executionTimeout: TimeSpan.FromMinutes(5),
                     stepCount: 50,
+                    enableRetention: true));
+        }
+
+        /// <summary>
+        /// Validates that an idle runtime instance can manually assist an existing execution
+        /// owned by another primary runtime instance.
+        /// </summary>
+        /// <remarks>
+        /// This test does not validate automatic idle detection yet.
+        /// It validates the core cross-instance assistance path:
+        ///
+        /// SharedRun
+        /// -> primary runtime instance
+        /// -> local run
+        /// -> ExecutionId
+        /// -> helper runtime instance receives assistance lease
+        /// -> helper advances the same existing ExecutionId.
+        /// </remarks>
+        [RedisFact]
+        public async Task MultiInstance_ExecutionAssistance_Manual_OneLargeRun_Should_Allow_Helper_Instance_To_Assist()
+        {
+            var scenario = HeavyScenario.AllFeaturesStress(
+                runCount: 1,
+                expectedMinimumParticipatingInstances: 1,
+                runtimeInstanceCount: 2,
+                workerCount: 5,
+                executionTimeout: TimeSpan.FromMinutes(5),
+                stepCount: 500,
+                enableRetention: true);
+
+            var store = CreateRunStore();
+            var queue = CreateQueue();
+
+            var sharedRuntimeInstanceRegistry =
+                new InMemoryAiSharedRuntimeInstanceRegistry();
+
+            var controller = new AiSharedRuntimeController(
+                new QueueGloballyAdmissionController(
+                    runtimeInstanceCount: scenario.RuntimeInstanceCount),
+                store,
+                queue,
+                new NeverCalledSharedRunDispatcher(),
+                new NoopAiRuntimeScaleOutRequestPublisher(),
+                Options.Create(new AiSharedRuntimeControllerOptions()),
+                new NoopAiControlPlaneObserver());
+
+            var runtimeInstances = new List<RuntimeInstanceHarness>();
+
+            try
+            {
+                for (var index = 1; index <= scenario.RuntimeInstanceCount; index++)
+                {
+                    var runtimeInstanceId = $"runtime-instance-{index}";
+
+                    var harness = await CreateRuntimeInstanceHarnessAsync(
+                        scenario,
+                        runtimeInstanceId,
+                        sharedRuntimeInstanceRegistry);
+
+                    runtimeInstances.Add(harness);
+                }
+
+                PublishPipelineDefinitionToAllRuntimeInstances(
+                    runtimeInstances,
+                    scenario);
+
+                var primaryRuntimeInstance = runtimeInstances[0];
+                var helperRuntimeInstance = runtimeInstances[1];
+
+                foreach (var runtimeInstance in runtimeInstances)
+                {
+                    await runtimeInstance.BackgroundController.StartAsync();
+                }
+
+                var remoteSharedRunDispatcher =
+                    new RemoteAiSharedRunDispatcher(
+                        sharedRuntimeInstanceRegistry);
+
+                var sharedRunId =
+                    $"shared-run-{scenario.ScenarioId}-00000";
+
+                var submit = await controller.SubmitRunAsync(
+                    new AiSharedRuntimeControllerRequest
+                    {
+                        Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                        RequestedSharedRunId = sharedRunId,
+                        RunRequest = new AiRuntimePipelineRunRequest
+                        {
+                            PipelineName = scenario.PipelineName,
+                            PipelineDefinition = scenario.PipelineDefinition,
+                            Input = new
+                            {
+                                candidateId = $"{scenario.CandidateIdPrefix}-00000",
+                                source = scenario.Name,
+                                runIndex = 0,
+                                runCount = scenario.RunCount,
+                                stepCount = scenario.StepCount,
+                                sharedQueue = true,
+                                multiInstance = true,
+                                realExecution = true,
+                                manualExecutionAssistance = true,
+                                retry = true,
+                                retention = true,
+                                compaction = true,
+                                eviction = true,
+                                throttling = true,
+                                snapshot = true,
+                                replay = true,
+                                ledger = true,
+                                timeline = true,
+                                metrics = true
+                            }
+                        },
+                        TenantId = "tenant-real-heavy",
+                        PipelineKey = scenario.PipelineName,
+                        CorrelationId = $"correlation-{sharedRunId}",
+                        RequestedBy = "integration-test",
+                        Source = "multi-instance-execution-assistance-test",
+                        Reason = "Queue one large run for manual cross-instance execution assistance.",
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["scenario"] = scenario.Name,
+                            ["scenario.id"] = scenario.ScenarioId,
+                            ["run.index"] = "0",
+                            ["run.count"] = scenario.RunCount.ToString(),
+                            ["step.count"] = scenario.StepCount.ToString(),
+                            ["manual.execution.assistance"] = "true"
+                        }
+                    });
+
+                Assert.True(
+                    submit.Success,
+                    submit.FailureReason ?? $"Submit failed for shared run '{sharedRunId}'.");
+
+                var primaryPumpResult = await RunRuntimeInstancePumpUntilEmptyAsync(
+                    primaryRuntimeInstance,
+                    queue,
+                    store,
+                    remoteSharedRunDispatcher,
+                    scenario.MaxDispatchesPerPumpCycle);
+
+                Assert.Equal(1, primaryPumpResult.SuccessfulDispatchCount);
+                Assert.Equal(0, primaryPumpResult.FailedDispatchCount);
+
+                var dispatchedRuns = await WaitForSharedRunsDispatchedAsync(
+                    store,
+                    $"shared-run-{scenario.ScenarioId}-",
+                    expectedCount: 1,
+                    scenario.SharedDispatchTimeout);
+
+                var dispatchedRun = dispatchedRuns.Single();
+
+                Assert.Equal(AiSharedRunStatus.Dispatched, dispatchedRun.Status);
+                Assert.Equal(primaryRuntimeInstance.RuntimeInstanceId, dispatchedRun.AssignedRuntimeInstanceId);
+                Assert.False(string.IsNullOrWhiteSpace(dispatchedRun.LocalRunId));
+
+                var executionId = await WaitForRuntimeRunExecutionStartedAsync(
+                    primaryRuntimeInstance,
+                    runtimeInstances,
+                    dispatchedRun.LocalRunId!,
+                    TimeSpan.FromSeconds(30));
+
+                var assistanceLease = new AiExecutionAssistanceLease
+                {
+                    LeaseId = Guid.NewGuid().ToString("N"),
+                    ExecutionId = executionId,
+                    PrimaryRuntimeInstanceId = primaryRuntimeInstance.RuntimeInstanceId,
+                    HelperRuntimeInstanceId = helperRuntimeInstance.RuntimeInstanceId,
+                    MaxWorkers = 1,
+                    Status = AiExecutionAssistanceStatus.Granted,
+                    GrantedAtUtc = DateTimeOffset.UtcNow,
+                    ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5),
+                    Reason = "Manual integration test assistance lease.",
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["scenario"] = scenario.Name,
+                        ["scenario.id"] = scenario.ScenarioId,
+                        ["manual.execution.assistance"] = "true"
+                    }
+                };
+
+                await helperRuntimeInstance.ExecutionAssistanceStore.RegisterAsync(
+                    assistanceLease);
+
+                var assistanceTask = helperRuntimeInstance.ExecutionAssistancePump.PumpAsync(
+                    assistanceLease);
+
+                var record = await WaitForRuntimeRunExecutionCompletedAsync(
+                    primaryRuntimeInstance,
+                    runtimeInstances,
+                    dispatchedRun.LocalRunId!,
+                    scenario.ExecutionTimeout);
+
+                var assistanceResult = await assistanceTask;
+
+                Assert.Equal(AiExecutionStatus.Completed, record.Status);
+                Assert.Equal(executionId, record.ExecutionId);
+
+                Assert.True(
+                    assistanceResult.Success,
+                    assistanceResult.FailureReason ?? "Manual assistance pump failed.");
+
+                Assert.Equal(executionId, assistanceResult.ExecutionId);
+                Assert.Equal(helperRuntimeInstance.RuntimeInstanceId, assistanceResult.HelperRuntimeInstanceId);
+                Assert.Equal(1, assistanceResult.StartedWorkerCount);
+
+                var storedLease = await helperRuntimeInstance.ExecutionAssistanceStore.GetAsync(
+                    assistanceLease.LeaseId);
+
+                Assert.NotNull(storedLease);
+                Assert.Equal(AiExecutionAssistanceStatus.Released, storedLease!.Status);
+
+                var helperWorkerCycles =
+                    helperRuntimeInstance.Metrics.Worker.GetCyclesByRuntimeInstance();
+
+                Assert.NotEmpty(helperWorkerCycles);
+
+                _output.WriteLine("");
+                _output.WriteLine("MANUAL EXECUTION ASSISTANCE TEST");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"ExecutionId:     {executionId}");
+                _output.WriteLine($"PrimaryInstance: {primaryRuntimeInstance.RuntimeInstanceId}");
+                _output.WriteLine($"HelperInstance:  {helperRuntimeInstance.RuntimeInstanceId}");
+                _output.WriteLine($"LeaseId:         {assistanceLease.LeaseId}");
+                _output.WriteLine($"HelperWorkers:   {assistanceResult.StartedWorkerCount}");
+            }
+            finally
+            {
+                foreach (var runtimeInstance in runtimeInstances)
+                {
+                    await runtimeInstance.DisposeAsync();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validates that multiple idle runtime instances can manually assist one existing
+        /// execution owned by a primary runtime instance.
+        /// </summary>
+        /// <remarks>
+        /// This test validates the core multi-helper assistance path:
+        ///
+        /// SharedRun
+        /// -> primary runtime instance
+        /// -> local run
+        /// -> ExecutionId
+        /// -> multiple helper runtime instances receive assistance leases
+        /// -> helpers advance the same existing ExecutionId.
+        /// </remarks>
+        [RedisFact]
+        public async Task MultiInstance_ExecutionAssistance_Manual_OneLargeRun_Should_Allow_Multiple_Helper_Instances_To_Assist()
+        {
+            var scenario = HeavyScenario.AllFeaturesStress(
+                runCount: 1,
+                expectedMinimumParticipatingInstances: 1,
+                runtimeInstanceCount: 4,
+                workerCount: 1,
+                executionTimeout: TimeSpan.FromMinutes(5),
+                stepCount: 500,
+                enableRetention: true);
+
+            var store = CreateRunStore();
+            var queue = CreateQueue();
+
+            var sharedRuntimeInstanceRegistry =
+                new InMemoryAiSharedRuntimeInstanceRegistry();
+
+            var controller = new AiSharedRuntimeController(
+                new QueueGloballyAdmissionController(
+                    runtimeInstanceCount: scenario.RuntimeInstanceCount),
+                store,
+                queue,
+                new NeverCalledSharedRunDispatcher(),
+                new NoopAiRuntimeScaleOutRequestPublisher(),
+                Options.Create(new AiSharedRuntimeControllerOptions()),
+                new NoopAiControlPlaneObserver());
+
+            var runtimeInstances = new List<RuntimeInstanceHarness>();
+
+            try
+            {
+                for (var index = 1; index <= scenario.RuntimeInstanceCount; index++)
+                {
+                    var runtimeInstanceId = $"runtime-instance-{index}";
+
+                    var harness = await CreateRuntimeInstanceHarnessAsync(
+                        scenario,
+                        runtimeInstanceId,
+                        sharedRuntimeInstanceRegistry);
+
+                    runtimeInstances.Add(harness);
+                }
+
+                PublishPipelineDefinitionToAllRuntimeInstances(
+                    runtimeInstances,
+                    scenario);
+
+                var primaryRuntimeInstance = runtimeInstances[0];
+                var helperRuntimeInstances = runtimeInstances
+                    .Skip(1)
+                    .ToArray();
+
+                foreach (var runtimeInstance in runtimeInstances)
+                {
+                    await runtimeInstance.BackgroundController.StartAsync();
+                }
+
+                var remoteSharedRunDispatcher =
+                    new RemoteAiSharedRunDispatcher(
+                        sharedRuntimeInstanceRegistry);
+
+                var sharedRunId =
+                    $"shared-run-{scenario.ScenarioId}-00000";
+
+                var submit = await controller.SubmitRunAsync(
+                    new AiSharedRuntimeControllerRequest
+                    {
+                        Operation = AiSharedRuntimeControllerOperation.SubmitRun,
+                        RequestedSharedRunId = sharedRunId,
+                        RunRequest = new AiRuntimePipelineRunRequest
+                        {
+                            PipelineName = scenario.PipelineName,
+                            PipelineDefinition = scenario.PipelineDefinition,
+                            Input = new
+                            {
+                                candidateId = $"{scenario.CandidateIdPrefix}-00000",
+                                source = scenario.Name,
+                                runIndex = 0,
+                                runCount = scenario.RunCount,
+                                stepCount = scenario.StepCount,
+                                sharedQueue = true,
+                                multiInstance = true,
+                                realExecution = true,
+                                manualExecutionAssistance = true,
+                                multiHelperExecutionAssistance = true,
+                                retry = true,
+                                retention = true,
+                                compaction = true,
+                                eviction = true,
+                                throttling = true,
+                                snapshot = true,
+                                replay = true,
+                                ledger = true,
+                                timeline = true,
+                                metrics = true
+                            }
+                        },
+                        TenantId = "tenant-real-heavy",
+                        PipelineKey = scenario.PipelineName,
+                        CorrelationId = $"correlation-{sharedRunId}",
+                        RequestedBy = "integration-test",
+                        Source = "multi-instance-execution-assistance-test",
+                        Reason = "Queue one large run for manual multi-helper cross-instance execution assistance.",
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["scenario"] = scenario.Name,
+                            ["scenario.id"] = scenario.ScenarioId,
+                            ["run.index"] = "0",
+                            ["run.count"] = scenario.RunCount.ToString(),
+                            ["step.count"] = scenario.StepCount.ToString(),
+                            ["manual.execution.assistance"] = "true",
+                            ["multi.helper.execution.assistance"] = "true"
+                        }
+                    });
+
+                Assert.True(
+                    submit.Success,
+                    submit.FailureReason ?? $"Submit failed for shared run '{sharedRunId}'.");
+
+                var primaryPumpResult = await RunRuntimeInstancePumpUntilEmptyAsync(
+                    primaryRuntimeInstance,
+                    queue,
+                    store,
+                    remoteSharedRunDispatcher,
+                    scenario.MaxDispatchesPerPumpCycle);
+
+                Assert.Equal(1, primaryPumpResult.SuccessfulDispatchCount);
+                Assert.Equal(0, primaryPumpResult.FailedDispatchCount);
+
+                var dispatchedRuns = await WaitForSharedRunsDispatchedAsync(
+                    store,
+                    $"shared-run-{scenario.ScenarioId}-",
+                    expectedCount: 1,
+                    scenario.SharedDispatchTimeout);
+
+                var dispatchedRun = dispatchedRuns.Single();
+
+                Assert.Equal(AiSharedRunStatus.Dispatched, dispatchedRun.Status);
+                Assert.Equal(primaryRuntimeInstance.RuntimeInstanceId, dispatchedRun.AssignedRuntimeInstanceId);
+                Assert.False(string.IsNullOrWhiteSpace(dispatchedRun.LocalRunId));
+
+                var executionId = await WaitForRuntimeRunExecutionStartedAsync(
+                    primaryRuntimeInstance,
+                    runtimeInstances,
+                    dispatchedRun.LocalRunId!,
+                    TimeSpan.FromSeconds(30));
+
+                var assistanceTasks = new List<Task<AiExecutionAssistancePumpResult>>();
+                var assistanceLeases = new List<(RuntimeInstanceHarness Helper, AiExecutionAssistanceLease Lease)>();
+
+                foreach (var helperRuntimeInstance in helperRuntimeInstances)
+                {
+                    var assistanceLease = new AiExecutionAssistanceLease
+                    {
+                        LeaseId = Guid.NewGuid().ToString("N"),
+                        ExecutionId = executionId,
+                        PrimaryRuntimeInstanceId = primaryRuntimeInstance.RuntimeInstanceId,
+                        HelperRuntimeInstanceId = helperRuntimeInstance.RuntimeInstanceId,
+                        MaxWorkers = 1,
+                        Status = AiExecutionAssistanceStatus.Granted,
+                        GrantedAtUtc = DateTimeOffset.UtcNow,
+                        ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5),
+                        Reason = "Manual multi-helper integration test assistance lease.",
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["scenario"] = scenario.Name,
+                            ["scenario.id"] = scenario.ScenarioId,
+                            ["manual.execution.assistance"] = "true",
+                            ["multi.helper.execution.assistance"] = "true"
+                        }
+                    };
+
+                    await helperRuntimeInstance.ExecutionAssistanceStore.RegisterAsync(
+                        assistanceLease);
+
+                    assistanceLeases.Add((helperRuntimeInstance, assistanceLease));
+
+                    assistanceTasks.Add(
+                        helperRuntimeInstance.ExecutionAssistancePump.PumpAsync(
+                            assistanceLease));
+                }
+
+                var record = await WaitForRuntimeRunExecutionCompletedAsync(
+                    primaryRuntimeInstance,
+                    runtimeInstances,
+                    dispatchedRun.LocalRunId!,
+                    scenario.ExecutionTimeout);
+
+                var assistanceResults = await Task.WhenAll(assistanceTasks);
+
+                Assert.Equal(AiExecutionStatus.Completed, record.Status);
+                Assert.Equal(executionId, record.ExecutionId);
+
+                Assert.Equal(helperRuntimeInstances.Length, assistanceResults.Length);
+
+                foreach (var assistanceResult in assistanceResults)
+                {
+                    Assert.True(
+                        assistanceResult.Success,
+                        assistanceResult.FailureReason ?? "Manual assistance pump failed.");
+
+                    Assert.Equal(executionId, assistanceResult.ExecutionId);
+                    Assert.Equal(1, assistanceResult.StartedWorkerCount);
+                }
+
+                foreach (var (helperRuntimeInstance, lease) in assistanceLeases)
+                {
+                    var storedLease = await helperRuntimeInstance.ExecutionAssistanceStore.GetAsync(
+                        lease.LeaseId);
+
+                    Assert.NotNull(storedLease);
+                    Assert.Equal(AiExecutionAssistanceStatus.Released, storedLease!.Status);
+                }
+
+                _output.WriteLine("");
+                _output.WriteLine("MANUAL MULTI-HELPER EXECUTION ASSISTANCE TEST");
+                _output.WriteLine("------------------------------------------------------------");
+                _output.WriteLine($"ExecutionId:     {executionId}");
+                _output.WriteLine($"PrimaryInstance: {primaryRuntimeInstance.RuntimeInstanceId}");
+                _output.WriteLine($"HelperInstances: {string.Join(", ", helperRuntimeInstances.Select(x => x.RuntimeInstanceId))}");
+                _output.WriteLine($"HelperWorkers:   {assistanceResults.Sum(x => x.StartedWorkerCount)}");
+
+                foreach (var result in assistanceResults)
+                {
+                    _output.WriteLine(
+                        $"HelperResult:    {result.HelperRuntimeInstanceId} | Lease={result.LeaseId} | Status={result.Status}");
+                }
+            }
+            finally
+            {
+                foreach (var runtimeInstance in runtimeInstances)
+                {
+                    await runtimeInstance.DisposeAsync();
+                }
+            }
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_ExecutionAssistance_Baseline_OneLargeRun_500Steps_OneInstance_5Workers()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 1,
+                    expectedMinimumParticipatingInstances: 1,
+                    runtimeInstanceCount: 1,
+                    workerCount: 5,
+                    executionTimeout: TimeSpan.FromMinutes(5),
+                    stepCount: 500,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_ExecutionAssistance_Baseline_OneLargeRun_500Steps_OneInstance_1Worker()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 1,
+                    expectedMinimumParticipatingInstances: 1,
+                    runtimeInstanceCount: 1,
+                    workerCount: 1,
+                    executionTimeout: TimeSpan.FromMinutes(8),
+                    stepCount: 500,
+                    enableRetention: true));
+        }
+
+        [RedisFact]
+        public async Task MultiInstance_ExecutionAssistance_Baseline_OneLargeRun_500Steps_OneInstance_10Worker()
+        {
+            await RunHeavyScenarioAsync(
+                HeavyScenario.AllFeaturesStress(
+                    runCount: 1,
+                    expectedMinimumParticipatingInstances: 1,
+                    runtimeInstanceCount: 1,
+                    workerCount: 10,
+                    executionTimeout: TimeSpan.FromMinutes(8),
+                    stepCount: 500,
                     enableRetention: true));
         }
 
@@ -649,7 +1177,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 host.ServiceProvider.GetRequiredService<IAiExecutionSnapshotStore<ExecutionContextSnapshot>>(),
                 host.ServiceProvider.GetRequiredService<IAiDecisionLedger>(),
                 host.ServiceProvider.GetRequiredService<IAiTraceTimeline>(),
-                host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>());
+                host.ServiceProvider.GetRequiredService<IAiRuntimeMetrics>(),
+                host.ServiceProvider.GetRequiredService<IAiExecutionAssistanceStore>(),
+                host.ServiceProvider.GetRequiredService<AiExecutionAssistancePump>(),
+                host.ServiceProvider.GetRequiredService<IRuntimeAiPipelineDefinitionProvider>());
         }
 
         private async Task<AiSharedQueuePumpResult> RunRuntimeInstancePumpUntilEmptyAsync(
@@ -747,10 +1278,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
         }
 
         private static async Task<AiExecutionRecord> WaitForRuntimeRunExecutionCompletedAsync(
-    RuntimeInstanceHarness expectedRuntimeInstance,
-    IReadOnlyCollection<RuntimeInstanceHarness> allRuntimeInstances,
-    string localRunId,
-    TimeSpan timeout)
+            RuntimeInstanceHarness expectedRuntimeInstance,
+            IReadOnlyCollection<RuntimeInstanceHarness> allRuntimeInstances,
+            string localRunId,
+            TimeSpan timeout)
         {
             ArgumentNullException.ThrowIfNull(expectedRuntimeInstance);
             ArgumentNullException.ThrowIfNull(allRuntimeInstances);
@@ -909,6 +1440,95 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 $"StepStatusSummary='{stepStatusSummary}', " +
                 $"StepClaimSummary='{stepClaimSummary}', " +
                 $"StepRetrySummary='{stepRetrySummary}'.");
+        }
+
+        /// <summary>
+        /// Publishes the scenario pipeline definition to every runtime instance.
+        /// </summary>
+        /// <param name="runtimeInstances">The runtime instances.</param>
+        /// <param name="scenario">The heavy test scenario.</param>
+        private static void PublishPipelineDefinitionToAllRuntimeInstances(
+            IEnumerable<RuntimeInstanceHarness> runtimeInstances,
+            HeavyScenario scenario)
+        {
+            ArgumentNullException.ThrowIfNull(runtimeInstances);
+            ArgumentNullException.ThrowIfNull(scenario);
+
+            foreach (var runtimeInstance in runtimeInstances)
+            {
+                runtimeInstance.PipelineDefinitionProvider.Upsert(
+                    scenario.PipelineDefinition);
+            }
+        }
+
+        /// <summary>
+        /// Waits until a local runtime run exposes an execution identifier.
+        /// </summary>
+        /// <param name="expectedRuntimeInstance">The expected primary runtime instance.</param>
+        /// <param name="allRuntimeInstances">All runtime instances participating in the test.</param>
+        /// <param name="localRunId">The local runtime run identifier.</param>
+        /// <param name="timeout">The maximum wait duration.</param>
+        /// <returns>The execution identifier associated with the local run.</returns>
+        private static async Task<string> WaitForRuntimeRunExecutionStartedAsync(
+            RuntimeInstanceHarness expectedRuntimeInstance,
+            IReadOnlyCollection<RuntimeInstanceHarness> allRuntimeInstances,
+            string localRunId,
+            TimeSpan timeout)
+        {
+            ArgumentNullException.ThrowIfNull(expectedRuntimeInstance);
+            ArgumentNullException.ThrowIfNull(allRuntimeInstances);
+            ArgumentException.ThrowIfNullOrWhiteSpace(localRunId);
+
+            var deadline = DateTimeOffset.UtcNow.Add(timeout);
+
+            string? lastRunStatus = null;
+            string? runtimeInstanceWhereRunWasFound = null;
+
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                foreach (var runtimeInstance in allRuntimeInstances)
+                {
+                    var result = await runtimeInstance.QueueControlPlane.GetRunStatusAsync(
+                        new AiRuntimeQueueControlPlaneRequest
+                        {
+                            Operation = AiRuntimeQueueControlPlaneOperation.GetRunStatus,
+                            RunId = localRunId,
+                            RequestedBy = "integration-test",
+                            Source = "multi-instance-execution-assistance-test"
+                        });
+
+                    if (result.RunState is null)
+                    {
+                        continue;
+                    }
+
+                    runtimeInstanceWhereRunWasFound = runtimeInstance.RuntimeInstanceId;
+                    lastRunStatus = result.RunState.Status;
+
+                    if (!string.IsNullOrWhiteSpace(result.RunState.ExecutionId))
+                    {
+                        return result.RunState.ExecutionId;
+                    }
+
+                    if (string.Equals(lastRunStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(lastRunStatus, "cancelled", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(lastRunStatus, "canceled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Local run '{localRunId}' reached terminal failure status '{lastRunStatus}' " +
+                            $"on runtime instance '{runtimeInstance.RuntimeInstanceId}'. " +
+                            $"FailureReason='{result.RunState.FailureReason}'.");
+                    }
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(50));
+            }
+
+            throw new TimeoutException(
+                $"Local run '{localRunId}' did not expose an execution id within '{timeout}'. " +
+                $"ExpectedRuntimeInstance='{expectedRuntimeInstance.RuntimeInstanceId}', " +
+                $"RuntimeInstanceWhereRunWasFound='{runtimeInstanceWhereRunWasFound ?? "none"}', " +
+                $"LastRunStatus='{lastRunStatus ?? "none"}'.");
         }
 
         private async Task<AiSharedRunRecord[]> WaitForSharedRunsDispatchedAsync(
@@ -1569,7 +2189,10 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 IAiExecutionSnapshotStore<ExecutionContextSnapshot> snapshotStore,
                 IAiDecisionLedger ledger,
                 IAiTraceTimeline timeline,
-                IAiRuntimeMetrics metrics)
+                IAiRuntimeMetrics metrics,
+                IAiExecutionAssistanceStore executionAssistanceStore,
+                AiExecutionAssistancePump executionAssistancePump,
+                IRuntimeAiPipelineDefinitionProvider pipelineDefinitionProvider)
             {
                 RuntimeInstanceId = runtimeInstanceId;
                 Host = host;
@@ -1583,6 +2206,9 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
                 Ledger = ledger;
                 Timeline = timeline;
                 Metrics = metrics;
+                ExecutionAssistanceStore = executionAssistanceStore;
+                ExecutionAssistancePump = executionAssistancePump;
+                PipelineDefinitionProvider = pipelineDefinitionProvider;
             }
 
             public string RuntimeInstanceId { get; }
@@ -1608,6 +2234,12 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
             public IAiTraceTimeline Timeline { get; }
 
             public IAiRuntimeMetrics Metrics { get; }
+
+            public IAiExecutionAssistanceStore ExecutionAssistanceStore { get; }
+
+            public AiExecutionAssistancePump ExecutionAssistancePump { get; }
+
+            public IRuntimeAiPipelineDefinitionProvider PipelineDefinitionProvider { get; }
 
             public async ValueTask DisposeAsync()
             {
@@ -1690,6 +2322,8 @@ namespace Multiplexed.AI.Tests.Integration.Runtime.ControlPlane.SharedController
 
             public IReadOnlyCollection<string> RetentionPolicies { get; init; } =
                 Array.Empty<string>();
+
+            
 
             public static HeavyScenario AllFeaturesHeavy()
             {

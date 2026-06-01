@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
+using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 
 namespace Multiplexed.AI.Tests.Runtime.Execution.MultiInstance
 {
@@ -60,6 +61,27 @@ namespace Multiplexed.AI.Tests.Runtime.Execution.MultiInstance
         public void Dispose()
         {
             ServiceProvider.Dispose();
+        }
+    }
+
+    public sealed class FakeRuntimeInstanceWorker : IAiRuntimeInstanceWorker
+    {
+        public int RunCount { get; private set; }
+
+        public Task<AiExecutionRecord> RunExecutionAsync(
+            string executionId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+
+            RunCount++;
+
+            return Task.FromResult(
+                new AiExecutionRecord
+                {
+                    ExecutionId = executionId,
+                    Status = AiExecutionStatus.Completed
+                });
         }
     }
 }

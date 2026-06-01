@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Multiplexed.Abstractions.AI.ControlPlane.Admission;
 using Multiplexed.Abstractions.AI.ControlPlane.Execution;
+using Multiplexed.Abstractions.AI.ControlPlane.ExecutionAssistance;
 using Multiplexed.Abstractions.AI.ControlPlane.Observability;
 using Multiplexed.Abstractions.AI.ControlPlane.Replay;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeInstances.Control;
@@ -18,6 +19,7 @@ using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Pump;
 using Multiplexed.Abstractions.AI.ControlPlane.SharedQueue.Queue;
 using Multiplexed.AI.Runtime.ControlPlane.Admission;
 using Multiplexed.AI.Runtime.ControlPlane.Execution;
+using Multiplexed.AI.Runtime.ControlPlane.ExecutionAssistance;
 using Multiplexed.AI.Runtime.ControlPlane.Observability;
 using Multiplexed.AI.Runtime.ControlPlane.Replay;
 using Multiplexed.AI.Runtime.ControlPlane.RuntimeInstances;
@@ -49,6 +51,7 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
         /// <param name="configureSharedController">Optional shared runtime controller options configuration.</param>
         /// <param name="configureSharedQueue">Optional shared queue options configuration.</param>
         /// <param name="configureSharedQueuePump">Optional shared queue pump options configuration.</param>
+        /// <param name="configureExecutionAssistance">Optional execution assistance options configuration.</param>
         /// <returns>The same service collection for chaining.</returns>
         public static IServiceCollection AddAiControlPlane(
             this IServiceCollection services,
@@ -59,7 +62,8 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             Action<AiRunAdmissionOptions>? configureAdmission = null,
             Action<AiSharedRuntimeControllerOptions>? configureSharedController = null,
             Action<AiSharedQueueOptions>? configureSharedQueue = null,
-            Action<AiSharedQueuePumpOptions>? configureSharedQueuePump = null)
+            Action<AiSharedQueuePumpOptions>? configureSharedQueuePump = null,
+            Action<AiExecutionAssistanceOptions>? configureExecutionAssistance = null)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -135,6 +139,15 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
                 services.Configure(configureSharedQueuePump);
             }
 
+            if (configureExecutionAssistance is null)
+            {
+                services.AddOptions<AiExecutionAssistanceOptions>();
+            }
+            else
+            {
+                services.Configure(configureExecutionAssistance);
+            }
+
             services.TryAddSingleton<IAiControlPlaneObserver, NoopAiControlPlaneObserver>();
 
             services.TryAddSingleton<IAiReplayControlPlane, AiReplayControlPlane>();
@@ -146,6 +159,11 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiRuntimeInstanceControlPlane, AiRuntimeInstanceControlPlane>();
 
             services.TryAddSingleton<IAiRunAdmissionController, AiRunAdmissionController>();
+
+            services.TryAddSingleton<IAiExecutionAssistanceStore, InMemoryAiExecutionAssistanceStore>();
+            services.TryAddSingleton<IAiExecutionAssistanceController, AiExecutionAssistanceController>();
+            services.TryAddSingleton<IAiExecutionAssistanceWorker, AiExecutionAssistanceWorker>();
+            services.TryAddSingleton<AiExecutionAssistancePump>();
 
             services.TryAddSingleton<IAiSharedRunStore, InMemoryAiSharedRunStore>();
             services.TryAddSingleton<IAiSharedQueue, InMemoryAiSharedQueue>();
