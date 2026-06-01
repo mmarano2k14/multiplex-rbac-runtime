@@ -161,9 +161,11 @@ namespace Multiplexed.AI.Runtime.ControlPlane.DI
             services.TryAddSingleton<IAiRunAdmissionController, AiRunAdmissionController>();
 
             services.TryAddSingleton<IAiExecutionAssistanceStore, InMemoryAiExecutionAssistanceStore>();
+            services.TryAddSingleton<IAiExecutionAssistanceCandidateStore, InMemoryAiExecutionAssistanceCandidateStore>();
             services.TryAddSingleton<IAiExecutionAssistanceController, AiExecutionAssistanceController>();
             services.TryAddSingleton<IAiExecutionAssistanceWorker, AiExecutionAssistanceWorker>();
             services.TryAddSingleton<AiExecutionAssistancePump>();
+            services.TryAddSingleton<AiExecutionAssistanceCoordinator>();
 
             services.TryAddSingleton<IAiSharedRunStore, InMemoryAiSharedRunStore>();
             services.TryAddSingleton<IAiSharedQueue, InMemoryAiSharedQueue>();

@@ -5,7 +5,7 @@ using Multiplexed.AI.Runtime.ControlPlane.ExecutionAssistance;
 using Multiplexed.AI.Tests.Runtime.Execution.MultiInstance;
 using Xunit;
 
-namespace Multiplexed.AI.Tests.Runtime.ControlPlane.ExecutionAssistance
+namespace Multiplexed.AI.Tests.Unit.ControlPlane.ExecutionAssistance
 {
     /// <summary>
     /// Unit tests for <see cref="AiExecutionAssistancePump"/>.

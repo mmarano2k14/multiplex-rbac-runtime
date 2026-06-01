@@ -4,7 +4,7 @@ using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.ControlPlane.ExecutionAssistance;
 using Xunit;
 
-namespace Multiplexed.AI.Tests.Runtime.ControlPlane.ExecutionAssistance
+namespace Multiplexed.AI.Tests.Unit.ControlPlane.ExecutionAssistance
 {
     /// <summary>
     /// Unit tests for <see cref="AiExecutionAssistanceWorker"/>.

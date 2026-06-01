@@ -3,7 +3,7 @@ using Multiplexed.Abstractions.AI.ControlPlane.ExecutionAssistance;
 using Multiplexed.AI.Runtime.ControlPlane.ExecutionAssistance;
 using Xunit;
 
-namespace Multiplexed.AI.Tests.Runtime.ControlPlane.ExecutionAssistance
+namespace Multiplexed.AI.Tests.Unit.ControlPlane.ExecutionAssistance
 {
     /// <summary>
     /// Unit tests for <see cref="AiExecutionAssistanceController"/>.

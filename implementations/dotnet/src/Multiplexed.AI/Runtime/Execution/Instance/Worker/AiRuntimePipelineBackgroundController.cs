@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using Multiplexed.Abstractions.AI.ControlPlane.ExecutionAssistance;
 using Multiplexed.Abstractions.AI.ControlPlane.RuntimeQueue;
 using Multiplexed.Abstractions.AI.Execution;
 using Multiplexed.Abstractions.AI.Execution.Control;
@@ -7,6 +8,7 @@ using Multiplexed.Abstractions.AI.Observability;
 using Multiplexed.Abstractions.AI.Observability.Context;
 using Multiplexed.Abstractions.AI.Observability.Ledger;
 using Multiplexed.Abstractions.AI.Observability.Tracing;
+using Multiplexed.Abstractions.AI.Pipeline;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance;
 using Multiplexed.Abstractions.AI.Runtime.Execution.Instance.Worker;
 using Multiplexed.AI.Runtime.Execution.Engine.Core;
@@ -64,6 +66,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         private readonly IAiRuntimeObservability _observability;
         private readonly IAiExecutionControlService _executionControlService;
         private readonly IAiRuntimeInstanceIdentity _runtimeInstanceIdentity;
+        private readonly IAiExecutionAssistanceCandidateStore _assistanceCandidateStore;
         private readonly IAiRuntimeRunExecutionIndex _runExecutionIndex;
 
         private readonly AiRuntimePipelineBackgroundControllerOptions _options;
@@ -98,6 +101,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
         /// <param name="runtimeInstanceIdentity">The runtime instance identity of the controller host.</param>
         /// <param name="logger">The runtime logger.</param>
         /// <param name="observability">The runtime observability facade.</param>
+        /// <param name="assistanceCandidateStore">The execution assistance candidate store.</param>
         /// <param name="runExecutionIndex">The runtime run execution index.</param>
         /// <param name="options">The controller options.</param>
         public AiRuntimePipelineBackgroundController(
@@ -112,6 +116,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             IAiRuntimeInstanceIdentity runtimeInstanceIdentity,
             IAiRuntimeLogger logger,
             IAiRuntimeObservability observability,
+            IAiExecutionAssistanceCandidateStore assistanceCandidateStore,
             IAiRuntimeRunExecutionIndex runExecutionIndex,
             IOptions<AiRuntimePipelineBackgroundControllerOptions> options)
         {
@@ -126,6 +131,7 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _runtimeInstanceIdentity = runtimeInstanceIdentity ?? throw new ArgumentNullException(nameof(runtimeInstanceIdentity));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _observability = observability ?? throw new ArgumentNullException(nameof(observability));
+            _assistanceCandidateStore = assistanceCandidateStore ?? throw new ArgumentNullException(nameof(assistanceCandidateStore));
             _runExecutionIndex = runExecutionIndex ?? throw new ArgumentNullException(nameof(runExecutionIndex));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
@@ -853,6 +859,14 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            await RegisterExecutionAssistanceCandidateAsync(
+                    handle.RunId,
+                    request,
+                    created,
+                    definition,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             await RecordRunLedgerAsync(
                     handle.RunId,
                     request.PipelineName,
@@ -874,63 +888,175 @@ namespace Multiplexed.AI.Runtime.Execution.Instance.Worker
             _logger.Engine.LogInformation(
                 $"[AI PIPELINE CONTROLLER] Execution created. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Pipeline='{created.PipelineName}'.");
 
-            var final = await RunCreatedExecutionAsync(
-                created.ExecutionId,
-                cancellationToken).ConfigureAwait(false);
+            AiExecutionRecord? final = null;
 
-            if (final.Status == AiExecutionStatus.Completed)
+            try
             {
-                handle.MarkCompleted();
-
-                await _runExecutionIndex
-                    .MarkCompletedAsync(
-                        handle.RunId,
-                        created.ExecutionId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else if (final.Status == AiExecutionStatus.Cancelled)
-            {
-                handle.MarkCancelled();
-
-                await _runExecutionIndex
-                    .MarkFailedAsync(
-                        handle.RunId,
-                        created.ExecutionId,
-                        "Pipeline run was cancelled.",
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                handle.MarkFailed();
-
-                await _runExecutionIndex
-                    .MarkFailedAsync(
-                        handle.RunId,
-                        created.ExecutionId,
-                        $"Pipeline run reached terminal status '{final.Status}'.",
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            await RecordRunTerminalLedgerAsync(
-                    handle.RunId,
-                    request.PipelineName,
+                final = await RunCreatedExecutionAsync(
                     created.ExecutionId,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (final.Status == AiExecutionStatus.Completed)
+                {
+                    handle.MarkCompleted();
+
+                    await _runExecutionIndex
+                        .MarkCompletedAsync(
+                            handle.RunId,
+                            created.ExecutionId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else if (final.Status == AiExecutionStatus.Cancelled)
+                {
+                    handle.MarkCancelled();
+
+                    await _runExecutionIndex
+                        .MarkFailedAsync(
+                            handle.RunId,
+                            created.ExecutionId,
+                            "Pipeline run was cancelled.",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    handle.MarkFailed();
+
+                    await _runExecutionIndex
+                        .MarkFailedAsync(
+                            handle.RunId,
+                            created.ExecutionId,
+                            $"Pipeline run reached terminal status '{final.Status}'.",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                await RecordRunTerminalLedgerAsync(
+                        handle.RunId,
+                        request.PipelineName,
+                        created.ExecutionId,
+                        final,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                await InvokeRunFinalizedAsync(
+                    queuedRun,
                     final,
+                    cancellationToken).ConfigureAwait(false);
+
+                queuedRun.CompletionSource.TrySetResult(final);
+
+                _logger.Engine.LogInformation(
+                    $"[AI PIPELINE CONTROLLER] Run terminal. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Status='{final.Status}'.");
+            }
+            finally
+            {
+                await MarkExecutionAssistanceCandidateCompletedAsync(
+                        created.ExecutionId,
+                        final?.Status.ToString() ?? "unknown",
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Registers a running execution as an assistance candidate.
+        /// </summary>
+        /// <param name="runId">The local runtime run identifier.</param>
+        /// <param name="request">The pipeline run request.</param>
+        /// <param name="created">The created execution record.</param>
+        /// <param name="definition">The resolved pipeline definition.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task RegisterExecutionAssistanceCandidateAsync(
+            string runId,
+            AiRuntimePipelineRunRequest request,
+            AiExecutionRecord created,
+            AiPipelineDefinition definition,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(created);
+            ArgumentNullException.ThrowIfNull(definition);
+
+            var estimatedReadyStepCount = CountRootSteps(definition);
+            var estimatedRemainingStepCount = definition.Steps.Count;
+            var estimatedActiveWorkerCount = _options.Distributed.Enabled
+                ? Math.Max(1, _options.Distributed.WorkerCount)
+                : 1;
+
+            await _assistanceCandidateStore.UpsertAsync(
+                    new AiExecutionAssistanceCandidate
+                    {
+                        ExecutionId = created.ExecutionId,
+                        PrimaryRuntimeInstanceId = _runtimeInstanceIdentity.RuntimeInstanceId,
+                        LocalRunId = runId,
+                        PipelineName = created.PipelineName,
+                        PipelineVersion = definition.Version,
+                        EstimatedReadyStepCount = estimatedReadyStepCount,
+                        EstimatedRemainingStepCount = estimatedRemainingStepCount,
+                        EstimatedActiveWorkerCount = estimatedActiveWorkerCount,
+                        IsActive = true,
+                        RegisteredAtUtc = DateTimeOffset.UtcNow,
+                        UpdatedAtUtc = DateTimeOffset.UtcNow,
+                        Reason = "Pipeline execution started and is eligible for bounded execution assistance.",
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["run.id"] = runId,
+                            ["execution.id"] = created.ExecutionId,
+                            ["pipeline.name"] = request.PipelineName,
+                            ["runtime.instance.id"] = _runtimeInstanceIdentity.RuntimeInstanceId,
+                            ["distributed.enabled"] = _options.Distributed.Enabled.ToString(),
+                            ["distributed.worker.count"] = _options.Distributed.WorkerCount.ToString(),
+                            ["estimated.ready.step.count"] = estimatedReadyStepCount.ToString(),
+                            ["estimated.remaining.step.count"] = estimatedRemainingStepCount.ToString(),
+                            ["estimated.active.worker.count"] = estimatedActiveWorkerCount.ToString()
+                        }
+                    },
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
 
-            await InvokeRunFinalizedAsync(
-                queuedRun,
-                final,
-                cancellationToken).ConfigureAwait(false);
+        /// <summary>
+        /// Marks an assistance candidate as completed after the owning execution reaches terminal state.
+        /// </summary>
+        /// <param name="executionId">The execution identifier.</param>
+        /// <param name="status">The final execution status.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        private async Task MarkExecutionAssistanceCandidateCompletedAsync(
+            string executionId,
+            string status,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
 
-            queuedRun.CompletionSource.TrySetResult(final);
+            try
+            {
+                await _assistanceCandidateStore.MarkCompletedAsync(
+                        executionId,
+                        $"Execution reached terminal status '{status}'.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                // Candidate registration is best-effort. If the candidate was never registered
+                // or was already completed, the pipeline run lifecycle must not fail.
+            }
+        }
 
-            _logger.Engine.LogInformation(
-                $"[AI PIPELINE CONTROLLER] Run terminal. RunId='{handle.RunId}', ExecutionId='{created.ExecutionId}', Status='{final.Status}'.");
+        /// <summary>
+        /// Counts root steps in a pipeline definition.
+        /// </summary>
+        /// <param name="definition">The pipeline definition.</param>
+        /// <returns>The number of steps with no dependencies.</returns>
+        private static int CountRootSteps(
+            AiPipelineDefinition definition)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+
+            return definition.Steps.Count(step => step.DependsOn.Count == 0);
         }
 
         /// <summary>
